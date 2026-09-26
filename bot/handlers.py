@@ -30,7 +30,7 @@ from bot import keyboards as kb
 from bot.bale_api import BaleClient
 from config import CRITICAL_DAYS, FILE_TYPES, ROLES, UPLOAD_DIR, ensure_dirs
 from db.models import Database
-from excel.processor import ExcelValidationError, process_session_files
+from excel.processor import ExcelValidationError, extract_and_save_clean, process_session_files
 from pdf.generator import generate_report
 
 logger = logging.getLogger(__name__)
@@ -382,34 +382,49 @@ class BotApp:
             return
 
         try:
-            from excel.processor import load_excel, validate_required_columns
-
-            df = load_excel(dest)
-            missing = validate_required_columns(df, pending)
-            critical = [c for c in ("domain", "assignee_id", "assignee_name") if c not in df.columns]
-            if critical:
-                dest.unlink(missing_ok=True)
-                self._reply(
-                    message,
-                    "فایل ستون‌های ضروری RBAC را ندارد: "
-                    + "، ".join(critical)
-                    + "\nلطفاً مطابق قالب samples اصلاح و دوباره ارسال کنید.",
-                    kb.cancel_pending_menu(),
-                )
-                return
-            warn = ""
-            if missing:
-                warn = "\n(هشدار: برخی ستون‌های توصیه‌شده نیست: " + "، ".join(missing) + ")"
+            result = extract_and_save_clean(dest, pending)
         except ExcelValidationError as exc:
             dest.unlink(missing_ok=True)
             self._reply(message, str(exc), kb.cancel_pending_menu())
             return
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("extract failed")
+            dest.unlink(missing_ok=True)
+            self._reply(message, f"استخراج داده از فایل ناموفق بود: {exc}", kb.cancel_pending_menu())
+            return
 
-        session = self.db.store_file_slot(user["bale_user_id"], pending, str(dest))
+        # Session slots point at CLEAN file so analytics/PDF use filtered data
+        session = self.db.store_file_slot(
+            user["bale_user_id"], pending, str(result.clean_path)
+        )
+        self.db.save_extracted(
+            bale_user_id=user["bale_user_id"],
+            session_id=session["id"],
+            file_type=pending,
+            raw_path=str(result.raw_path),
+            clean_path=str(result.clean_path),
+            row_count=result.kept_row_count,
+            columns=result.columns,
+        )
+
         label = FILE_TYPES[pending]["label_fa"]
+        dropped_note = ""
+        if result.dropped_row_count > 0:
+            dropped_note = (
+                f" ({result.dropped_row_count} ردیف اضافی/نامعتبر حذف شد)"
+            )
+        extra_cols_note = ""
+        if result.extra_columns_dropped:
+            extra_cols_note = "؛ ستون‌های اضافی هم کنار گذاشته شد"
         self._reply(
             message,
-            f"✅ فایل «{label}» ذخیره شد.{warn}\n\n" + self._status_text(session),
+            (
+                f"✅ فایل «{label}» دریافت شد.\n"
+                f"از {result.raw_row_count} ردیف خام، {result.kept_row_count} ردیف استخراج شد"
+                f"{dropped_note}{extra_cols_note}.\n"
+                f"نسخه تمیز ذخیره و در پایگاه‌داده ثبت شد.\n\n"
+            )
+            + self._status_text(session),
             kb.main_menu(require_manager(user)),
         )
 

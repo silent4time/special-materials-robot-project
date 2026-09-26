@@ -17,9 +17,10 @@ from analytics.tundish import (
     remaining,
     suggest_requests,
 )
-from config import CRITICAL_DAYS
+from config import CRITICAL_DAYS, REQUIRED_COLUMNS
 from db.models import Database
-from excel.processor import process_session_files
+from excel.processor import extract_and_save_clean, process_session_files
+from openpyxl import Workbook
 from pdf.generator import generate_report
 from scripts.make_samples import main as make_samples
 
@@ -92,7 +93,72 @@ def main() -> int:
     sug = suggest_requests(rates, rem, 10)
     assert "suggest_qty" in sug.columns
     assert float(CRITICAL_DAYS) == 3.0
+
+    # --- extract pipeline: drop extra ROWS + project columns; DB record ---
+    wide_dir = ROOT / "uploads" / "_smoke_extract" / "1"
+    wide_dir.mkdir(parents=True, exist_ok=True)
+    wide_path = wide_dir / "product_inventory.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "data"
+    # Extra columns + extra/invalid rows (wrong tundish, blank qty, blank type)
+    headers = [
+        "domain", "tundish_type", "assignee_id", "assignee_name", "product_name",
+        "quantity", "unit", "location", "date", "notes",
+        "extra_col_a", "warehouse_code",
+    ]
+    ws.append(headers)
+    rows = [
+        ["خط-A", "تاندیش اسلب", "1001", "علی رضایی", "اسید سولفوریک", 20, "لیتر", "قفسه ۱", "2026-09-06", "کم", "X", "W1"],
+        ["خط-A", "تاندیش بلوم", "1001", "علی رضایی", "سود سوزآور", 80, "کیلو", "قفسه ۲", "2026-09-06", "", "Y", "W2"],
+        ["خط-B", "نامعتبر", "1002", "مریم احمدی", "آب اکسیژنه", 100, "لیتر", "سالن B", "2026-09-06", "", "Z", "W3"],
+        ["خط-B", "تاندیش اسلب", "1003", "حسین کریمی", "کلر", None, "کیلو", "سالن B", "2026-09-06", "خالی", "Q", "W4"],
+        ["انبار", "", "1002", "مریم احمدی", "روغن صنعتی", 50, "لیتر", "انبار مرکزی", "2026-09-06", "", "R", "W5"],
+        ["خط-B", "تاندیش اسلب", "1003", "حسین کریمی", "کلر", 8, "کیلو", "سالن B", "2026-09-06", "بحرانی", "S", "W6"],
+    ]
+    for r in rows:
+        ws.append(r)
+    wb.save(wide_path)
+
+    result = extract_and_save_clean(wide_path, "product_inventory")
+    assert result.clean_path.exists()
+    assert result.raw_row_count == 6
+    assert result.kept_row_count == 3  # 2 good + 1 کلر with qty; drop invalid/blank/empty-qty
+    assert result.dropped_row_count == 3
+    assert "extra_col_a" in result.extra_columns_dropped
+    import pandas as pd
+    clean_df = pd.read_excel(result.clean_path, engine="openpyxl")
+    assert list(clean_df.columns) == REQUIRED_COLUMNS["product_inventory"]
+    assert len(clean_df) == 3
+
+    sess = db.get_or_create_session("999")
+    eid = db.save_extracted(
+        "999",
+        sess["id"],
+        "product_inventory",
+        str(result.raw_path),
+        str(result.clean_path),
+        result.kept_row_count,
+        result.columns,
+    )
+    assert eid > 0
+    latest = db.get_latest_extracted("999", "product_inventory")
+    assert latest and latest["clean_path"] == str(result.clean_path)
+    assert latest["row_count"] == 3
+    listed = db.list_extracted_for_session(sess["id"])
+    assert any(r["id"] == eid for r in listed)
+
+    # cleaned inventory still works with analytics/RBAC
+    clean_paths = {
+        "tank_consumption": paths["tank_consumption"],
+        "product_inventory": str(result.clean_path),
+        "monthly_consumption": paths["monthly_consumption"],
+    }
+    cf, cm = process_session_files(clean_paths, mgr)
+    assert cm["product_inventory"]["total_rows"] == 3
+
     print("SMOKE OK CRITICAL_DAYS=", CRITICAL_DAYS)
+
     return 0
 
 

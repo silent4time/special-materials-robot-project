@@ -1,4 +1,4 @@
-"""SQLite persistence for users, roles, scopes, sessions, and reports."""
+"""SQLite persistence for users, roles, scopes, sessions, extracts, and reports."""
 from __future__ import annotations
 
 import json
@@ -72,8 +72,25 @@ class Database:
                     FOREIGN KEY(session_id) REFERENCES upload_sessions(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS extracted_datasets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bale_user_id TEXT NOT NULL,
+                    session_id INTEGER,
+                    file_type TEXT NOT NULL,
+                    raw_path TEXT NOT NULL,
+                    clean_path TEXT NOT NULL,
+                    row_count INTEGER,
+                    columns_json TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES upload_sessions(id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_users_bale ON users(bale_user_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_user ON upload_sessions(bale_user_id);
+                CREATE INDEX IF NOT EXISTS idx_extracted_user_type
+                    ON extracted_datasets(bale_user_id, file_type, created_at);
+                CREATE INDEX IF NOT EXISTS idx_extracted_session
+                    ON extracted_datasets(session_id);
                 """
             )
             self._migrate_users_role_check(conn)
@@ -304,7 +321,66 @@ class Database:
             )
         return self.get_or_create_session(uid)
 
+    # --- extracted datasets (clean Excel copies after row/column extract) ---
+    def save_extracted(
+        self,
+        bale_user_id: str | int,
+        session_id: int | None,
+        file_type: str,
+        raw_path: str,
+        clean_path: str,
+        row_count: int,
+        columns: list[str] | None = None,
+    ) -> int:
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO extracted_datasets
+                (bale_user_id, session_id, file_type, raw_path, clean_path,
+                 row_count, columns_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(bale_user_id),
+                    session_id,
+                    file_type,
+                    raw_path,
+                    clean_path,
+                    int(row_count),
+                    json.dumps(columns or [], ensure_ascii=False),
+                    _utcnow(),
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def get_latest_extracted(
+        self, bale_user_id: str | int, file_type: str
+    ) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM extracted_datasets
+                WHERE bale_user_id = ? AND file_type = ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (str(bale_user_id), file_type),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_extracted_for_session(self, session_id: int) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM extracted_datasets
+                WHERE session_id = ?
+                ORDER BY id
+                """,
+                (session_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def save_report(
+
         self,
         bale_user_id: str | int,
         session_id: int,
