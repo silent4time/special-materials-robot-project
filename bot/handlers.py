@@ -77,7 +77,7 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • تکنسین — فقط ورود موجودی روزانه سایت (سه گروه)؛ بدون تنظیمات/گزارش
 
 شناسایی افراد با شناسه اکانت بله (bale_user_id) انجام می‌شود.
-هر ورودی داده با ثبت‌کننده (شناسه بله / نام نمایشی) ذخیره می‌شود.
+هر ورودی داده با ثبت‌کننده = نام فرد از اکانت بله (همراه شناسه بله) ذخیره می‌شود.
 
 مدیریت کاربران (مالک/مدیر):
 • از منوی «کاربران»: اضافه / اصلاح نقش / حذف / لیست + لینک دعوت
@@ -123,22 +123,35 @@ class BotApp:
         name = " ".join(p for p in parts if p).strip()
         return name or u.get("username") or str(u.get("id"))
 
-    @staticmethod
-    def _format_actor(user: dict | None, *, bale_user_id: str | int | None = None) -> str:
-        """Human-readable «ثبت‌کننده: name (id)» for replies / lists."""
-        uid = str(
-            (user or {}).get("bale_user_id")
-            if user is not None
-            else (bale_user_id if bale_user_id is not None else "")
-        ).strip()
-        name = ""
-        if user:
-            name = str(user.get("display_name") or "").strip()
+    def _format_actor(
+        self,
+        user: dict | None = None,
+        *,
+        bale_user_id: str | int | None = None,
+        actor_display_name: str | None = None,
+    ) -> str:
+        """Format an actor as the display name followed by the Bale user id."""
+        user = user or {}
+        uid = str(user.get("bale_user_id") or bale_user_id or "").strip()
+
+        def meaningful(value: object) -> str:
+            value = str(value or "").strip()
+            return value if value and value != uid else ""
+
+        name = meaningful(user.get("display_name"))
+        if not name:
+            name = meaningful(actor_display_name)
         if not name and uid:
-            name = uid
-        if name and uid and name != uid:
+            stored = self.db.get_user(uid)
+            name = meaningful((stored or {}).get("display_name"))
+        if not name:
+            name = meaningful(user.get("username"))
+
+        if name and uid:
             return f"{name} ({uid})"
-        return name or uid or "—"
+        if name:
+            return name
+        return f"کاربر بدون نام ({uid})" if uid else "کاربر بدون نام"
 
     def _reply(self, message: dict, text: str, markup: dict | None = None) -> None:
         self.client.send_message(self._chat_id(message), text, reply_markup=markup)
@@ -1510,10 +1523,10 @@ class BotApp:
             last = max(today_entries, key=lambda e: e.get("created_at") or "")
             actor_note = (
                 "\nآخرین ثبت‌کننده امروز: "
-                + (
-                    f"{last.get('actor_display_name')} ({last.get('bale_user_id')})"
-                    if last.get("actor_display_name")
-                    else self._format_actor(None, bale_user_id=last.get("bale_user_id"))
+                + self._format_actor(
+                    None,
+                    bale_user_id=last.get("bale_user_id"),
+                    actor_display_name=last.get("actor_display_name"),
                 )
             )
         self._reply(
