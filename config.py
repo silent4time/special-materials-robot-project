@@ -148,6 +148,14 @@ REQUIRED_COLUMNS = {
         "unit",
         "status",
         "notes",
+        # Retained for monthly summary (soft-missing → empty); backward-compatible
+        "category_code",
+        "id",
+        "coefficient",
+        "work_order",
+        "date",
+        "request_return",
+        "description",
     ],
 }
 

@@ -96,8 +96,15 @@ class BaleClient:
         data: dict[str, Any] = {"chat_id": str(chat_id)}
         if caption:
             data["caption"] = caption
+        suffix = path.suffix.lower()
+        if suffix in {".xlsx", ".xlsm"}:
+            mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        elif suffix == ".xls":
+            mime = "application/vnd.ms-excel"
+        else:
+            mime = "application/pdf"
         with path.open("rb") as fh:
-            files = {"document": (path.name, fh, "application/pdf")}
+            files = {"document": (path.name, fh, mime)}
             return self._call("sendDocument", data=data, files=files)
 
     def send_photo(

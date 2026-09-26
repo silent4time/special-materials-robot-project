@@ -32,9 +32,12 @@ from excel.id_parse import extract_item_id, extract_product_name
 from excel.processor import (
     extract_and_save_clean,
     format_inventory_table_fa,
+    merge_clean_frames,
     process_session_files,
 )
-from pdf.generator import generate_report
+from excel.monthly_summary import build_monthly_summary, load_monthly_detail, aggregate_monthly_detail
+from pdf.generator import generate_monthly_summary_pdf, generate_report
+from excel.monthly_summary import summary_sections_for_pdf
 from scripts.make_samples import main as make_samples
 
 
@@ -93,6 +96,76 @@ def _test_install_help_soft_seed() -> None:
     assert "مالک با اولین /start" in help_txt
     assert "env_looks_configured" in help_txt
     assert "run_env_wizard" in help_txt
+
+
+
+def _test_merge_and_monthly_summary() -> None:
+    """Merge upsert + monthly summary grand total ≈ 1221814 from real sample."""
+    import pandas as pd
+
+    old = pd.DataFrame(
+        [
+            {
+                "id": "A1",
+                "product_name": "old-only",
+                "quantity": 10,
+                "category_code": "1201",
+                "item_code_desc": "A1 - old",
+                "priority": 1,
+            },
+            {
+                "id": "B2",
+                "product_name": "shared",
+                "quantity": 5,
+                "category_code": "1201",
+                "item_code_desc": "B2 - shared",
+                "priority": 1,
+            },
+        ]
+    )
+    new = pd.DataFrame(
+        [
+            {
+                "id": "B2",
+                "product_name": "shared-new",
+                "quantity": 99,
+                "category_code": "1201",
+                "item_code_desc": "B2 - shared-new",
+                "priority": 1,
+            },
+            {
+                "id": "C3",
+                "product_name": "new-only",
+                "quantity": 7,
+                "category_code": "1201",
+                "item_code_desc": "C3 - new",
+                "priority": 1,
+            },
+        ]
+    )
+    merged = merge_clean_frames(old, new, "product_inventory")
+    assert set(merged["id"].astype(str)) == {"A1", "B2", "C3"}
+    assert float(merged.loc[merged["id"].astype(str) == "B2", "quantity"].iloc[0]) == 99
+    assert float(merged.loc[merged["id"].astype(str) == "A1", "quantity"].iloc[0]) == 10
+
+    sample = ROOT / "samples" / "real" / "monthly_consumption_sample.xlsx"
+    if sample.exists():
+        detail = load_monthly_detail(sample)
+        data = aggregate_monthly_detail(detail)
+        assert abs(float(data.grand_kg) - 1221814) < 0.5, data.grand_kg
+        month_sum = sum(float(s["total_kg"]) for s in data.month_sections)
+        assert abs(month_sum - float(data.grand_kg)) < 0.5
+        excel_out = ROOT / "reports" / "smoke_monthly_summary.xlsx"
+        pdf_out = ROOT / "reports" / "smoke_monthly_summary.pdf"
+        data2, written = build_monthly_summary(sample, excel_out=excel_out)
+        assert written.exists()
+        generate_monthly_summary_pdf(
+            summary_sections_for_pdf(data2),
+            grand_kg=data2.grand_kg,
+            output_path=pdf_out,
+        )
+        assert pdf_out.exists() and pdf_out.stat().st_size > 1000
+        assert kb.BTN_MONTHLY_SUMMARY in str(kb.analytics_menu())
 
 
 def main() -> int:
@@ -326,6 +399,8 @@ def main() -> int:
     wide_dir = ROOT / "uploads" / "_smoke_extract" / "1"
     wide_path = wide_dir / "product_inventory.xlsx"
     _write_wide_inventory(wide_path)
+
+    _test_merge_and_monthly_summary()
 
     # empty allowlist must fail
     try:

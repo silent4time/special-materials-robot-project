@@ -443,3 +443,134 @@ def generate_report(
 
     doc.build(story)
     return output_path
+
+
+# --- Monthly consumption summary PDF ---
+
+SUMMARY_HEADER_FA = {
+    "category_code": "کد دسته بندی",
+    "id": "کد کالا",
+    "quantity": "مقدار",
+    "coefficient": "ضریب",
+    "work_order": "سفارش کار",
+    "date": "تاریخ",
+    "month": "ماه",
+    "unit": "واحد",
+    "description": "شرح",
+    "kg": "مصرف کیلوگرم (مقدار×ضریب)",
+}
+
+
+def generate_monthly_summary_pdf(
+    sections: list[dict[str, Any]],
+    *,
+    grand_kg: float,
+    output_path: Path | str | None = None,
+    title: str = "خلاصه مصرفی ماهیانه",
+) -> Path:
+    """Landscape RTL PDF for the monthly consumption summary report."""
+    _register_fonts()
+    ensure_dirs()
+    styles = _styles()
+
+    if output_path is None:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = REPORT_DIR / f"monthly_summary_{stamp}.pdf"
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    doc = SimpleDocTemplate(
+        str(output_path),
+        pagesize=landscape(A4),
+        rightMargin=1.0 * cm,
+        leftMargin=1.0 * cm,
+        topMargin=1.0 * cm,
+        bottomMargin=1.0 * cm,
+        title=title,
+    )
+    story: list = []
+    story.append(Paragraph(rtl(title), styles["title"]))
+    story.append(
+        Paragraph(
+            rtl(f"جمع کل مصرفی: {grand_kg:g} کیلوگرم"),
+            styles["body"],
+        )
+    )
+    story.append(Spacer(1, 0.3 * cm))
+
+    for section in sections:
+        story.append(Paragraph(rtl(section.get("title") or title), styles["heading"]))
+        cols = list(section.get("columns") or [])
+        rows = section.get("rows") or []
+        header = [
+            Paragraph(rtl(SUMMARY_HEADER_FA.get(c, c)), styles["cell"]) for c in cols
+        ]
+        data = [list(reversed(header))]
+        for row in rows:
+            cells = []
+            for c in cols:
+                val = row.get(c, "")
+                if val is None:
+                    val = ""
+                elif isinstance(val, float):
+                    val = f"{val:g}"
+                cells.append(Paragraph(rtl(val), styles["cell"]))
+            data.append(list(reversed(cells)))
+            if row.get("_subtotal"):
+                # highlight last appended row
+                pass
+        if section.get("kind") == "main":
+            # grand total row
+            grand_cells = []
+            for c in cols:
+                if c == "quantity":
+                    grand_cells.append(Paragraph(rtl(f"{grand_kg:g}"), styles["cell"]))
+                elif c == "unit":
+                    grand_cells.append(Paragraph(rtl("کیلوگرم"), styles["cell"]))
+                elif c == "description":
+                    grand_cells.append(Paragraph(rtl("جمع کل مصرفی"), styles["cell"]))
+                else:
+                    grand_cells.append(Paragraph(rtl(""), styles["cell"]))
+            data.append(list(reversed(grand_cells)))
+        elif section.get("kind") == "month":
+            total_cells = []
+            for c in cols:
+                if c == "kg":
+                    total_cells.append(
+                        Paragraph(rtl(f"{float(section.get('total_kg') or 0):g}"), styles["cell"])
+                    )
+                elif c == "unit":
+                    total_cells.append(Paragraph(rtl("کیلوگرم"), styles["cell"]))
+                elif c == "description":
+                    total_cells.append(
+                        Paragraph(rtl(section.get("total_title") or ""), styles["cell"])
+                    )
+                else:
+                    total_cells.append(Paragraph(rtl(""), styles["cell"]))
+            data.append(list(reversed(total_cells)))
+
+        table = Table(data, repeatRows=1)
+        style_cmds = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f4e79")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.Color(0.93, 0.95, 1)]),
+        ]
+        # Green last row (totals)
+        style_cmds.append(
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#c6efce"))
+        )
+        table.setStyle(TableStyle(style_cmds))
+        story.append(table)
+        story.append(Spacer(1, 0.45 * cm))
+
+    doc.build(story)
+    return output_path

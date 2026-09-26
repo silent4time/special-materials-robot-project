@@ -50,10 +50,16 @@ from excel.processor import (
     ExcelValidationError,
     extract_and_save_clean,
     format_inventory_table_fa,
+    merge_clean_frames,
     process_file,
     process_session_files,
 )
-from pdf.generator import generate_report
+from excel.monthly_summary import (
+    SUMMARY_FILE_NAME,
+    build_monthly_summary,
+    summary_sections_for_pdf,
+)
+from pdf.generator import generate_monthly_summary_pdf, generate_report
 
 logger = logging.getLogger(__name__)
 
@@ -992,6 +998,24 @@ class BotApp:
                 )
                 return
 
+        # Snapshot previous clean DF before extract overwrites the same clean_path
+        slot_col = {
+            "tank_consumption": "tank_path",
+            "product_inventory": "inventory_path",
+            "monthly_consumption": "monthly_path",
+        }.get(pending)
+        previous_clean = Path(session[slot_col]) if slot_col and session.get(slot_col) else None
+        old_df = None
+        prev_kept = 0
+        if previous_clean is not None and previous_clean.exists():
+            try:
+                old_df = pd.read_excel(previous_clean, engine="openpyxl")
+                prev_kept = int(len(old_df))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("could not load previous clean for merge: %s", exc)
+                old_df = None
+                prev_kept = 0
+
         try:
             result = extract_and_save_clean(
                 dest, pending, category_allowlist=allowlist
@@ -1006,6 +1030,21 @@ class BotApp:
             dest.unlink(missing_ok=True)
             self._reply(message, f"استخراج داده از فایل ناموفق بود: {exc}", kb.cancel_pending_menu())
             return
+
+        new_kept = int(result.kept_row_count)
+        merge_note = ""
+        if old_df is not None and not old_df.empty:
+            try:
+                new_df = pd.read_excel(result.clean_path, engine="openpyxl")
+                merged = merge_clean_frames(old_df, new_df, pending)
+                merged.to_excel(result.clean_path, index=False, engine="openpyxl")
+                result.kept_row_count = int(len(merged))
+                merge_note = (
+                    f"\nهمسان‌سازی: قبلی {prev_kept} + جدید {new_kept} → نهایی {result.kept_row_count}."
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("merge clean frames failed: %s", exc)
+                merge_note = f"\n(همسان‌سازی انجام نشد: {exc})"
 
         # Session slots point at CLEAN file so analytics/PDF use filtered data
         session = self.db.store_file_slot(
@@ -1061,8 +1100,8 @@ class BotApp:
             message,
             (
                 f"✅ فایل «{label}» دریافت شد.\n"
-                f"از {result.raw_row_count} ردیف خام، {result.kept_row_count} ردیف نگه داشته شد."
-                f"{dropped_note}{extra_cols_note}{catalog_note}\n"
+                f"از {result.raw_row_count} ردیف خام، {new_kept} ردیف نگه داشته شد."
+                f"{merge_note}{dropped_note}{extra_cols_note}{catalog_note}\n"
                 f"نسخه تمیز ذخیره و در پایگاه‌داده ثبت شد.\n"
                 f"{actor_line}\n\n"
             )
@@ -1564,6 +1603,99 @@ class BotApp:
             logger.exception("analytics pdf failed")
             self._reply(message, f"خطا در تولید PDF: {exc}", kb.analytics_menu())
 
+
+
+    def _resolve_monthly_source(self, user: dict) -> tuple[Path | None, str | None]:
+        """Prefer raw monthly upload (plant detail); else cleaned session/latest."""
+        uid = str(user["bale_user_id"])
+        session = self.db.get_or_create_session(uid)
+        latest = self.db.get_latest_extracted(uid, "monthly_consumption")
+        candidates: list[tuple[Path, str]] = []
+        if latest:
+            raw = latest.get("raw_path")
+            clean = latest.get("clean_path")
+            if raw:
+                candidates.append((Path(str(raw)), "خام آخرین آپلود مصرف ماهیانه"))
+            if clean:
+                candidates.append((Path(str(clean)), "نسخه تمیز آخرین استخراج"))
+        if session.get("monthly_path"):
+            candidates.append((Path(str(session["monthly_path"])), "مصرف ماهیانه جلسه جاری"))
+        seen: set[str] = set()
+        for path_obj, label in candidates:
+            key = str(path_obj.resolve()) if path_obj.exists() else str(path_obj)
+            if key in seen:
+                continue
+            seen.add(key)
+            if path_obj.exists():
+                return path_obj, label
+        return None, None
+
+    def on_monthly_summary(self, message: dict) -> None:
+        """Build خلاصه مصرفی ماهیانه as PDF (+ Excel) and send document."""
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        source, source_label = self._resolve_monthly_source(user)
+        if source is None:
+            self._reply(
+                message,
+                "فایل مصرف ماهیانه مواد یافت نشد.\n"
+                "ابتدا از منوی اصلی «مصرف ماهیانه مواد» را آپلود کنید.",
+                kb.analytics_menu(),
+            )
+            return
+        self._reply(message, "در حال ساخت خلاصه مصرف ماهیانه (PDF)…")
+        try:
+            from config import REPORT_DIR
+
+            out_dir = REPORT_DIR
+            excel_path = out_dir / SUMMARY_FILE_NAME
+            data, excel_path = build_monthly_summary(source, excel_out=excel_path)
+            sections = summary_sections_for_pdf(data)
+            pdf_path = out_dir / "خلاصه مصرفی ماهیانه.pdf"
+            generate_monthly_summary_pdf(
+                sections,
+                grand_kg=data.grand_kg,
+                output_path=pdf_path,
+            )
+            month_sum = sum(float(s.get("total_kg") or 0) for s in data.month_sections)
+            caption = (
+                f"خلاصه مصرفی ماهیانه\n"
+                f"منبع: {source_label}\n"
+                f"جمع کل مصرفی: {data.grand_kg:g} کیلوگرم"
+            )
+            self.client.send_document(
+                self._chat_id(message),
+                pdf_path,
+                caption=caption,
+            )
+            # Also send Excel companion when available
+            try:
+                self.client.send_document(
+                    self._chat_id(message),
+                    excel_path,
+                    caption="فایل اکسل «خلاصه مصرفی ماهیانه»",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("monthly summary excel send failed: %s", exc)
+            self._reply(
+                message,
+                (
+                    f"✅ خلاصه مصرف ماهیانه ارسال شد.\n"
+                    f"ردیف‌های تجمیعی: {len(data.items)} | "
+                    f"جمع ماه‌ها: {month_sum:g} | جمع کل: {data.grand_kg:g} کیلوگرم"
+                ),
+                kb.analytics_menu(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("monthly summary failed")
+            self._reply(
+                message,
+                f"خطا در تولید خلاصه مصرف ماهیانه: {exc}",
+                kb.analytics_menu(),
+            )
 
     def _resolve_remaining(self, frames: dict) -> tuple[Any, str]:
         """Prefer today's (or latest) site_stock_entries; else warehouse inventory."""
@@ -3331,6 +3463,9 @@ class BotApp:
             return
         if text == kb.BTN_ANALYTICS_PDF:
             self.on_analytics_pdf(message)
+            return
+        if text == kb.BTN_MONTHLY_SUMMARY:
+            self.on_monthly_summary(message)
             return
         if text == kb.BTN_RANGE_TODAY:
             if self.on_date_range_choice(message, "today"):

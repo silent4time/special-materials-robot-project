@@ -62,6 +62,30 @@ COLUMN_ALIASES = {
     ],
     "id": ["id", "کد کالا", "کد_کالا", "شناسه کالا"],
     "priority": ["priority", "اولویت", "اولويت"],
+    "coefficient": [
+        "coefficient",
+        "coeff",
+        "ضریب",
+        "ضريب",
+    ],
+    "work_order": [
+        "work_order",
+        "workorder",
+        "سفارش کار",
+        "سفارش_کار",
+    ],
+    "request_return": [
+        "request_return",
+        "request/return",
+        "درخواستی-برگشتی",
+        "درخواستي-برگشتي",
+        "درخواستی برگشتی",
+    ],
+    "description": [
+        "description",
+        "desc",
+        "شرح",
+    ],
 }
 
 RowFilterFn = Callable[[pd.DataFrame, str], pd.DataFrame]
@@ -384,6 +408,192 @@ def validate_required_columns(df: pd.DataFrame, file_type: str) -> list[str]:
     return missing
 
 
+
+def _is_blank(value: object) -> bool:
+    if value is None:
+        return True
+    try:
+        if bool(pd.isna(value)):
+            return True
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    return (not text) or text.casefold() in {"nan", "none", "nat"}
+
+
+def _normalize_key_part(value: object) -> str:
+    """Stable string key part (Arabic/Persian yeh/kaf, trim, drop .0)."""
+    if _is_blank(value):
+        return ""
+    text = str(value).strip()
+    text = text.replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+    text = " ".join(text.split())
+    if text.endswith(".0") and text[:-2].lstrip("-").isdigit():
+        text = text[:-2]
+    return text.casefold()
+
+
+def is_plant_monthly_frame(df: pd.DataFrame) -> bool:
+    """Plant monthly detail: item/qty/month + coeff or request/return/desc, no domain."""
+    if df is None or df.empty:
+        return False
+    cols = set(df.columns)
+    has_core = "quantity" in cols and "month" in cols
+    has_item = "id" in cols or "category_code" in cols
+    has_plant = bool(cols & {"coefficient", "request_return", "description", "work_order"})
+    missing_domain = "domain" not in cols
+    return bool(has_core and has_item and has_plant and missing_domain)
+
+
+def enrich_plant_monthly(df: pd.DataFrame) -> pd.DataFrame:
+    """Map plant monthly columns into canonical analytics + summary retain fields."""
+    out = df.copy()
+    if "category_code" in out.columns:
+        out["category_code"] = out["category_code"].map(_normalize_category_code)
+    if "domain" not in out.columns or out["domain"].map(_is_blank).all():
+        if "category_code" in out.columns:
+            out["domain"] = out["category_code"].map(
+                lambda v: str(v) if v is not None else "plant"
+            )
+        else:
+            out["domain"] = "plant"
+    if "tundish_type" not in out.columns or out["tundish_type"].map(_is_blank).all():
+        # Placeholder so standard tundish filter keeps plant rows for analytics
+        out["tundish_type"] = TUNDISH_TYPE_LABELS[0]
+    if "assignee_id" not in out.columns:
+        out["assignee_id"] = None
+    if "assignee_name" not in out.columns:
+        out["assignee_name"] = None
+    if "description" in out.columns:
+        def _desc_display(v: object) -> str:
+            if _is_blank(v):
+                return ""
+            text = str(v).strip()
+            text = text.replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+            return " ".join(text.split())
+
+        out["description"] = out["description"].map(_desc_display)
+    if "material_name" not in out.columns or out["material_name"].map(_is_blank).all():
+        ids = out["id"] if "id" in out.columns else pd.Series([None] * len(out))
+        descs = out["description"] if "description" in out.columns else pd.Series([""] * len(out))
+        out["material_name"] = [
+            f"{str(i).strip()} - {d}".strip(" -") if not _is_blank(i) else d
+            for i, d in zip(ids, descs)
+        ]
+    if "request_return" in out.columns:
+        out["request_return"] = out["request_return"].map(
+            lambda v: "" if _is_blank(v) else str(v).strip().replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+        )
+    if "status" not in out.columns or out["status"].map(_is_blank).all():
+        if "request_return" in out.columns:
+            out["status"] = out["request_return"]
+        else:
+            out["status"] = None
+    if "notes" not in out.columns or out["notes"].map(_is_blank).all():
+        parts = []
+        for _, row in out.iterrows():
+            bits = []
+            cat = row.get("category_code")
+            wo = row.get("work_order")
+            if not _is_blank(cat):
+                bits.append(f"cat={cat}")
+            if not _is_blank(wo):
+                bits.append(f"order={wo}")
+            parts.append("; ".join(bits) if bits else None)
+        out["notes"] = parts
+    if "quantity" in out.columns:
+        out["quantity"] = pd.to_numeric(out["quantity"], errors="coerce")
+    if "coefficient" in out.columns:
+        out["coefficient"] = pd.to_numeric(out["coefficient"], errors="coerce")
+    return out
+
+
+def merge_row_key(row: pd.Series, file_type: str) -> tuple[str, ...]:
+    """Stable upsert key per file_type (see merge rules)."""
+    if file_type == "product_inventory":
+        item_id = row.get("id")
+        if _is_blank(item_id):
+            return (
+                _normalize_key_part(row.get("category_code")),
+                _normalize_key_part(row.get("item_code_desc") or row.get("product_name")),
+            )
+        return (_normalize_key_part(item_id),)
+    if file_type == "monthly_consumption":
+        item = row.get("id")
+        if _is_blank(item):
+            item = row.get("material_name")
+        desc = row.get("description")
+        if _is_blank(desc):
+            desc = row.get("material_name") or row.get("notes")
+        rr = row.get("request_return")
+        if _is_blank(rr):
+            rr = row.get("status")
+        return (
+            _normalize_key_part(item),
+            _normalize_key_part(desc),
+            _normalize_key_part(row.get("month")),
+            _normalize_key_part(row.get("date")),
+            _normalize_key_part(row.get("work_order")),
+            _normalize_key_part(rr),
+        )
+    # tank_consumption and any other upload slot
+    return (
+        _normalize_key_part(row.get("tundish_id")),
+        _normalize_key_part(row.get("material_name")),
+        _normalize_key_part(row.get("date")),
+        _normalize_key_part(row.get("tundish_type")),
+        _normalize_key_part(row.get("assignee_id")),
+        _normalize_key_part(row.get("domain")),
+    )
+
+
+def merge_clean_frames(
+    old: pd.DataFrame | None,
+    new: pd.DataFrame | None,
+    file_type: str,
+) -> pd.DataFrame:
+    """Upsert-merge previous clean + new clean; newer wins on key collision.
+
+    - product_inventory: by item id (keep old-only items)
+    - monthly_consumption: by id/desc/month/date/work_order/request_return
+    - tank_consumption: by tundish/material/date/…
+    """
+    if new is None or (isinstance(new, pd.DataFrame) and new.empty):
+        if old is None:
+            return pd.DataFrame()
+        return old.copy()
+    if old is None or (isinstance(old, pd.DataFrame) and old.empty):
+        return new.copy()
+
+    preferred_cols = list(REQUIRED_COLUMNS.get(file_type, []))
+    all_cols = list(
+        dict.fromkeys(
+            [*preferred_cols, *[str(c) for c in old.columns], *[str(c) for c in new.columns]]
+        )
+    )
+    old_a = old.copy()
+    new_a = new.copy()
+    for col in all_cols:
+        if col not in old_a.columns:
+            old_a[col] = None
+        if col not in new_a.columns:
+            new_a[col] = None
+    old_a = old_a[all_cols]
+    new_a = new_a[all_cols]
+
+    merged_map: dict[tuple[str, ...], dict] = {}
+    for _, row in old_a.iterrows():
+        merged_map[merge_row_key(row, file_type)] = row.to_dict()
+    for _, row in new_a.iterrows():
+        merged_map[merge_row_key(row, file_type)] = row.to_dict()
+    if not merged_map:
+        return new_a.iloc[0:0].copy()
+    out = pd.DataFrame(list(merged_map.values()))
+    # Stable column order
+    out = out[[c for c in all_cols if c in out.columns]]
+    return out.reset_index(drop=True)
+
+
 def extract_and_save_clean(
     raw_path: Path | str,
     file_type: str,
@@ -442,7 +652,12 @@ def extract_and_save_clean(
             filter_name = getattr(row_filter, "__name__", "custom")
             filter_fn = row_filter
 
-        filtered = filter_fn(df, file_type)
+        work = df
+        if file_type == "monthly_consumption" and is_plant_monthly_frame(work):
+            work = enrich_plant_monthly(work)
+            filter_name = "plant_monthly_enrich"
+
+        filtered = filter_fn(work, file_type)
         kept_row_count = int(len(filtered))
         if kept_row_count == 0:
             raise ExcelValidationError(
