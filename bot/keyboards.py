@@ -1,7 +1,7 @@
 """Persian reply keyboards for request-driven upload flow and tundish analytics."""
 from __future__ import annotations
 
-from config import FILE_TYPES
+from config import FILE_TYPES, TUNDISH_TYPES
 from bot.bale_api import BaleClient
 
 
@@ -23,6 +23,11 @@ BTN_PERIOD = "📅 گزارش مصرف بازه‌ای"
 BTN_REMAINING = "⚠️ موجودی و مواد بحرانی"
 BTN_FORECAST = "🔮 پیش‌بینی نیاز تاندیش"
 BTN_ANALYTICS_PDF = "📄 PDF کامل تحلیل"
+BTN_TUNDISH_FILTER = "🔎 فیلتر نوع تاندیش"
+BTN_ALL_TUNDISHES = "همه تاندیش‌ها"
+BTN_TUNDISH_SLAB = TUNDISH_TYPES["slab"]
+BTN_TUNDISH_BLOOM = TUNDISH_TYPES["bloom"]
+BTN_TUNDISH_BILLET = TUNDISH_TYPES["billet"]
 BTN_BACK_MAIN = "⬅️ بازگشت به منوی اصلی"
 
 # Date-range presets
@@ -67,9 +72,22 @@ def analytics_menu() -> dict:
         [BTN_REMAINING],
         [BTN_FORECAST],
         [BTN_ANALYTICS_PDF],
+        [BTN_TUNDISH_FILTER],
         [BTN_BACK_MAIN],
     ]
     return BaleClient.reply_keyboard(rows)
+
+
+def tundish_filter_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_ALL_TUNDISHES],
+            [BTN_TUNDISH_SLAB],
+            [BTN_TUNDISH_BLOOM],
+            [BTN_TUNDISH_BILLET],
+            [BTN_BACK_ANALYTICS],
+        ]
+    )
 
 
 def date_range_menu() -> dict:

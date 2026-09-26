@@ -109,6 +109,7 @@ SECTION_ORDER = (
 DISPLAY_COLUMNS = {
     "tank_consumption": [
         "domain",
+        "tundish_type",
         "tundish_id",
         "material_name",
         "quantity",
@@ -119,6 +120,7 @@ DISPLAY_COLUMNS = {
     ],
     "product_inventory": [
         "domain",
+        "tundish_type",
         "product_name",
         "quantity",
         "unit",
@@ -129,6 +131,7 @@ DISPLAY_COLUMNS = {
     ],
     "monthly_consumption": [
         "domain",
+        "tundish_type",
         "material_name",
         "month",
         "quantity",
@@ -141,6 +144,7 @@ DISPLAY_COLUMNS = {
 
 HEADER_FA = {
     "domain": "حوزه",
+    "tundish_type": "نوع تاندیش",
     "assignee_id": "شناسه",
     "assignee_name": "مسئول",
     "tundish_id": "تاندیش",
@@ -248,7 +252,7 @@ def _append_analytics(story: list, analytics: dict[str, Any], styles: dict) -> N
     story.append(
         _df_to_table(
             analytics.get("daily_rates") if analytics.get("daily_rates") is not None else pd.DataFrame(),
-            ["material_name", "tundish_id", "avg_daily", "total_qty", "days_span", "unit", "source"],
+            ["material_name", "tundish_type", "tundish_id", "avg_daily", "total_qty", "days_span", "unit", "source"],
             styles,
             header_bg="#0d47a1",
         )
@@ -259,7 +263,7 @@ def _append_analytics(story: list, analytics: dict[str, Any], styles: dict) -> N
     story.append(
         _df_to_table(
             analytics.get("period_consumption") if analytics.get("period_consumption") is not None else pd.DataFrame(),
-            ["material_name", "tundish_id", "quantity", "unit", "start", "end"],
+            ["material_name", "tundish_type", "tundish_id", "quantity", "unit", "start", "end"],
             styles,
             header_bg="#1565c0",
         )
@@ -301,7 +305,7 @@ def _append_analytics(story: list, analytics: dict[str, Any], styles: dict) -> N
     story.append(
         _df_to_table(
             analytics.get("forecast") if analytics.get("forecast") is not None else pd.DataFrame(),
-            ["material_name", "tundish_id", "avg_daily", "days", "forecast_need", "unit"],
+            ["material_name", "tundish_type", "tundish_id", "avg_daily", "days", "forecast_need", "unit"],
             styles,
             header_bg="#6a1b9a",
         )

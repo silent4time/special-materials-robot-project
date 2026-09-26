@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from config import CRITICAL_DAYS
+from config import CRITICAL_DAYS, TUNDISH_TYPES, TUNDISH_TYPE_LABELS
 
 CUSTOM_RANGE_RE = re.compile(
     r"از\s*(\d{4}-\d{2}-\d{2})\s*تا\s*(\d{4}-\d{2}-\d{2})",
@@ -56,6 +56,31 @@ def _to_dates(series: pd.Series) -> pd.Series:
 
 def _qty(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").fillna(0.0)
+
+
+def filter_by_tundish_type(
+    df: pd.DataFrame | None, tundish_type_label_or_key: str | None
+) -> pd.DataFrame:
+    """Filter rows by a tundish key/label; values are compared canonically."""
+    if df is None:
+        return pd.DataFrame()
+    work = df.copy()
+    requested = (tundish_type_label_or_key or "").strip().casefold()
+    if not requested or requested in {"all", "همه", "همه تاندیش‌ها", "همه تاندیش ها"}:
+        return work
+    accepted = {
+        **{str(key).casefold(): label for key, label in TUNDISH_TYPES.items()},
+        **{str(label).casefold(): label for label in TUNDISH_TYPE_LABELS},
+    }
+    canonical = accepted.get(requested)
+    if canonical is None:
+        allowed = "، ".join(TUNDISH_TYPE_LABELS)
+        raise ValueError(f"نوع تاندیش نامعتبر است. انواع مجاز: {allowed}")
+    if "tundish_type" not in work.columns:
+        return work
+    values = work["tundish_type"].astype("string").str.strip().str.casefold()
+    values = values.map(lambda value: accepted.get(value, value)).fillna("")
+    return work.loc[values == canonical].reset_index(drop=True)
 
 
 def filter_by_date_range(
@@ -110,6 +135,8 @@ def daily_rates(
             if has_date:
                 work["_d"] = _to_dates(work["date"])
             group_cols = ["material_name"]
+            if "tundish_type" in work.columns:
+                group_cols.append("tundish_type")
             if "tundish_id" in work.columns:
                 group_cols.append("tundish_id")
             if "unit" in work.columns:
@@ -143,17 +170,19 @@ def daily_rates(
         else:
             work["_qty"] = _qty(work["quantity"])
             existing = {
-                (r.get("material_name"), r.get("tundish_id"), r.get("unit"))
+                (r.get("material_name"), r.get("tundish_type"), r.get("tundish_id"), r.get("unit"))
                 for r in rows
             }
             group_cols = ["material_name"]
+            if "tundish_type" in work.columns:
+                group_cols.append("tundish_type")
             if "unit" in work.columns:
                 group_cols.append("unit")
             for keys, g in work.groupby(group_cols, dropna=False):
                 if not isinstance(keys, tuple):
                     keys = (keys,)
                 payload = dict(zip(group_cols, keys))
-                key = (payload.get("material_name"), None, payload.get("unit"))
+                key = (payload.get("material_name"), payload.get("tundish_type"), None, payload.get("unit"))
                 if key in existing or any(
                     r.get("material_name") == payload.get("material_name")
                     and r.get("tundish_id") is None
@@ -178,6 +207,7 @@ def daily_rates(
         return pd.DataFrame(
             columns=[
                 "material_name",
+                "tundish_type",
                 "tundish_id",
                 "unit",
                 "total_qty",
@@ -187,11 +217,11 @@ def daily_rates(
             ]
         )
     out = pd.DataFrame(rows)
-    for col in ("material_name", "tundish_id", "unit", "source"):
+    for col in ("material_name", "tundish_type", "tundish_id", "unit", "source"):
         if col not in out.columns:
             out[col] = None
     return out.sort_values(
-        by=["material_name", "tundish_id"], kind="stable"
+        by=["material_name", "tundish_type", "tundish_id"], kind="stable"
     ).reset_index(drop=True)
 
 
@@ -203,16 +233,18 @@ def period_consumption(
     """Sum consumption in date range, grouped by material and tundish."""
     if tank_df is None or tank_df.empty:
         return pd.DataFrame(
-            columns=["material_name", "tundish_id", "unit", "quantity", "start", "end"]
+            columns=["material_name", "tundish_type", "tundish_id", "unit", "quantity", "start", "end"]
         )
     work = filter_by_date_range(tank_df, start, end)
     if work.empty or "material_name" not in work.columns or "quantity" not in work.columns:
         return pd.DataFrame(
-            columns=["material_name", "tundish_id", "unit", "quantity", "start", "end"]
+            columns=["material_name", "tundish_type", "tundish_id", "unit", "quantity", "start", "end"]
         )
     work = work.copy()
     work["_qty"] = _qty(work["quantity"])
     group_cols = ["material_name"]
+    if "tundish_type" in work.columns:
+        group_cols.append("tundish_type")
     if "tundish_id" in work.columns:
         group_cols.append("tundish_id")
     if "unit" in work.columns:
@@ -225,7 +257,7 @@ def period_consumption(
     )
     agg["start"] = start.isoformat()
     agg["end"] = end.isoformat()
-    return agg.sort_values(by=["material_name", "tundish_id"], kind="stable").reset_index(
+    return agg.sort_values(by=[c for c in ["material_name", "tundish_type", "tundish_id"] if c in agg.columns], kind="stable").reset_index(
         drop=True
     )
 
@@ -356,18 +388,21 @@ def forecast(
     days = max(0.0, float(days))
     if rates_df is None or rates_df.empty:
         return pd.DataFrame(
-            columns=["material_name", "tundish_id", "unit", "avg_daily", "days", "forecast_need"]
+            columns=["material_name", "tundish_type", "tundish_id", "unit", "avg_daily", "days", "forecast_need"]
         )
     work = rates_df.copy()
     work["avg_daily"] = pd.to_numeric(work["avg_daily"], errors="coerce").fillna(0.0)
     work["days"] = days
     work["forecast_need"] = work["avg_daily"] * days
-    cols = ["material_name", "tundish_id", "unit", "avg_daily", "days", "forecast_need"]
+    cols = ["material_name"]
+    if "tundish_type" in work.columns:
+        cols.append("tundish_type")
+    cols += ["tundish_id", "unit", "avg_daily", "days", "forecast_need"]
     for c in cols:
         if c not in work.columns:
             work[c] = None
     return work[cols].sort_values(
-        by=["material_name", "tundish_id"], kind="stable"
+        by=[c for c in ["material_name", "tundish_type", "tundish_id"] if c in work.columns], kind="stable"
     ).reset_index(drop=True)
 
 

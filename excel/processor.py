@@ -7,11 +7,12 @@ from typing import Any
 import pandas as pd
 
 from auth.rbac import filter_dataframe_for_user
-from config import FILE_TYPES, REQUIRED_COLUMNS
+from config import FILE_TYPES, REQUIRED_COLUMNS, TUNDISH_TYPES, TUNDISH_TYPE_LABELS
 
 
 COLUMN_ALIASES = {
     "domain": ["domain", "scope", "حوزه", "دامنه", "بخش"],
+    "tundish_type": ["tundish_type", "tundishtype", "نوع تاندیش", "نوع_تاندیش", "تاندیش نوع"],
     "assignee_id": ["assignee_id", "user_id", "شناسه", "شناسه_کاربر", "کد_کاربر"],
     "assignee_name": ["assignee_name", "name", "نام", "نام_مسئول", "تکنسین"],
     "tundish_id": ["tundish_id", "tank", "تانک", "تاندیش", "شماره_تانک", "شماره_تاندیش"],
@@ -46,6 +47,40 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _normalize_tundish_types(df: pd.DataFrame) -> pd.DataFrame:
+    """Store every accepted tundish key/label as its canonical Persian label."""
+    if "tundish_type" not in df.columns:
+        return df
+
+    key_to_label = {str(key).strip().casefold(): label for key, label in TUNDISH_TYPES.items()}
+    label_to_label = {str(label).strip().casefold(): label for label in TUNDISH_TYPE_LABELS}
+    accepted = {**key_to_label, **label_to_label}
+    invalid: list[str] = []
+    normalized: list[str | None] = []
+    for value in df["tundish_type"]:
+        if pd.isna(value) or not str(value).strip():
+            invalid.append("خالی")
+            normalized.append(None)
+            continue
+        text = str(value).strip()
+        label = accepted.get(text.casefold())
+        if label is None:
+            invalid.append(text)
+            normalized.append(None)
+        else:
+            normalized.append(label)
+    if invalid:
+        shown = "، ".join(dict.fromkeys(invalid))
+        allowed = "، ".join(TUNDISH_TYPE_LABELS)
+        raise ExcelValidationError(
+            f"نوع تاندیش نامعتبر است: {shown}. انواع مجاز: {allowed} "
+            "(کلیدها: slab، bloom، billet)."
+        )
+    out = df.copy()
+    out["tundish_type"] = normalized
+    return out
+
+
 def load_excel(path: Path | str) -> pd.DataFrame:
     path = Path(path)
     if not path.exists():
@@ -58,7 +93,7 @@ def load_excel(path: Path | str) -> pd.DataFrame:
         raise ExcelValidationError(f"خواندن Excel ناموفق بود: {exc}") from exc
     if df.empty:
         raise ExcelValidationError("فایل Excel خالی است.")
-    return _normalize_columns(df)
+    return _normalize_tundish_types(_normalize_columns(df))
 
 
 def validate_required_columns(df: pd.DataFrame, file_type: str) -> list[str]:

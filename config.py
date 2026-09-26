@@ -54,9 +54,18 @@ ADMIN_ROLES = frozenset({"owner", "manager"})
 # Roles that see all report rows
 FULL_DATA_ROLES = frozenset({"owner", "manager"})
 
+
+TUNDISH_TYPES = {
+    "slab": "تاندیش اسلب",
+    "bloom": "تاندیش بلوم",
+    "billet": "تاندیش بیلت",
+}
+TUNDISH_TYPE_LABELS = list(TUNDISH_TYPES.values())
+
 REQUIRED_COLUMNS = {
     "tank_consumption": [
         "domain",
+        "tundish_type",
         "assignee_id",
         "assignee_name",
         "tundish_id",
@@ -68,6 +77,7 @@ REQUIRED_COLUMNS = {
     ],
     "product_inventory": [
         "domain",
+        "tundish_type",
         "assignee_id",
         "assignee_name",
         "product_name",
@@ -79,6 +89,7 @@ REQUIRED_COLUMNS = {
     ],
     "monthly_consumption": [
         "domain",
+        "tundish_type",
         "assignee_id",
         "assignee_name",
         "material_name",

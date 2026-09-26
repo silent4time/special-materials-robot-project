@@ -8,6 +8,7 @@ from typing import Any
 from analytics.tundish import (
     critical_materials,
     daily_rates,
+    filter_by_tundish_type,
     forecast,
     format_suggest_list_fa,
     missing_files_for_goal,
@@ -54,6 +55,13 @@ HELP_TEXT = """راهنمای بازوی گزارش تاندیش
 • گزارش بازه‌ای — دکمه‌های امروز / ۷ روز / ۳۰ روز یا پیام «از YYYY-MM-DD تا YYYY-MM-DD»
 • مواد بحرانی — پوشش کمتر از CRITICAL_DAYS={critical} روز
 • پیش‌بینی = میانگین روزانه × تعداد روز بازه
+• فیلتر اختیاری نوع تاندیش: همه تاندیش‌ها / تاندیش اسلب / تاندیش بلوم / تاندیش بیلت
+  فیلتر پیش از تحلیل‌ها و PDF تحلیل اعمال می‌شود.
+
+استانداردهای کارخانه برای نوع تاندیش:
+• تاندیش اسلب
+• تاندیش بلوم
+• تاندیش بیلت
 
 نقش‌ها:
 • مالک / مدیر — همه ردیف‌ها + مدیریت کاربران
@@ -75,6 +83,7 @@ class BotApp:
         self.db = db
         # pending analytics interaction per user: {"mode": "period"|"forecast"|"suggest", "await": "range"|"days"}
         self._analysis_pending: dict[str, dict[str, Any]] = {}
+        self._analysis_tundish_filter: dict[str, str | None] = {}
         ensure_dirs()
 
     # ---------- helpers ----------
@@ -138,6 +147,18 @@ class BotApp:
     def _clear_analysis_pending(self, uid: str) -> None:
         self._analysis_pending.pop(uid, None)
 
+    def _apply_tundish_filter(self, frames: dict, uid: str) -> dict:
+        selected = self._analysis_tundish_filter.get(uid)
+        if not selected:
+            return frames
+        return {
+            key: filter_by_tundish_type(frame, selected) if frame is not None else frame
+            for key, frame in frames.items()
+        }
+
+    def _selected_tundish_label(self, uid: str) -> str:
+        return self._analysis_tundish_filter.get(uid) or kb.BTN_ALL_TUNDISHES
+
     def _require_files(self, message: dict, user: dict, goal: str) -> tuple[dict, dict, dict] | None:
         session = self.db.get_or_create_session(user["bale_user_id"])
         completeness = self.db.session_completeness(session)
@@ -152,6 +173,7 @@ class BotApp:
             )
             return None
         frames, metas = self._load_frames(user, session)
+        frames = self._apply_tundish_filter(frames, str(user["bale_user_id"]))
         return session, frames, metas
 
     # ---------- commands ----------
@@ -285,6 +307,7 @@ class BotApp:
         if not user:
             return
         self._clear_analysis_pending(user["bale_user_id"])
+        self._analysis_tundish_filter.pop(str(user["bale_user_id"]), None)
         self.db.reset_session(user["bale_user_id"])
         self._reply(message, "جلسه آپلود پاک شد. از منو دوباره شروع کنید.", kb.main_menu(require_manager(user)))
 
@@ -471,6 +494,27 @@ class BotApp:
             "suggest": sug,
         }
 
+    def on_tundish_filter_menu(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        self._reply(
+            message,
+            "فیلتر نوع تاندیش را برای تحلیل‌ها و PDF انتخاب کنید:\n"
+            f"فیلتر فعلی: {self._selected_tundish_label(str(user['bale_user_id']))}",
+            kb.tundish_filter_menu(),
+        )
+
+    def on_tundish_filter_choice(self, message: dict, label: str | None) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._analysis_tundish_filter[uid] = label
+        self._clear_analysis_pending(uid)
+        selected = label or kb.BTN_ALL_TUNDISHES
+        self._reply(message, f"فیلتر تحلیل روی «{selected}» تنظیم شد.", kb.analytics_menu())
+
     def on_analytics_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
@@ -484,6 +528,7 @@ class BotApp:
             "",
             self._status_text(session),
             "",
+            f"فیلتر نوع تاندیش: {self._selected_tundish_label(str(user['bale_user_id']))}",
             "یک گزینه را انتخاب کنید:",
         ]
         if not any(done.values()):
@@ -504,11 +549,13 @@ class BotApp:
             return
         lines = ["📈 میانگین مصرف روزانه (ماده / تاندیش):", ""]
         for _, row in rates.head(30).iterrows():
+            tundish_type = row.get("tundish_type")
+            type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
             tid = row.get("tundish_id")
             tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
             unit = row.get("unit") or ""
             lines.append(
-                f"• {row['material_name']}{tid_s}: {float(row['avg_daily']):.2f} {unit}/روز "
+                f"• {row['material_name']}{type_s}{tid_s}: {float(row['avg_daily']):.2f} {unit}/روز "
                 f"(مجموع {float(row['total_qty']):.1f} در {int(row['days_span'])} روز)"
             )
         self._reply(message, "\n".join(lines), kb.analytics_menu())
@@ -644,11 +691,13 @@ class BotApp:
                 lines.append("در این بازه مصرفی ثبت نشده است.")
             else:
                 for _, row in period.head(40).iterrows():
+                    tundish_type = row.get("tundish_type")
+                    type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
                     tid = row.get("tundish_id")
                     tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
                     unit = row.get("unit") or ""
                     lines.append(
-                        f"• {row['material_name']}{tid_s}: {float(row['quantity']):.2f} {unit}"
+                        f"• {row['material_name']}{type_s}{tid_s}: {float(row['quantity']):.2f} {unit}"
                     )
             self._reply(message, "\n".join(lines), kb.analytics_menu())
             return
@@ -668,11 +717,13 @@ class BotApp:
                 lines.append("داده‌ای برای پیش‌بینی نیست.")
             else:
                 for _, row in fc.head(40).iterrows():
+                    tundish_type = row.get("tundish_type")
+                    type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
                     tid = row.get("tundish_id")
                     tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
                     unit = row.get("unit") or ""
                     lines.append(
-                        f"• {row['material_name']}{tid_s}: "
+                        f"• {row['material_name']}{type_s}{tid_s}: "
                         f"{float(row['forecast_need']):.2f} {unit} "
                         f"(روزانه {float(row['avg_daily']):.2f} × {days})"
                     )
@@ -783,6 +834,21 @@ class BotApp:
             return
         if text == kb.BTN_ANALYTICS:
             self.on_analytics_menu(message)
+            return
+        if text == kb.BTN_TUNDISH_FILTER:
+            self.on_tundish_filter_menu(message)
+            return
+        if text == kb.BTN_ALL_TUNDISHES:
+            self.on_tundish_filter_choice(message, None)
+            return
+        if text == kb.BTN_TUNDISH_SLAB:
+            self.on_tundish_filter_choice(message, kb.BTN_TUNDISH_SLAB)
+            return
+        if text == kb.BTN_TUNDISH_BLOOM:
+            self.on_tundish_filter_choice(message, kb.BTN_TUNDISH_BLOOM)
+            return
+        if text == kb.BTN_TUNDISH_BILLET:
+            self.on_tundish_filter_choice(message, kb.BTN_TUNDISH_BILLET)
             return
         if text == kb.BTN_BACK_MAIN:
             user = self._user_or_deny(message)

@@ -2,6 +2,16 @@
 
 ربات پیام‌رسان **بله** برای دریافت **سه فایل Excel مشخص**، اعمال کنترل دسترسی نقش‌محور (RBAC)، **تحلیل مصرف مواد تاندیش**، و تولید **گزارش PDF ترکیبی**.
 
+## استانداردهای کارخانه برای نوع تاندیش
+
+این سامانه دقیقاً سه نوع تاندیش را به‌عنوان استاندارد کارخانه می‌پذیرد:
+
+- `slab` — **تاندیش اسلب**
+- `bloom` — **تاندیش بلوم**
+- `billet` — **تاندیش بیلت**
+
+در Excel می‌توان کلید انگلیسی یا برچسب فارسی را وارد کرد؛ هنگام بارگذاری هر سه به برچسب فارسی استاندارد تبدیل می‌شوند.
+
 ## اهداف محصول (تاندیش)
 
 1. **تشخیص مقدار مواد مصرفی روزانه** — میانگین مصرف روزانه هر ماده / تاندیش از فایل مصرف تاندیش (و در صورت نبود، تقریب از مصرف ماهانه ÷ ۳۰).
@@ -84,7 +94,8 @@ python main.py
           ├─ گزارش مصرف بازه‌ای    ──► امروز / ۷ روز / ۳۰ روز / سفارشی
           ├─ موجودی و مواد بحرانی
           ├─ پیش‌بینی نیاز تاندیش  ──► انتخاب بازه
-          └─ PDF کامل تحلیل
+          ├─ PDF کامل تحلیل
+          └─ فیلتر اختیاری نوع تاندیش: همه تاندیش‌ها / تاندیش اسلب / تاندیش بلوم / تاندیش بیلت
 ```
 
 کاربر **نمی‌تواند** آزادانه فایل بفرستد؛ اول باید نوع را از منو/دکمه انتخاب کند، سپس Document را پیوست کند.  
@@ -144,17 +155,17 @@ python scripts/make_samples.py
 
 ستون‌های توصیه‌شده:
 
-`domain`, `assignee_id`, `assignee_name`, `tundish_id`, `material_name`, `quantity`, `unit`, `date`, `notes`
+`domain`, `tundish_type`, `assignee_id`, `assignee_name`, `tundish_id`, `material_name`, `quantity`, `unit`, `date`, `notes`
 
 ### ۲) موجودی محصولات
 
-`domain`, `assignee_id`, `assignee_name`, `product_name`, `quantity`, `unit`, `location`, `date`, `notes`
+`domain`, `tundish_type`, `assignee_id`, `assignee_name`, `product_name`, `quantity`, `unit`, `location`, `date`, `notes`
 
 > برای اتصال تحلیل موجودی به مصرف، نام `product_name` را با `material_name` مصرف یکسان بگیرید.
 
 ### ۳) مصرف ماهانه مواد
 
-`domain`, `assignee_id`, `assignee_name`, `material_name`, `month`, `quantity`, `unit`, `status`, `notes`
+`domain`, `tundish_type`, `assignee_id`, `assignee_name`, `material_name`, `month`, `quantity`, `unit`, `status`, `notes`
 
 **حداقلی برای RBAC:** وجود `domain` و حداقل یکی از `assignee_id` / `assignee_name` (ترجیحاً هر دو).  
 نام‌های فارسی معادل (مثل «حوزه»، «تاندیش»، «مقدار») هم تا حدی پشتیبانی می‌شوند.
