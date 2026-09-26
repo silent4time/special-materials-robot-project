@@ -206,6 +206,11 @@ def _test_merge_and_monthly_summary() -> None:
             if "مصرف مواد اسلب" in joined:
                 found_slab = True
         assert found_title and found_slab
+        # Per-month WO under Farvardin: section kg sum == month total
+        from excel.work_order import tundish_kg_totals_from_items as _mtot
+        farv = next(s for s in data.month_sections if "فروردین" in s["title"])
+        mt = _mtot(farv["rows"])
+        assert abs(float(mt["slab"]["kg"]) + float(mt["bloom"]["kg"]) + float(mt["billet"]["kg"]) + float((mt.get("unknown") or {}).get("kg") or 0) - float(farv["total_kg"])) < 0.5
         generate_monthly_summary_pdf(
             summary_sections_for_pdf(data2),
             grand_kg=data2.grand_kg,

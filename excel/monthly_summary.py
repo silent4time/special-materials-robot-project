@@ -541,7 +541,41 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
         ws.cell(row=row_idx, column=9, value=section["total_title"])
         _style_row(ws, row_idx, fill=GREEN_FILL, bold=True)
         ws.row_dimensions[row_idx].height = 32
-        row_idx += 2
+        row_idx += 1
+
+        # Per-month اسلب/بلوم/بیلت (unique شرح within this month)
+        month_totals = tundish_kg_totals_from_items(section["rows"])
+        for key in ("slab", "bloom", "billet"):
+            info = month_totals.get(key) or {"kg": 0.0, "count": 0}
+            count = int(info.get("count") or 0)
+            kg = float(info.get("kg") or 0)
+            if count == 0 and abs(kg) < 1e-9:
+                continue
+            ws.cell(row=row_idx, column=5, value=kg)
+            ws.cell(row=row_idx, column=8, value="کیلوگرم")
+            ws.cell(
+                row=row_idx,
+                column=9,
+                value=f"{CONSUMPTION_LABELS_FA[key]} ({to_persian_digits(count)} قلم)",
+            )
+            _style_row(ws, row_idx, fill=YELLOW_FILL, bold=True)
+            ws.row_dimensions[row_idx].height = 32
+            row_idx += 1
+        unk = month_totals.get(UNKNOWN_GROUP) or {"kg": 0.0, "count": 0}
+        unk_kg = float(unk.get("kg") or 0)
+        unk_count = int(unk.get("count") or 0)
+        if unk_count or abs(unk_kg) > 1e-9:
+            ws.cell(row=row_idx, column=5, value=unk_kg)
+            ws.cell(row=row_idx, column=8, value="کیلوگرم")
+            ws.cell(
+                row=row_idx,
+                column=9,
+                value=f"{UNKNOWN_LABEL_FA} ({to_persian_digits(unk_count)} قلم)",
+            )
+            _style_row(ws, row_idx, fill=YELLOW_FILL, bold=True)
+            ws.row_dimensions[row_idx].height = 32
+            row_idx += 1
+        row_idx += 1  # blank before next month
 
     # --- مصرف مواد بر حسب اسلب، بلوم و بیلت (after last month block) ---
     # month loop already left one blank via +=2; add one more ≈ two rows gap
@@ -725,6 +759,7 @@ def summary_sections_for_pdf(data: MonthlySummaryData) -> list[dict[str, Any]]:
                 "rows": rows,
                 "total_kg": section["total_kg"],
                 "total_title": section["total_title"],
+                "tundish_totals": tundish_kg_totals_from_items(section["rows"]),
             }
         )
     totals = data.tundish_totals or tundish_kg_totals_from_items(data.items)

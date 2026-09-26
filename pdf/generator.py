@@ -26,6 +26,11 @@ from reportlab.platypus import (
 )
 
 from config import CRITICAL_DAYS, FILE_TYPES, FONTS_DIR, REPORT_DIR, ensure_dirs
+from excel.work_order import (
+    CONSUMPTION_LABELS_FA,
+    UNKNOWN_GROUP,
+    UNKNOWN_LABEL_FA,
+)
 
 _FONT_REGISTERED = False
 FONT_NAME = "DejaVuSans"
@@ -549,6 +554,50 @@ def generate_monthly_summary_pdf(
                 else:
                     total_cells.append(Paragraph(rtl(""), styles["cell"]))
             data.append(list(reversed(total_cells)))
+            # Per-month اسلب/بلوم/بیلت under that month
+            mtot = section.get("tundish_totals") or {}
+            for _key in ("slab", "bloom", "billet"):
+                _info = mtot.get(_key) or {"kg": 0.0, "count": 0}
+                _count = int(_info.get("count") or 0)
+                _kg = float(_info.get("kg") or 0)
+                if _count == 0 and abs(_kg) < 1e-9:
+                    continue
+                _cells = []
+                for c in cols:
+                    if c == "kg":
+                        _cells.append(Paragraph(rtl(f"{_kg:g}"), styles["cell"]))
+                    elif c == "unit":
+                        _cells.append(Paragraph(rtl("کیلوگرم"), styles["cell"]))
+                    elif c == "description":
+                        _cells.append(
+                            Paragraph(
+                                rtl(f"{CONSUMPTION_LABELS_FA[_key]} ({_count} قلم)"),
+                                styles["cell"],
+                            )
+                        )
+                    else:
+                        _cells.append(Paragraph(rtl(""), styles["cell"]))
+                data.append(list(reversed(_cells)))
+            _unk = mtot.get(UNKNOWN_GROUP) or {"kg": 0.0, "count": 0}
+            _unk_kg = float(_unk.get("kg") or 0)
+            _unk_count = int(_unk.get("count") or 0)
+            if _unk_count or abs(_unk_kg) > 1e-9:
+                _cells = []
+                for c in cols:
+                    if c == "kg":
+                        _cells.append(Paragraph(rtl(f"{_unk_kg:g}"), styles["cell"]))
+                    elif c == "unit":
+                        _cells.append(Paragraph(rtl("کیلوگرم"), styles["cell"]))
+                    elif c == "description":
+                        _cells.append(
+                            Paragraph(
+                                rtl(f"{UNKNOWN_LABEL_FA} ({_unk_count} قلم)"),
+                                styles["cell"],
+                            )
+                        )
+                    else:
+                        _cells.append(Paragraph(rtl(""), styles["cell"]))
+                data.append(list(reversed(_cells)))
         elif section.get("kind") == "tundish_wo":
             check_cells = []
             for c in cols:
