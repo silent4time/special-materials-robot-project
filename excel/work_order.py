@@ -198,8 +198,10 @@ def build_item_to_group_map(
 
 
 def tundish_kg_totals_from_items(items: pd.DataFrame) -> dict[str, dict[str, float | int]]:
-    """Sum مصرف_کیلوگرم on aggregated item rows by WO group (+ unknown).
+    """Sum مصرف kg by WO group; count = unique شرح کالا (description) per group.
 
+    Rows are first rolled up by description: kg summed, dominant work_order decides
+    the group. So «۹۷ قلم» means 97 distinct descriptions, not monthly row counts.
     Returns dict keyed by slab/bloom/billet/unknown with keys kg, count.
     """
     result = {
@@ -212,12 +214,33 @@ def tundish_kg_totals_from_items(items: pd.DataFrame) -> dict[str, dict[str, flo
         return result
     wo_col = "سفارش کار" if "سفارش کار" in items.columns else "work_order"
     kg_col = "مصرف_کیلوگرم" if "مصرف_کیلوگرم" in items.columns else "kg"
-    for _, row in items.iterrows():
-        group = group_for_work_order(row.get(wo_col)) or UNKNOWN_GROUP
-        try:
-            kg = float(row.get(kg_col) or 0)
-        except (TypeError, ValueError):
-            kg = 0.0
-        result[group]["kg"] = float(result[group]["kg"]) + kg
+    desc_col = "شرح" if "شرح" in items.columns else ("description" if "description" in items.columns else None)
+
+    if not desc_col:
+        # fallback: one count per row
+        for _, row in items.iterrows():
+            group = group_for_work_order(row.get(wo_col)) or UNKNOWN_GROUP
+            try:
+                kg = float(row.get(kg_col) or 0)
+            except (TypeError, ValueError):
+                kg = 0.0
+            result[group]["kg"] = float(result[group]["kg"]) + kg
+            result[group]["count"] = int(result[group]["count"]) + 1
+        return result
+
+    for desc, grp in items.groupby(desc_col, dropna=False, sort=False):
+        kgs: list[float] = []
+        wos: list[object] = []
+        for _, row in grp.iterrows():
+            try:
+                kg = float(row.get(kg_col) or 0)
+            except (TypeError, ValueError):
+                kg = 0.0
+            kgs.append(kg)
+            wos.append(row.get(wo_col))
+        total_kg = float(sum(kgs))
+        wo = dominant_work_order(wos, [abs(k) for k in kgs])
+        group = group_for_work_order(wo) or UNKNOWN_GROUP
+        result[group]["kg"] = float(result[group]["kg"]) + total_kg
         result[group]["count"] = int(result[group]["count"]) + 1
     return result

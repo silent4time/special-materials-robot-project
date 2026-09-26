@@ -181,9 +181,14 @@ def _test_merge_and_monthly_summary() -> None:
             slab_kg, bloom_kg, billet_kg, unk_kg, data.grand_kg
         )
         # Spot-check sample WO section magnitudes (dominant-WO aggregation)
-        assert abs(slab_kg - 848741.2) < 1.0, slab_kg
-        assert abs(bloom_kg - 10952.0) < 1.0, bloom_kg
-        assert abs(billet_kg - 362120.8) < 1.0, billet_kg
+        # count = unique شرح کالا; kg rolled up per description then by dominant WO
+        assert abs(slab_kg - 838038.6) < 1.0, slab_kg
+        assert abs(bloom_kg - 1092.0) < 1.0, bloom_kg
+        assert abs(billet_kg - 382683.4) < 1.0, billet_kg
+        assert int(totals["slab"]["count"]) == 24
+        assert int(totals["bloom"]["count"]) == 1
+        assert int(totals["billet"]["count"]) == 23
+        assert int(totals["slab"]["count"]) + int(totals["bloom"]["count"]) + int(totals["billet"]["count"]) == int(data.items["شرح"].nunique())
         excel_out = ROOT / "reports" / "smoke_monthly_summary.xlsx"
         pdf_out = ROOT / "reports" / "smoke_monthly_summary.pdf"
         data2, written = build_monthly_summary(sample, excel_out=excel_out)
