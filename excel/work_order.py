@@ -21,6 +21,7 @@ GROUP_LABELS_FA: dict[str, str] = {
     "slab": "اسلب",
     "bloom": "بلوم",
     "billet": "بیلت",
+    "unknown": "سایر نواحی",
 }
 
 # Summary section row labels
@@ -28,10 +29,12 @@ CONSUMPTION_LABELS_FA: dict[str, str] = {
     "slab": "مصرف مواد اسلب",
     "bloom": "مصرف مواد بلوم",
     "billet": "مصرف مواد بیلت",
+    "unknown": "مصرف مواد سایر نواحی",
 }
 
 UNKNOWN_GROUP = "unknown"
-UNKNOWN_LABEL_FA = "مصرف مواد بدون سفارش کار شناخته‌شده"
+UNKNOWN_LABEL_FA = "مصرف مواد سایر نواحی"
+UNKNOWN_SHORT_LABEL_FA = "سایر نواحی"
 
 # Marker for auto assignments derived from monthly work_order (manual wins).
 WO_AUTO_ASSIGNED_BY = "system:work_order"

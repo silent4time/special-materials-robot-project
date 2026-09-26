@@ -605,7 +605,7 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
     ws.cell(
         row=row_idx,
         column=9,
-        value="جمع کنترل (اسلب+بلوم+بیلت+ناشناخته) — باید برابر جمع کل مصرفی باشد",
+        value="جمع کنترل (اسلب+بلوم+بیلت+سایر نواحی) — باید برابر جمع کل مصرفی باشد",
     )
     _style_row(ws, row_idx, fill=GREEN_FILL, bold=True)
     ws.row_dimensions[row_idx].height = 36

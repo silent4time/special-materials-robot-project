@@ -560,7 +560,7 @@ def generate_monthly_summary_pdf(
                     check_cells.append(Paragraph(rtl("کیلوگرم"), styles["cell"]))
                 elif c == "description":
                     check_cells.append(
-                        Paragraph(rtl("جمع کنترل (اسلب+بلوم+بیلت+ناشناخته)"), styles["cell"])
+                        Paragraph(rtl("جمع کنترل (اسلب+بلوم+بیلت+سایر نواحی)"), styles["cell"])
                     )
                 else:
                     check_cells.append(Paragraph(rtl(""), styles["cell"]))
