@@ -330,7 +330,11 @@ def load_monthly_detail(path: Path | str) -> pd.DataFrame:
 
 
 def aggregate_monthly_detail(detail: pd.DataFrame) -> MonthlySummaryData:
-    """Aggregate by کد کالا + شرح + ماه; درخواستی add / برگشتی subtract."""
+    """Aggregate by کد کالا + شرح + ماه; درخواستی add / برگشتی subtract.
+
+    After netting, drop aggregated rows whose مقدار is <= 0 so zero/negative
+    net consumption never appears in detail, subtotals, month totals, or WO breakdowns.
+    """
     work = detail.copy()
     work["شرح"] = work["شرح"].map(normalize_fa_text)
     def _item_code(v: object) -> str:
@@ -397,6 +401,20 @@ def aggregate_monthly_detail(detail: pd.DataFrame) -> MonthlySummaryData:
             month_sections=[],
             tundish_totals=tundish_kg_totals_from_items(items),
         )
+
+    # Returns already netted into مقدار; drop zero/negative net consumption.
+    items = items.loc[items["مقدار"] > 0].copy()
+    if items.empty:
+        return MonthlySummaryData(
+            items=items,
+            grand_kg=0.0,
+            group_order=[],
+            month_sections=[],
+            tundish_totals=tundish_kg_totals_from_items(items),
+        )
+    # Keep first-appearance order, but only for descriptions still present.
+    remaining = set(items["شرح"].tolist())
+    group_order = [d for d in group_order if d in remaining]
 
     # Sort within each شرح by month; groups by first appearance
     items["_group_rank"] = items["شرح"].map(

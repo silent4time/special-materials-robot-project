@@ -169,7 +169,9 @@ def _test_merge_and_monthly_summary() -> None:
     if sample.exists():
         detail = load_monthly_detail(sample)
         data = aggregate_monthly_detail(detail)
-        assert abs(float(data.grand_kg) - 1221814) < 0.5, data.grand_kg
+        assert abs(float(data.grand_kg) - 1225329) < 0.5, data.grand_kg
+        assert (data.items["مقدار"] > 0).all()
+        assert len(data.items) == 153
         month_sum = sum(float(s["total_kg"]) for s in data.month_sections)
         assert abs(month_sum - float(data.grand_kg)) < 0.5
         totals = data.tundish_totals or tundish_kg_totals_from_items(data.items)
@@ -182,12 +184,12 @@ def _test_merge_and_monthly_summary() -> None:
         )
         # Spot-check sample WO section magnitudes (dominant-WO aggregation)
         # count = unique شرح کالا; kg rolled up per description then by dominant WO
-        assert abs(slab_kg - 838038.6) < 1.0, slab_kg
+        assert abs(slab_kg - 840153.6) < 1.0, slab_kg
         assert abs(bloom_kg - 1092.0) < 1.0, bloom_kg
-        assert abs(billet_kg - 382683.4) < 1.0, billet_kg
-        assert int(totals["slab"]["count"]) == 24
+        assert abs(billet_kg - 384083.4) < 1.0, billet_kg
+        assert int(totals["slab"]["count"]) == 23
         assert int(totals["bloom"]["count"]) == 1
-        assert int(totals["billet"]["count"]) == 23
+        assert int(totals["billet"]["count"]) == 22
         assert int(totals["slab"]["count"]) + int(totals["bloom"]["count"]) + int(totals["billet"]["count"]) == int(data.items["شرح"].nunique())
         excel_out = ROOT / "reports" / "smoke_monthly_summary.xlsx"
         pdf_out = ROOT / "reports" / "smoke_monthly_summary.pdf"
