@@ -171,6 +171,76 @@ class Database:
                     ON site_stock_entries(entry_date, tundish_group);
                 CREATE INDEX IF NOT EXISTS idx_site_stock_item
                     ON site_stock_entries(item_id, entry_date);
+
+                CREATE TABLE IF NOT EXISTS material_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bale_user_id TEXT NOT NULL,
+                    actor_display_name TEXT,
+                    coverage_days REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'confirmed',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS material_request_lines (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id INTEGER NOT NULL,
+                    item_id TEXT,
+                    item_name TEXT NOT NULL,
+                    unit TEXT,
+                    avg_daily REAL,
+                    remaining_qty REAL,
+                    quantity REAL NOT NULL,
+                    FOREIGN KEY(request_id) REFERENCES material_requests(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS inventory_ledger (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_key TEXT NOT NULL,
+                    item_id TEXT,
+                    item_name TEXT,
+                    delta REAL NOT NULL,
+                    reason TEXT,
+                    ref_type TEXT NOT NULL,
+                    ref_id INTEGER,
+                    bale_user_id TEXT,
+                    actor_display_name TEXT,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_material_requests_created
+                    ON material_requests(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_material_request_lines_req
+                    ON material_request_lines(request_id);
+                CREATE INDEX IF NOT EXISTS idx_inventory_ledger_key
+                    ON inventory_ledger(item_key);
+                CREATE INDEX IF NOT EXISTS idx_inventory_ledger_ref
+                    ON inventory_ledger(ref_type, ref_id);
+                
+                CREATE TABLE IF NOT EXISTS warehouse_returns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bale_user_id TEXT NOT NULL,
+                    actor_display_name TEXT,
+                    status TEXT NOT NULL DEFAULT 'confirmed',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS warehouse_return_lines (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    return_id INTEGER NOT NULL,
+                    item_id TEXT,
+                    item_name TEXT NOT NULL,
+                    unit TEXT,
+                    site_qty REAL,
+                    surplus_qty REAL,
+                    quantity REAL NOT NULL,
+                    surplus_reason TEXT,
+                    FOREIGN KEY(return_id) REFERENCES warehouse_returns(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_warehouse_returns_created
+                    ON warehouse_returns(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_warehouse_return_lines_ret
+                    ON warehouse_return_lines(return_id);
                 """
             )
             self._migrate_users_role_check(conn)
@@ -1198,6 +1268,272 @@ class Database:
             }
             for e in entries
         ]
+
+
+
+    # --- material requests + inventory ledger ---
+    def create_material_request(
+        self,
+        bale_user_id: str | int,
+        *,
+        actor_display_name: str | None,
+        coverage_days: float | int,
+        lines: list[dict[str, Any]],
+        status: str = "confirmed",
+    ) -> dict[str, Any]:
+        """Persist a confirmed material request + lines and inventory_ledger deductions.
+
+        Each line dict may include: item_id, item_name, unit, avg_daily,
+        remaining_qty, quantity (requested qty). Quantity <= 0 is skipped.
+        """
+        uid = str(bale_user_id)
+        now = _utcnow()
+        days = float(coverage_days)
+        kept = [
+            ln
+            for ln in (lines or [])
+            if float(ln.get("quantity") or 0) > 0 and str(ln.get("item_name") or "").strip()
+        ]
+        if not kept:
+            raise ValueError("هیچ قلمی با مقدار مثبت برای ثبت وجود ندارد.")
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO material_requests
+                    (bale_user_id, actor_display_name, coverage_days, status, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (uid, actor_display_name, days, status, now),
+            )
+            request_id = int(cur.lastrowid)
+            for ln in kept:
+                item_id = str(ln.get("item_id") or "").strip() or None
+                item_name = str(ln.get("item_name") or "").strip()
+                qty = float(ln["quantity"])
+                unit = ln.get("unit")
+                avg_daily = ln.get("avg_daily")
+                rem_qty = ln.get("remaining_qty")
+                conn.execute(
+                    """
+                    INSERT INTO material_request_lines
+                        (request_id, item_id, item_name, unit, avg_daily,
+                         remaining_qty, quantity)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        request_id,
+                        item_id,
+                        item_name,
+                        str(unit) if unit is not None else None,
+                        float(avg_daily) if avg_daily is not None else None,
+                        float(rem_qty) if rem_qty is not None else None,
+                        qty,
+                    ),
+                )
+                item_key = item_id or item_name
+                conn.execute(
+                    """
+                    INSERT INTO inventory_ledger
+                        (item_key, item_id, item_name, delta, reason,
+                         ref_type, ref_id, bale_user_id, actor_display_name, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item_key,
+                        item_id,
+                        item_name,
+                        -qty,
+                        "material_request",
+                        "material_request",
+                        request_id,
+                        uid,
+                        actor_display_name,
+                        now,
+                    ),
+                )
+        return self.get_material_request(request_id)  # type: ignore[return-value]
+
+    def get_material_request(self, request_id: int) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM material_requests WHERE id = ?", (int(request_id),)
+            ).fetchone()
+            if not row:
+                return None
+            header = dict(row)
+            lines = [
+                dict(r)
+                for r in conn.execute(
+                    """
+                    SELECT * FROM material_request_lines
+                    WHERE request_id = ?
+                    ORDER BY id
+                    """,
+                    (int(request_id),),
+                ).fetchall()
+            ]
+        header["lines"] = lines
+        return header
+
+    def list_material_requests(self, limit: int = 10) -> list[dict[str, Any]]:
+        lim = max(1, min(int(limit), 50))
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT r.*,
+                       (SELECT COUNT(*) FROM material_request_lines l
+                        WHERE l.request_id = r.id) AS line_count,
+                       (SELECT COALESCE(SUM(l.quantity), 0) FROM material_request_lines l
+                        WHERE l.request_id = r.id) AS total_qty
+                FROM material_requests r
+                ORDER BY r.created_at DESC, r.id DESC
+                LIMIT ?
+                """,
+                (lim,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+    def create_warehouse_return(
+        self,
+        bale_user_id: str | int,
+        *,
+        actor_display_name: str | None,
+        lines: list[dict[str, Any]],
+        status: str = "confirmed",
+    ) -> dict[str, Any]:
+        """Persist confirmed return-to-warehouse + positive inventory_ledger deltas."""
+        uid = str(bale_user_id)
+        now = _utcnow()
+        kept = [
+            ln
+            for ln in (lines or [])
+            if float(ln.get("quantity") or 0) > 0 and str(ln.get("item_name") or "").strip()
+        ]
+        if not kept:
+            raise ValueError("هیچ قلمی با مقدار مثبت برای برگشت وجود ندارد.")
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO warehouse_returns
+                    (bale_user_id, actor_display_name, status, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (uid, actor_display_name, status, now),
+            )
+            return_id = int(cur.lastrowid)
+            for ln in kept:
+                item_id = str(ln.get("item_id") or "").strip() or None
+                item_name = str(ln.get("item_name") or "").strip()
+                qty = float(ln["quantity"])
+                conn.execute(
+                    """
+                    INSERT INTO warehouse_return_lines
+                        (return_id, item_id, item_name, unit, site_qty,
+                         surplus_qty, quantity, surplus_reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        return_id,
+                        item_id,
+                        item_name,
+                        str(ln["unit"]) if ln.get("unit") is not None else None,
+                        float(ln["site_qty"]) if ln.get("site_qty") is not None else None,
+                        float(ln["surplus_qty"]) if ln.get("surplus_qty") is not None else None,
+                        qty,
+                        str(ln["surplus_reason"]) if ln.get("surplus_reason") is not None else None,
+                    ),
+                )
+                item_key = item_id or item_name
+                conn.execute(
+                    """
+                    INSERT INTO inventory_ledger
+                        (item_key, item_id, item_name, delta, reason,
+                         ref_type, ref_id, bale_user_id, actor_display_name, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item_key,
+                        item_id,
+                        item_name,
+                        qty,  # positive: add back to warehouse
+                        "return_to_warehouse",
+                        "warehouse_return",
+                        return_id,
+                        uid,
+                        actor_display_name,
+                        now,
+                    ),
+                )
+        return self.get_warehouse_return(return_id)  # type: ignore[return-value]
+
+    def get_warehouse_return(self, return_id: int) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM warehouse_returns WHERE id = ?", (int(return_id),)
+            ).fetchone()
+            if not row:
+                return None
+            header = dict(row)
+            lines = [
+                dict(r)
+                for r in conn.execute(
+                    """
+                    SELECT * FROM warehouse_return_lines
+                    WHERE return_id = ?
+                    ORDER BY id
+                    """,
+                    (int(return_id),),
+                ).fetchall()
+            ]
+        header["lines"] = lines
+        return header
+
+    def list_warehouse_returns(self, limit: int = 10) -> list[dict[str, Any]]:
+        lim = max(1, min(int(limit), 50))
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT r.*,
+                       (SELECT COUNT(*) FROM warehouse_return_lines l
+                        WHERE l.return_id = r.id) AS line_count,
+                       (SELECT COALESCE(SUM(l.quantity), 0) FROM warehouse_return_lines l
+                        WHERE l.return_id = r.id) AS total_qty
+                FROM warehouse_returns r
+                ORDER BY r.created_at DESC, r.id DESC
+                LIMIT ?
+                """,
+                (lim,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def inventory_ledger_sums(self) -> dict[str, dict[str, float]]:
+        """Aggregate ledger deltas keyed by item_id and by item_name (casefold)."""
+        by_id: dict[str, float] = {}
+        by_name: dict[str, float] = {}
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT item_id, item_name, item_key, SUM(delta) AS total_delta
+                FROM inventory_ledger
+                GROUP BY item_id, item_name, item_key
+                """
+            ).fetchall()
+        for r in rows:
+            delta = float(r["total_delta"] or 0)
+            iid = str(r["item_id"] or "").strip()
+            name = str(r["item_name"] or "").strip()
+            key = str(r["item_key"] or "").strip()
+            if iid:
+                by_id[iid] = by_id.get(iid, 0.0) + delta
+            elif key and key != name:
+                by_id[key] = by_id.get(key, 0.0) + delta
+            if name:
+                nkey = name.casefold()
+                by_name[nkey] = by_name.get(nkey, 0.0) + delta
+            elif key:
+                by_name[key.casefold()] = by_name.get(key.casefold(), 0.0) + delta
+        return {"by_id": by_id, "by_name": by_name}
 
 
     # --- bot settings (invite / welcome / logo) ---

@@ -44,6 +44,11 @@ def can_configure_catalog(user: dict | None) -> bool:
     return bool(user and user.get("active") and user.get("role") in CATALOG_ADMIN_ROLES)
 
 
+def can_request_materials(user: dict | None) -> bool:
+    """Owner / manager / responsible_officer may run the material-request workflow."""
+    return bool(user and user.get("active") and user.get("role") in CATALOG_ADMIN_ROLES)
+
+
 def role_label(role: str) -> str:
     return ROLE_LABELS.get(role, role)
 

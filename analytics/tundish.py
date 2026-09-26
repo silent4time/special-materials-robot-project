@@ -10,19 +10,27 @@ import pandas as pd
 from config import CRITICAL_DAYS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, TUNDISH_TYPES, TUNDISH_TYPE_LABELS
 
 CUSTOM_RANGE_RE = re.compile(
-    r"از\s*(\d{4}-\d{2}-\d{2})\s*تا\s*(\d{4}-\d{2}-\d{2})",
+    r"از\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})\s*تا\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})",
     re.UNICODE,
 )
 
 
 def parse_custom_range_message(text: str) -> tuple[date, date] | None:
-    """Parse «از YYYY-MM-DD تا YYYY-MM-DD»; return (start, end) inclusive or None."""
+    """Parse «از … تا …» in Jalali or Gregorian; return Gregorian (start, end)."""
+    try:
+        from bot.jalali import parse_user_date_range
+    except Exception:  # noqa: BLE001
+        parse_user_date_range = None  # type: ignore[assignment]
+    if parse_user_date_range is not None:
+        parsed = parse_user_date_range(text)
+        if parsed:
+            return parsed
     m = CUSTOM_RANGE_RE.search((text or "").strip())
     if not m:
         return None
     try:
-        start = date.fromisoformat(m.group(1))
-        end = date.fromisoformat(m.group(2))
+        start = date.fromisoformat(m.group(1).replace("/", "-"))
+        end = date.fromisoformat(m.group(2).replace("/", "-"))
     except ValueError:
         return None
     if end < start:
@@ -296,6 +304,59 @@ def remaining(inventory_df: pd.DataFrame | None) -> pd.DataFrame:
         agg["unit"] = None
     # also roll up per material (sum locations) for cover calculations
     return agg.sort_values(by=["material_name"], kind="stable").reset_index(drop=True)
+
+
+
+def apply_inventory_ledger(
+    inventory_df: pd.DataFrame | None,
+    ledger_by_id: dict[str, float] | None = None,
+    ledger_by_name: dict[str, float] | None = None,
+) -> pd.DataFrame:
+    """
+    Apply inventory_ledger deltas to a warehouse inventory DataFrame (immutable base).
+
+    Matching preference: ``id`` column first, then product_name / item_code_desc /
+    material_name. Delta is added to quantity (issues are stored as negative).
+    """
+    if inventory_df is None or inventory_df.empty:
+        return inventory_df.copy() if inventory_df is not None else pd.DataFrame()
+    by_id = {str(k).strip(): float(v) for k, v in (ledger_by_id or {}).items() if str(k).strip()}
+    by_name = {
+        str(k).strip().casefold(): float(v)
+        for k, v in (ledger_by_name or {}).items()
+        if str(k).strip()
+    }
+    if not by_id and not by_name:
+        return inventory_df.copy()
+    work = inventory_df.copy()
+    if "quantity" not in work.columns:
+        return work
+
+    name_col = None
+    for candidate in ("product_name", "item_code_desc", "material_name"):
+        if candidate in work.columns:
+            name_col = candidate
+            break
+
+    def row_delta(row: pd.Series) -> float:
+        if "id" in work.columns:
+            iid = row.get("id")
+            if iid is not None and not (isinstance(iid, float) and pd.isna(iid)):
+                key = str(iid).strip()
+                if key and key.casefold() != "nan" and key in by_id:
+                    return by_id[key]
+        if name_col:
+            name = row.get(name_col)
+            if name is not None and not (isinstance(name, float) and pd.isna(name)):
+                nkey = str(name).strip().casefold()
+                if nkey and nkey in by_name:
+                    return by_name[nkey]
+        return 0.0
+
+    deltas = work.apply(row_delta, axis=1)
+    qty = pd.to_numeric(work["quantity"], errors="coerce").fillna(0.0) + deltas
+    work["quantity"] = qty
+    return work
 
 
 def _material_daily_avg(rates_df: pd.DataFrame) -> pd.DataFrame:

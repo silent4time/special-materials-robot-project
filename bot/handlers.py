@@ -19,6 +19,7 @@ from analytics.tundish import (
     parse_custom_range_message,
     period_consumption,
     range_day_count,
+    apply_inventory_ledger,
     remaining,
     resolve_preset_range,
     suggest_requests,
@@ -26,6 +27,7 @@ from analytics.tundish import (
 )
 from auth.rbac import (
     can_configure_catalog,
+    can_request_materials,
     can_generate_report,
     ensure_registered,
     require_manager,
@@ -33,6 +35,7 @@ from auth.rbac import (
     role_label,
 )
 from bot import keyboards as kb
+from bot.jalali import format_date, format_datetime
 from bot.bale_api import BaleClient
 from bot.settings_text import (
     DEFAULT_INVITE_TEXT,
@@ -79,6 +82,15 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • مواد بحرانی — پوشش < CRITICAL_DAYS={critical} روز
 • اگر موجودی روزانه سایت ثبت شده باشد، برای «موجودی و مواد بحرانی» به‌عنوان منبع باقیمانده سایت استفاده می‌شود
 
+درخواست مواد (مالک / مدیر / کاردان مسئول):
+• دکمه «🛒 درخواست مواد» در منوی اصلی
+• انتخاب پوشش روز (۷ / ۱۴ / ۳۰)، بررسی پیشنهاد، تأیید یا اصلاح مقدار
+• پس از تأیید، از موجودی انبار (ledger) کسر می‌شود
+
+برگشت به انبار (مالک / مدیر / کاردان مسئول):
+• دکمه «↩️ برگشت به انبار» — پیشنهاد مواد مازاد سایت
+• پس از تأیید، به موجودی انبار (ledger مثبت) افزوده می‌شود
+
 نقش‌ها:
 • مالک / مدیر — همه ردیف‌ها + مدیریت کاربران + تنظیمات اقلام
 • کاردان مسئول — مثل بقیه نقش‌های عملیاتی کار می‌کند؛ همه ردیف‌ها + تنظیمات اقلام سایت
@@ -123,6 +135,9 @@ class BotApp:
         self._users_pending: dict[str, dict[str, Any]] = {}
         # bot settings interactive flows
         self._bot_settings_pending: dict[str, dict[str, Any]] = {}
+        # material request interactive flow
+        self._material_req_pending: dict[str, dict[str, Any]] = {}
+        self._warehouse_ret_pending: dict[str, dict[str, Any]] = {}
         self._bot_username: str | None = None
         ensure_dirs()
 
@@ -194,6 +209,8 @@ class BotApp:
         self._catalog_assign_pending.pop(uid, None)
         self._users_pending.pop(uid, None)
         self._bot_settings_pending.pop(uid, None)
+        self._material_req_pending.pop(uid, None)
+        self._warehouse_ret_pending.pop(uid, None)
         self._reply(
             message,
             "دسترسی ندارید؛ فقط ورود موجودی روزانه سایت برای نقش تکنسین فعال است.",
@@ -258,6 +275,7 @@ class BotApp:
             seen.add(raw_path)
             try:
                 frame, _ = process_file(raw_path, "product_inventory", user)
+                frame = self._inventory_with_ledger(frame)
                 return frame, True, source
             except Exception as exc:  # noqa: BLE001
                 logger.warning("inventory list load failed for %s: %s", raw_path, exc)
@@ -333,6 +351,19 @@ class BotApp:
 
     def _clear_analysis_pending(self, uid: str) -> None:
         self._analysis_pending.pop(uid, None)
+
+    def _clear_material_req_pending(self, uid: str) -> None:
+        self._material_req_pending.pop(str(uid), None)
+
+    def _clear_warehouse_ret_pending(self, uid: str) -> None:
+        self._warehouse_ret_pending.pop(str(uid), None)
+
+    def _inventory_with_ledger(self, frame: pd.DataFrame | None) -> pd.DataFrame | None:
+        """Apply inventory_ledger deltas onto a warehouse inventory frame."""
+        if frame is None:
+            return None
+        sums = self.db.inventory_ledger_sums()
+        return apply_inventory_ledger(frame, sums.get("by_id"), sums.get("by_name"))
 
     def _apply_tundish_filter(self, frames: dict, uid: str) -> dict:
         selected = self._analysis_tundish_filter.get(uid)
@@ -862,6 +893,8 @@ class BotApp:
         self._catalog_assign_pending.pop(uid, None)
         self._users_pending.pop(uid, None)
         self._bot_settings_pending.pop(uid, None)
+        self._material_req_pending.pop(uid, None)
+        self._warehouse_ret_pending.pop(uid, None)
         self.db.reset_session(user["bale_user_id"])
         self._reply(message, "جلسه آپلود و وضعیت ورود جاری پاک شد. از منو دوباره شروع کنید.", kb.main_menu(user))
 
@@ -1202,7 +1235,7 @@ class BotApp:
         days = forecast_days if forecast_days is not None else float(range_day_count(start, end))
         rates = daily_rates(tank, monthly)
         rates_in_range = daily_rates(tank, monthly, start=start, end=end)
-        rem = remaining(inv)
+        rem = remaining(self._inventory_with_ledger(inv))
         period = period_consumption(tank, start, end)
         crit = critical_materials(rates, rem, CRITICAL_DAYS)
         fc = forecast(rates_in_range if not rates_in_range.empty else rates, days)
@@ -1335,7 +1368,7 @@ class BotApp:
             return
         _, frames, _ = loaded
         rates = daily_rates(frames.get("tank_consumption"), frames.get("monthly_consumption"))
-        rem = remaining(frames.get("product_inventory"))
+        rem = remaining(self._inventory_with_ledger(frames.get("product_inventory")))
         surplus = surplus_materials(rates, rem)
         cover_th = max(float(CRITICAL_DAYS) * 3.0, float(SURPLUS_COVER_DAYS))
         lines = [
@@ -1356,8 +1389,8 @@ class BotApp:
             f"• {kb.BTN_RANGE_7}\n"
             f"• {kb.BTN_RANGE_30}\n"
             f"• {kb.BTN_RANGE_CUSTOM} — سپس پیام بفرستید:\n"
-            "  از YYYY-MM-DD تا YYYY-MM-DD\n"
-            "مثال: از 2026-09-01 تا 2026-09-15"
+            "  از YYYY/MM/DD تا YYYY/MM/DD (هجری شمسی)\n"
+            "مثال: از 1403/07/01 تا 1403/07/15"
         )
         self._reply(message, hint, kb.date_range_menu())
 
@@ -1402,7 +1435,7 @@ class BotApp:
         if preset == "custom":
             self._reply(
                 message,
-                "لطفاً بازه را با این فرمت بفرستید:\nاز YYYY-MM-DD تا YYYY-MM-DD",
+                "لطفاً بازه را با این فرمت بفرستید (هجری شمسی):\nاز YYYY/MM/DD تا YYYY/MM/DD",
                 kb.date_range_menu(),
             )
             return True
@@ -1440,7 +1473,7 @@ class BotApp:
         if mode == "period":
             period = period_consumption(tank, start, end)
             lines = [
-                f"📅 مصرف مواد از {start.isoformat()} تا {end.isoformat()} ({days} روز):",
+                f"📅 مصرف مواد از {format_date(start)} تا {format_date(end)} ({days} روز):",
                 "",
             ]
             if period.empty:
@@ -1466,7 +1499,7 @@ class BotApp:
             fc = forecast(use_rates, days)
             lines = [
                 f"🔮 پیش‌بینی نیاز تاندیش برای {days} روز "
-                f"({start.isoformat()} تا {end.isoformat()}):",
+                f"({format_date(start)} تا {format_date(end)}):",
                 "",
             ]
             if fc.empty:
@@ -1487,10 +1520,10 @@ class BotApp:
             return
 
         if mode == "suggest":
-            sug = suggest_requests(use_rates, remaining(inv), days)
+            sug = suggest_requests(use_rates, remaining(self._inventory_with_ledger(inv)), days)
             lines = [
                 f"🛒 پیشنهاد درخواست مواد برای {days} روز "
-                f"({start.isoformat()} تا {end.isoformat()}):",
+                f"({format_date(start)} تا {format_date(end)}):",
                 "",
                 format_suggest_list_fa(sug),
                 "",
@@ -1540,8 +1573,8 @@ class BotApp:
         if rows:
             day = self.db.get_latest_site_stock_date() or "—"
             rem = remaining(pd.DataFrame(rows))
-            return rem, f"موجودی روزانه سایت — {day}"
-        rem = remaining(frames.get("product_inventory"))
+            return rem, f"موجودی روزانه سایت — {format_date(day)}"
+        rem = remaining(self._inventory_with_ledger(frames.get("product_inventory")))
         return rem, "موجودی انبار"
 
     def _clear_site_stock_pending(self, uid: str) -> None:
@@ -1578,7 +1611,7 @@ class BotApp:
             message,
             "موجودی روزانه سایت\n"
             "یکی از گروه‌های زیر را انتخاب کنید؛ سپس مقادیر اقلام را یکی‌یکی بفرستید.\n"
-            f"تاریخ ورود (تهران): {day}"
+            f"تاریخ ورود (تهران): {format_date(day)}"
             f"{actor_note}",
             kb.site_stock_menu(),
         )
@@ -1726,7 +1759,7 @@ class BotApp:
         day = self.db.tehran_today()
         values = pending.get("values") or {}
         lines = [
-            f"✅ ثبت موجودی «{label}» برای تاریخ {day}",
+            f"✅ ثبت موجودی «{label}» برای تاریخ {format_date(day)}",
             f"تعداد اقلام ثبت‌شده: {len(values)} از {len(pending['items'])}",
             "",
         ]
@@ -2322,6 +2355,732 @@ class BotApp:
         return False
 
 
+
+    # ---------- material request (درخواست مواد) ----------
+
+    def _require_material_request_access(self, message: dict) -> dict | None:
+        user = self._user_or_deny(message)
+        if not user:
+            return None
+        if self._deny_technician(message, user):
+            return None
+        if not can_request_materials(user):
+            self._reply(
+                message,
+                "دسترسی ندارید؛ درخواست مواد فقط برای مالک، مدیر و کاردان مسئول است.",
+                kb.main_menu(user),
+            )
+            return None
+        return user
+
+    def _format_mr_review(self, days: float | int, lines: list[dict]) -> str:
+        header = [
+            f"🛒 پیشنهاد درخواست مواد برای پوشش {int(days) if float(days) == int(days) else days} روز:",
+            "",
+        ]
+        if not lines:
+            header.append("پیشنهادی نیست — موجودی برای بازه درخواست کافی به‌نظر می‌رسد.")
+            return "\n".join(header)
+        for i, ln in enumerate(lines, 1):
+            unit = ln.get("unit") or ""
+            iid = ln.get("item_id") or "—"
+            header.append(
+                f"{i}) {ln.get('item_name')} (شناسه: {iid})\n"
+                f"   موجودی: {float(ln.get('remaining_qty') or 0):.2f} {unit} | "
+                f"مصرف روز: {float(ln.get('avg_daily') or 0):.2f} | "
+                f"پیشنهاد: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
+            )
+        header.append("")
+        header.append("تأیید همه / اصلاح / انصراف را انتخاب کنید.")
+        return "\n".join(header)
+
+    def _build_mr_lines(
+        self, user: dict, days: float | int
+    ) -> tuple[list[dict], str | None]:
+        """Build draft request lines from suggest_requests; error message or None."""
+        session = self.db.get_or_create_session(user["bale_user_id"])
+        completeness = self.db.session_completeness(session)
+        missing = missing_files_for_goal("suggest", completeness)
+        if missing:
+            return [], (
+                "برای درخواست مواد این فایل(ها) لازم است:\n• "
+                + "\n• ".join(missing)
+                + "\n\nابتدا از منوی اصلی نوع فایل را انتخاب و Excel را ارسال کنید."
+            )
+        frames, _metas = self._load_frames(user, session)
+        frames = self._apply_tundish_filter(frames, str(user["bale_user_id"]))
+        tank = frames.get("tank_consumption")
+        monthly = frames.get("monthly_consumption")
+        inv = self._inventory_with_ledger(frames.get("product_inventory"))
+        end = date.today()
+        start = end - timedelta(days=max(0, int(days) - 1))
+        rates = daily_rates(tank, monthly)
+        rates_r = daily_rates(tank, monthly, start=start, end=end)
+        use_rates = rates_r if rates_r is not None and not rates_r.empty else rates
+        rem = remaining(inv)
+        sug = suggest_requests(use_rates, rem, days)
+        if sug is None or sug.empty:
+            return [], None
+        positive = sug.loc[sug["suggest_qty"] > 0].copy()
+        if positive.empty:
+            return [], None
+
+        # Map material_name → id from inventory
+        id_by_name: dict[str, str] = {}
+        if inv is not None and not inv.empty:
+            name_col = None
+            for candidate in ("product_name", "item_code_desc", "material_name"):
+                if candidate in inv.columns:
+                    name_col = candidate
+                    break
+            if name_col and "id" in inv.columns:
+                for _, row in inv.iterrows():
+                    nm = row.get(name_col)
+                    iid = row.get("id")
+                    if nm is None or iid is None:
+                        continue
+                    if isinstance(nm, float) and pd.isna(nm):
+                        continue
+                    if isinstance(iid, float) and pd.isna(iid):
+                        continue
+                    key = str(nm).strip()
+                    if key and key not in id_by_name:
+                        id_by_name[key] = str(iid).strip()
+
+        lines: list[dict] = []
+        for _, row in positive.iterrows():
+            name = str(row["material_name"]).strip()
+            lines.append(
+                {
+                    "item_id": id_by_name.get(name),
+                    "item_name": name,
+                    "unit": row.get("unit"),
+                    "avg_daily": float(row.get("avg_daily") or 0),
+                    "remaining_qty": float(row.get("remaining_qty") or 0),
+                    "quantity": float(row.get("suggest_qty") or 0),
+                }
+            )
+        return lines, None
+
+    def on_material_request_start(self, message: dict) -> None:
+        user = self._require_material_request_access(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._clear_material_req_pending(uid)
+        self._material_req_pending[uid] = {"await": "days"}
+        self._reply(
+            message,
+            "🛒 درخواست مواد\n"
+            "تعداد روز پوشش را انتخاب کنید (پیش‌فرض: ۷ روز).\n"
+            "پیشنهاد بر اساس مصرف روزانه و موجودی باقیمانده محاسبه می‌شود.",
+            kb.material_request_days_menu(),
+        )
+
+    def on_material_request_history(self, message: dict) -> None:
+        user = self._require_material_request_access(message)
+        if not user:
+            return
+        rows = self.db.list_material_requests(limit=10)
+        if not rows:
+            self._reply(
+                message,
+                "هنوز درخواست مواد ثبت‌شده‌ای نیست.",
+                kb.material_request_days_menu(),
+            )
+            return
+        lines = ["📜 تاریخچه درخواست‌ها (۱۰ مورد اخیر):", ""]
+        for r in rows:
+            actor = self._format_actor(
+                bale_user_id=r.get("bale_user_id"),
+                actor_display_name=r.get("actor_display_name"),
+            )
+            days = r.get("coverage_days")
+            days_s = int(days) if days is not None and float(days) == int(float(days)) else days
+            lines.append(
+                f"#{r['id']} | {format_datetime(r.get('created_at'))} | "
+                f"{days_s} روز | {int(r.get('line_count') or 0)} قلم | "
+                f"ثبت‌کننده: {actor}"
+            )
+        uid = str(user["bale_user_id"])
+        pending = self._material_req_pending.get(uid)
+        menu = kb.material_request_days_menu() if pending else kb.main_menu(user)
+        self._reply(message, "\n".join(lines), menu)
+
+    def on_material_request_days(self, message: dict, days: int) -> bool:
+        """Handle coverage-days choice. Returns True if consumed."""
+        uid = self._uid(message)
+        pending = self._material_req_pending.get(uid)
+        if not pending or pending.get("await") != "days":
+            return False
+        user = self._require_material_request_access(message)
+        if not user:
+            self._clear_material_req_pending(uid)
+            return True
+        lines, err = self._build_mr_lines(user, days)
+        if err:
+            self._clear_material_req_pending(uid)
+            self._reply(message, err, kb.main_menu(user))
+            return True
+        if not lines:
+            self._clear_material_req_pending(uid)
+            self._reply(
+                message,
+                "پیشنهادی نیست — موجودی برای بازه درخواست کافی به‌نظر می‌رسد.\n"
+                "درخواست خالی باز نمی‌شود.",
+                kb.main_menu(user),
+            )
+            return True
+        self._material_req_pending[uid] = {
+            "await": "review",
+            "days": float(days),
+            "lines": lines,
+        }
+        self._reply(
+            message,
+            self._format_mr_review(days, lines),
+            kb.material_request_review_menu(),
+        )
+        return True
+
+    def on_material_request_confirm(self, message: dict) -> None:
+        user = self._require_material_request_access(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        pending = self._material_req_pending.get(uid)
+        if not pending or pending.get("await") not in {"review", "edit_pick", "edit_qty"}:
+            self._reply(message, "درخواست فعالی برای تأیید نیست.", kb.main_menu(user))
+            return
+        lines = [ln for ln in pending.get("lines") or [] if float(ln.get("quantity") or 0) > 0]
+        if not lines:
+            self._clear_material_req_pending(uid)
+            self._reply(
+                message,
+                "هیچ قلمی با مقدار مثبت باقی نمانده — درخواست ثبت نشد.",
+                kb.main_menu(user),
+            )
+            return
+        display = user.get("display_name") or self._display_name(message)
+        try:
+            req = self.db.create_material_request(
+                uid,
+                actor_display_name=display,
+                coverage_days=pending.get("days") or 7,
+                lines=lines,
+                status="confirmed",
+            )
+        except ValueError as exc:
+            self._reply(message, str(exc), kb.material_request_review_menu())
+            return
+        self._clear_material_req_pending(uid)
+        actor = self._format_actor(user)
+        out = [
+            f"✅ درخواست مواد #{req['id']} ثبت شد.",
+            f"پوشش: {req.get('coverage_days')} روز",
+            f"ثبت‌کننده: {actor}",
+            "",
+            "اقلام تأییدشده:",
+        ]
+        for ln in req.get("lines") or []:
+            unit = ln.get("unit") or ""
+            iid = ln.get("item_id") or "—"
+            out.append(
+                f"• {ln.get('item_name')} (شناسه: {iid}): "
+                f"{float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
+            )
+        out.append("")
+        out.append("موجودی انبار با ledger کسر شد و در گزارش‌های بعدی منعکس می‌شود.")
+        self._reply(message, "\n".join(out), kb.main_menu(user))
+
+    def on_material_request_edit_start(self, message: dict) -> None:
+        user = self._require_material_request_access(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        pending = self._material_req_pending.get(uid)
+        if not pending or not pending.get("lines"):
+            self._reply(message, "درخواستی برای اصلاح نیست.", kb.main_menu(user))
+            return
+        pending["await"] = "edit_pick"
+        self._material_req_pending[uid] = pending
+        lines = pending["lines"]
+        body = ["✏️ اصلاح — شماره یا نام قلم را بفرستید (۰ برای حذف بعد از انتخاب مقدار):", ""]
+        for i, ln in enumerate(lines, 1):
+            unit = ln.get("unit") or ""
+            body.append(
+                f"{i}) {ln.get('item_name')}: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
+            )
+        body.append("")
+        body.append("سپس مقدار جدید را بفرستید. برای حذف، مقدار ۰ بفرستید.")
+        self._reply(message, "\n".join(body), kb.material_request_edit_menu())
+
+    def on_material_request_cancel(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_material_req_pending(uid)
+        self._reply(message, "درخواست مواد لغو شد.", kb.main_menu(user))
+
+    def on_material_request_back_review(self, message: dict) -> None:
+        user = self._require_material_request_access(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        pending = self._material_req_pending.get(uid)
+        if not pending or not pending.get("lines"):
+            self._clear_material_req_pending(uid)
+            self._reply(message, "پیش‌نویسی نیست.", kb.main_menu(user))
+            return
+        pending["await"] = "review"
+        pending.pop("edit_index", None)
+        self._material_req_pending[uid] = pending
+        self._reply(
+            message,
+            self._format_mr_review(pending.get("days") or 7, pending["lines"]),
+            kb.material_request_review_menu(),
+        )
+
+    def on_material_request_edit_text(self, message: dict, text: str) -> bool:
+        """Consume pick / qty text while editing. Returns True if handled."""
+        uid = self._uid(message)
+        pending = self._material_req_pending.get(uid)
+        if not pending:
+            return False
+        await_mode = pending.get("await")
+        if await_mode not in {"edit_pick", "edit_qty"}:
+            return False
+        user = self._require_material_request_access(message)
+        if not user:
+            self._clear_material_req_pending(uid)
+            return True
+        raw = (text or "").strip()
+        # navigation buttons are handled by dispatcher; don't consume them here
+        if raw in {
+            kb.BTN_MR_BACK_REVIEW,
+            kb.BTN_MR_CANCEL,
+            kb.BTN_MR_CONFIRM_ALL,
+            kb.BTN_MR_EDIT,
+            kb.BTN_BACK_MAIN,
+            kb.BTN_MATERIAL_REQUEST,
+        }:
+            return False
+
+        lines: list[dict] = pending.get("lines") or []
+        if await_mode == "edit_pick":
+            idx = None
+            if raw.isdigit():
+                n = int(raw)
+                if 1 <= n <= len(lines):
+                    idx = n - 1
+            if idx is None:
+                needle = raw.casefold()
+                for i, ln in enumerate(lines):
+                    name = str(ln.get("item_name") or "").casefold()
+                    iid = str(ln.get("item_id") or "").casefold()
+                    if needle and (needle == name or needle == iid or needle in name):
+                        idx = i
+                        break
+            if idx is None:
+                self._reply(
+                    message,
+                    "قلم یافت نشد. شماره یا نام را دوباره بفرستید.",
+                    kb.material_request_edit_menu(),
+                )
+                return True
+            pending["await"] = "edit_qty"
+            pending["edit_index"] = idx
+            self._material_req_pending[uid] = pending
+            ln = lines[idx]
+            unit = ln.get("unit") or ""
+            self._reply(
+                message,
+                f"مقدار جدید برای «{ln.get('item_name')}» را بفرستید "
+                f"(فعلی: {float(ln.get('quantity') or 0):.2f} {unit}).\n"
+                "۰ = حذف از لیست.",
+                kb.material_request_edit_menu(),
+            )
+            return True
+
+        # edit_qty
+        try:
+            qty = float(raw.replace(",", "."))
+        except ValueError:
+            self._reply(
+                message,
+                "مقدار نامعتبر است. یک عدد بفرستید (مثلاً ۱۲.۵ یا ۰).",
+                kb.material_request_edit_menu(),
+            )
+            return True
+        if qty < 0:
+            self._reply(message, "مقدار نمی‌تواند منفی باشد.", kb.material_request_edit_menu())
+            return True
+        idx = int(pending.get("edit_index", -1))
+        if idx < 0 or idx >= len(lines):
+            pending["await"] = "edit_pick"
+            pending.pop("edit_index", None)
+            self._material_req_pending[uid] = pending
+            self._reply(message, "انتخاب قلم نامعتبر بود. دوباره شماره را بفرستید.", kb.material_request_edit_menu())
+            return True
+        if qty == 0:
+            removed = lines.pop(idx)
+            msg = f"«{removed.get('item_name')}» حذف شد."
+        else:
+            lines[idx]["quantity"] = qty
+            msg = f"مقدار «{lines[idx].get('item_name')}» به {qty:.2f} به‌روز شد."
+        pending["lines"] = lines
+        pending["await"] = "review"
+        pending.pop("edit_index", None)
+        self._material_req_pending[uid] = pending
+        if not lines:
+            self._clear_material_req_pending(uid)
+            self._reply(
+                message,
+                msg + "\nلیست خالی شد — درخواست لغو گردید.",
+                kb.main_menu(user),
+            )
+            return True
+        self._reply(
+            message,
+            msg + "\n\n" + self._format_mr_review(pending.get("days") or 7, lines),
+            kb.material_request_review_menu(),
+        )
+        return True
+
+
+
+    # ---------- warehouse return (برگشت به انبار) ----------
+
+    def _format_wr_review(self, lines: list[dict]) -> str:
+        header = ["↩️ پیشنهاد برگشت مواد مازاد به انبار:", ""]
+        if not lines:
+            header.append("ماده مازادی برای برگشت شناسایی نشد.")
+            return "\n".join(header)
+        for i, ln in enumerate(lines, 1):
+            unit = ln.get("unit") or ""
+            iid = ln.get("item_id") or "—"
+            reason = ln.get("surplus_reason") or ""
+            header.append(
+                f"{i}) {ln.get('item_name')} (شناسه: {iid})\n"
+                f"   موجودی سایت: {float(ln.get('site_qty') or 0):.2f} {unit} | "
+                f"مازاد≈ {float(ln.get('surplus_qty') or 0):.2f} | "
+                f"برگشت: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
+                + (f"\n   دلیل: {reason}" if reason else "")
+            )
+        header.append("")
+        header.append("تأیید همه / اصلاح / انصراف را انتخاب کنید.")
+        return "\n".join(header)
+
+    def _build_wr_lines(self, user: dict) -> tuple[list[dict], str | None]:
+        """Suggest surplus lines from site stock (preferred) or warehouse remaining."""
+        session = self.db.get_or_create_session(user["bale_user_id"])
+        completeness = self.db.session_completeness(session)
+        # Need consumption rates + some remaining source
+        missing = missing_files_for_goal("surplus", completeness)
+        # surplus needs tank or monthly + inventory; but site stock can replace inventory
+        site_rows = self.db.site_stock_as_remaining_rows()
+        if missing and not site_rows:
+            return [], (
+                "برای برگشت به انبار این فایل(ها) لازم است:\n• "
+                + "\n• ".join(missing)
+                + "\n\nیا ابتدا موجودی روزانه سایت را وارد کنید."
+            )
+        frames, _ = self._load_frames(user, session) if any(completeness.values()) else ({}, {})
+        frames = self._apply_tundish_filter(frames, str(user["bale_user_id"]))
+        tank = frames.get("tank_consumption")
+        monthly = frames.get("monthly_consumption")
+        rates = daily_rates(tank, monthly)
+
+        if site_rows:
+            rem_df = remaining(pd.DataFrame(site_rows))
+            source = "موجودی روزانه سایت"
+        else:
+            rem_df = remaining(self._inventory_with_ledger(frames.get("product_inventory")))
+            source = "موجودی انبار"
+
+        surplus = surplus_materials(rates, rem_df)
+        if surplus is None or surplus.empty:
+            return [], None
+        positive = surplus.loc[surplus["surplus_qty"] > 0].copy()
+        if positive.empty:
+            return [], None
+
+        id_by_name: dict[str, str] = {}
+        # Prefer ids from site stock rows, else warehouse inventory
+        for row in site_rows or []:
+            nm = str(row.get("product_name") or "").strip()
+            iid = row.get("id")
+            if nm and iid is not None and str(iid).strip():
+                id_by_name.setdefault(nm, str(iid).strip())
+        inv = frames.get("product_inventory")
+        if inv is not None and not inv.empty:
+            name_col = None
+            for candidate in ("product_name", "item_code_desc", "material_name"):
+                if candidate in inv.columns:
+                    name_col = candidate
+                    break
+            if name_col and "id" in inv.columns:
+                for _, row in inv.iterrows():
+                    nm = row.get(name_col)
+                    iid = row.get("id")
+                    if nm is None or iid is None:
+                        continue
+                    if isinstance(nm, float) and pd.isna(nm):
+                        continue
+                    if isinstance(iid, float) and pd.isna(iid):
+                        continue
+                    id_by_name.setdefault(str(nm).strip(), str(iid).strip())
+
+        lines: list[dict] = []
+        for _, row in positive.iterrows():
+            name = str(row["material_name"]).strip()
+            site_q = float(row.get("remaining_qty") or 0)
+            sur_q = float(row.get("surplus_qty") or 0)
+            qty = min(site_q, sur_q) if site_q > 0 else sur_q
+            if qty <= 0:
+                continue
+            lines.append(
+                {
+                    "item_id": id_by_name.get(name),
+                    "item_name": name,
+                    "unit": row.get("unit"),
+                    "site_qty": site_q,
+                    "surplus_qty": sur_q,
+                    "quantity": qty,
+                    "surplus_reason": row.get("surplus_reason"),
+                    "_source": source,
+                }
+            )
+        return lines, None
+
+    def on_warehouse_return_start(self, message: dict) -> None:
+        user = self._require_material_request_access(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._clear_material_req_pending(uid)
+        self._clear_warehouse_ret_pending(uid)
+        lines, err = self._build_wr_lines(user)
+        if err:
+            self._reply(message, err, kb.main_menu(user))
+            return
+        if not lines:
+            self._reply(
+                message,
+                "ماده مازادی برای برگشت شناسایی نشد — درخواست خالی باز نمی‌شود.",
+                kb.main_menu(user),
+            )
+            return
+        self._warehouse_ret_pending[uid] = {"await": "review", "lines": lines}
+        self._reply(
+            message,
+            self._format_wr_review(lines),
+            kb.warehouse_return_review_menu(),
+        )
+
+    def on_warehouse_return_confirm(self, message: dict) -> None:
+        user = self._require_material_request_access(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        pending = self._warehouse_ret_pending.get(uid)
+        if not pending or pending.get("await") not in {"review", "edit_pick", "edit_qty"}:
+            self._reply(message, "برگشت فعالی برای تأیید نیست.", kb.main_menu(user))
+            return
+        lines = [ln for ln in pending.get("lines") or [] if float(ln.get("quantity") or 0) > 0]
+        if not lines:
+            self._clear_warehouse_ret_pending(uid)
+            self._reply(
+                message,
+                "هیچ قلمی با مقدار مثبت باقی نمانده — برگشت ثبت نشد.",
+                kb.main_menu(user),
+            )
+            return
+        display = user.get("display_name") or self._display_name(message)
+        try:
+            ret = self.db.create_warehouse_return(
+                uid,
+                actor_display_name=display,
+                lines=lines,
+                status="confirmed",
+            )
+        except ValueError as exc:
+            self._reply(message, str(exc), kb.warehouse_return_review_menu())
+            return
+        self._clear_warehouse_ret_pending(uid)
+        actor = self._format_actor(user)
+        out = [
+            f"✅ برگشت به انبار #{ret['id']} ثبت شد.",
+            f"ثبت‌کننده: {actor}",
+            "",
+            "اقلام برگشتی:",
+        ]
+        for ln in ret.get("lines") or []:
+            unit = ln.get("unit") or ""
+            iid = ln.get("item_id") or "—"
+            out.append(
+                f"• {ln.get('item_name')} (شناسه: {iid}): "
+                f"{float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
+            )
+        out.append("")
+        out.append("موجودی انبار با ledger مثبت افزایش یافت.")
+        self._reply(message, "\n".join(out), kb.main_menu(user))
+
+    def on_warehouse_return_edit_start(self, message: dict) -> None:
+        user = self._require_material_request_access(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        pending = self._warehouse_ret_pending.get(uid)
+        if not pending or not pending.get("lines"):
+            self._reply(message, "برگشتی برای اصلاح نیست.", kb.main_menu(user))
+            return
+        pending["await"] = "edit_pick"
+        self._warehouse_ret_pending[uid] = pending
+        lines = pending["lines"]
+        body = ["✏️ اصلاح برگشت — شماره یا نام قلم را بفرستید:", ""]
+        for i, ln in enumerate(lines, 1):
+            unit = ln.get("unit") or ""
+            body.append(
+                f"{i}) {ln.get('item_name')}: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
+            )
+        body.append("")
+        body.append("سپس مقدار جدید را بفرستید. ۰ = حذف از لیست.")
+        self._reply(message, "\n".join(body), kb.warehouse_return_edit_menu())
+
+    def on_warehouse_return_cancel(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_warehouse_ret_pending(uid)
+        self._reply(message, "برگشت به انبار لغو شد.", kb.main_menu(user))
+
+    def on_warehouse_return_back_review(self, message: dict) -> None:
+        user = self._require_material_request_access(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        pending = self._warehouse_ret_pending.get(uid)
+        if not pending or not pending.get("lines"):
+            self._clear_warehouse_ret_pending(uid)
+            self._reply(message, "پیش‌نویسی نیست.", kb.main_menu(user))
+            return
+        pending["await"] = "review"
+        pending.pop("edit_index", None)
+        self._warehouse_ret_pending[uid] = pending
+        self._reply(
+            message,
+            self._format_wr_review(pending["lines"]),
+            kb.warehouse_return_review_menu(),
+        )
+
+    def on_warehouse_return_edit_text(self, message: dict, text: str) -> bool:
+        uid = self._uid(message)
+        pending = self._warehouse_ret_pending.get(uid)
+        if not pending:
+            return False
+        await_mode = pending.get("await")
+        if await_mode not in {"edit_pick", "edit_qty"}:
+            return False
+        user = self._require_material_request_access(message)
+        if not user:
+            self._clear_warehouse_ret_pending(uid)
+            return True
+        raw = (text or "").strip()
+        if raw in {
+            kb.BTN_MR_BACK_REVIEW,
+            kb.BTN_MR_CANCEL,
+            kb.BTN_MR_CONFIRM_ALL,
+            kb.BTN_MR_EDIT,
+            kb.BTN_BACK_MAIN,
+            kb.BTN_WAREHOUSE_RETURN,
+            kb.BTN_MATERIAL_REQUEST,
+        }:
+            return False
+        lines: list[dict] = pending.get("lines") or []
+        if await_mode == "edit_pick":
+            idx = None
+            if raw.isdigit():
+                n = int(raw)
+                if 1 <= n <= len(lines):
+                    idx = n - 1
+            if idx is None:
+                needle = raw.casefold()
+                for i, ln in enumerate(lines):
+                    name = str(ln.get("item_name") or "").casefold()
+                    iid = str(ln.get("item_id") or "").casefold()
+                    if needle and (needle == name or needle == iid or needle in name):
+                        idx = i
+                        break
+            if idx is None:
+                self._reply(
+                    message,
+                    "قلم یافت نشد. شماره یا نام را دوباره بفرستید.",
+                    kb.warehouse_return_edit_menu(),
+                )
+                return True
+            pending["await"] = "edit_qty"
+            pending["edit_index"] = idx
+            self._warehouse_ret_pending[uid] = pending
+            ln = lines[idx]
+            unit = ln.get("unit") or ""
+            self._reply(
+                message,
+                f"مقدار برگشت برای «{ln.get('item_name')}» را بفرستید "
+                f"(فعلی: {float(ln.get('quantity') or 0):.2f} {unit}).\n"
+                "۰ = حذف از لیست.",
+                kb.warehouse_return_edit_menu(),
+            )
+            return True
+        try:
+            qty = float(raw.replace(",", "."))
+        except ValueError:
+            self._reply(
+                message,
+                "مقدار نامعتبر است. یک عدد بفرستید.",
+                kb.warehouse_return_edit_menu(),
+            )
+            return True
+        if qty < 0:
+            self._reply(message, "مقدار نمی‌تواند منفی باشد.", kb.warehouse_return_edit_menu())
+            return True
+        idx = int(pending.get("edit_index", -1))
+        if idx < 0 or idx >= len(lines):
+            pending["await"] = "edit_pick"
+            pending.pop("edit_index", None)
+            self._warehouse_ret_pending[uid] = pending
+            self._reply(message, "انتخاب قلم نامعتبر بود.", kb.warehouse_return_edit_menu())
+            return True
+        if qty == 0:
+            removed = lines.pop(idx)
+            msg = f"«{removed.get('item_name')}» حذف شد."
+        else:
+            lines[idx]["quantity"] = qty
+            msg = f"مقدار «{lines[idx].get('item_name')}» به {qty:.2f} به‌روز شد."
+        pending["lines"] = lines
+        pending["await"] = "review"
+        pending.pop("edit_index", None)
+        self._warehouse_ret_pending[uid] = pending
+        if not lines:
+            self._clear_warehouse_ret_pending(uid)
+            self._reply(
+                message,
+                msg + "\nلیست خالی شد — برگشت لغو گردید.",
+                kb.main_menu(user),
+            )
+            return True
+        self._reply(
+            message,
+            msg + "\n\n" + self._format_wr_review(lines),
+            kb.warehouse_return_review_menu(),
+        )
+        return True
+
+
     # ---------- dispatcher ----------
     def handle_message(self, message: dict) -> None:
         if not message:
@@ -2392,6 +3151,12 @@ class BotApp:
         if self.on_bot_settings_flow_text(message, text):
             return
 
+        # material-request / warehouse-return edit text (pick item / qty)
+        if self.on_material_request_edit_text(message, text):
+            return
+        if self.on_warehouse_return_edit_text(message, text):
+            return
+
         # keyboard buttons
         if text == kb.BTN_HELP:
             self.cmd_help(message)
@@ -2459,6 +3224,58 @@ class BotApp:
             self.on_bot_settings_menu(message)
             return
 
+
+        # --- درخواست مواد / برگشت به انبار ---
+        if text == kb.BTN_MATERIAL_REQUEST:
+            self.on_material_request_start(message)
+            return
+        if text == kb.BTN_WAREHOUSE_RETURN:
+            self.on_warehouse_return_start(message)
+            return
+        if text == kb.BTN_MR_HISTORY:
+            self.on_material_request_history(message)
+            return
+        if text in {kb.BTN_MR_DAYS_7, kb.BTN_MR_DAYS_14, kb.BTN_MR_DAYS_30}:
+            days_map = {
+                kb.BTN_MR_DAYS_7: 7,
+                kb.BTN_MR_DAYS_14: 14,
+                kb.BTN_MR_DAYS_30: 30,
+            }
+            if self.on_material_request_days(message, days_map[text]):
+                return
+        if text == kb.BTN_MR_CONFIRM_ALL:
+            uid = self._uid(message)
+            if uid in self._warehouse_ret_pending:
+                self.on_warehouse_return_confirm(message)
+            else:
+                self.on_material_request_confirm(message)
+            return
+        if text == kb.BTN_MR_EDIT:
+            uid = self._uid(message)
+            if uid in self._warehouse_ret_pending:
+                self.on_warehouse_return_edit_start(message)
+            else:
+                self.on_material_request_edit_start(message)
+            return
+        if text == kb.BTN_MR_CANCEL:
+            uid = self._uid(message)
+            if uid in self._warehouse_ret_pending:
+                self.on_warehouse_return_cancel(message)
+            elif uid in self._material_req_pending:
+                self.on_material_request_cancel(message)
+            else:
+                user = self._user_or_deny(message)
+                if user:
+                    self._reply(message, "عملیاتی برای انصراف نیست.", kb.main_menu(user))
+            return
+        if text == kb.BTN_MR_BACK_REVIEW:
+            uid = self._uid(message)
+            if uid in self._warehouse_ret_pending:
+                self.on_warehouse_return_back_review(message)
+            else:
+                self.on_material_request_back_review(message)
+            return
+
         if text == kb.BTN_ANALYTICS:
             self.on_analytics_menu(message)
             return
@@ -2485,6 +3302,8 @@ class BotApp:
                 self._clear_site_stock_pending(uid)
                 self._clear_catalog_pending(uid)
                 self._clear_users_pending(uid)
+                self._clear_material_req_pending(uid)
+                self._clear_warehouse_ret_pending(uid)
                 self._bot_settings_pending.pop(uid, None)
                 self._await_category_code.discard(uid)
                 self._reply(message, "منوی اصلی:", kb.main_menu(user))
@@ -2517,9 +3336,13 @@ class BotApp:
             if self.on_date_range_choice(message, "today"):
                 return
         if text == kb.BTN_RANGE_7:
+            if self.on_material_request_days(message, 7):
+                return
             if self.on_date_range_choice(message, "7d"):
                 return
         if text == kb.BTN_RANGE_30:
+            if self.on_material_request_days(message, 30):
+                return
             if self.on_date_range_choice(message, "30d"):
                 return
         if text == kb.BTN_RANGE_CUSTOM:

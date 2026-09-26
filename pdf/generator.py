@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+
+from bot.jalali import format_date, format_datetime, tehran_now
 from pathlib import Path
 from typing import Any
 
@@ -191,6 +193,16 @@ def _df_to_table(
         cells = []
         for c in use_cols:
             val = row.get(c, "")
+            if c in {"date", "start", "end", "entry_date", "created_at"} and val not in ("", None):
+                try:
+                    from datetime import date as _date, datetime as _datetime
+                    if isinstance(val, _datetime):
+                        val = format_datetime(val)
+                    elif isinstance(val, _date) or (isinstance(val, str) and len(str(val)) >= 8):
+                        # date-only columns → Jalali date; created_at → datetime
+                        val = format_datetime(val) if c in {"created_at"} else format_date(val)
+                except Exception:  # noqa: BLE001
+                    val = str(val)
             if isinstance(val, float):
                 if val != val:  # NaN
                     val = ""
@@ -231,7 +243,7 @@ def _append_analytics(story: list, analytics: dict[str, Any], styles: dict) -> N
     crit_days = analytics.get("critical_days", CRITICAL_DAYS)
     range_label = ""
     if start and end:
-        range_label = f" (بازه {start} تا {end} — {days} روز)"
+        range_label = f" (بازه {format_date(start)} تا {format_date(end)} — {days} روز)"
 
     story.append(Paragraph(rtl("تحلیل تاندیش"), styles["heading"]))
     story.append(
@@ -372,7 +384,7 @@ def generate_report(
         f"کاربر: {user.get('display_name') or user.get('bale_user_id')} | "
         f"نقش: {role_fa} | "
         f"حوزه: {user.get('scope') or '—'} | "
-        f"تاریخ تولید: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        f"تاریخ تولید: {format_datetime(tehran_now())}"
     )
     story.append(Paragraph(rtl(info), styles["body"]))
     story.append(Spacer(1, 0.4 * cm))

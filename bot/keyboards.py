@@ -86,6 +86,18 @@ BTN_TUNDISH_BLOOM = TUNDISH_TYPES["bloom"]
 BTN_TUNDISH_BILLET = TUNDISH_TYPES["billet"]
 BTN_BACK_MAIN = "⬅️ بازگشت به منوی اصلی"
 
+# Material request workflow (owner / manager / officer)
+BTN_MATERIAL_REQUEST = "🛒 درخواست مواد"
+BTN_WAREHOUSE_RETURN = "↩️ برگشت به انبار"
+BTN_MR_CONFIRM_ALL = "✅ تأیید همه"
+BTN_MR_EDIT = "✏️ اصلاح"
+BTN_MR_CANCEL = "✖️ انصراف"
+BTN_MR_BACK_REVIEW = "⬅️ بازگشت به بررسی"
+BTN_MR_HISTORY = "📜 تاریخچه درخواست‌ها"
+BTN_MR_DAYS_7 = "۷ روز"
+BTN_MR_DAYS_14 = "۱۴ روز"
+BTN_MR_DAYS_30 = "۳۰ روز"
+
 # Date-range presets
 BTN_RANGE_TODAY = "امروز"
 BTN_RANGE_7 = "۷ روز"
@@ -143,6 +155,7 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
         [BTN_MONTHLY],
         [BTN_SITE_STOCK],
         [BTN_CATALOG_SETTINGS],
+        [BTN_MATERIAL_REQUEST, BTN_WAREHOUSE_RETURN],
         [BTN_STATUS, BTN_GENERATE],
         [BTN_ANALYTICS],
         [BTN_RESET, BTN_HELP],
@@ -276,6 +289,50 @@ def date_range_menu() -> dict:
         [BTN_BACK_ANALYTICS],
     ]
     return BaleClient.reply_keyboard(rows)
+
+
+
+def material_request_days_menu() -> dict:
+    """Coverage-days presets for درخواست مواد (default ۷ روز)."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MR_DAYS_7, BTN_MR_DAYS_14, BTN_MR_DAYS_30],
+            [BTN_MR_HISTORY],
+            [BTN_MR_CANCEL, BTN_BACK_MAIN],
+        ]
+    )
+
+
+def material_request_review_menu() -> dict:
+    """Confirm / edit / cancel after suggested list."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MR_CONFIRM_ALL],
+            [BTN_MR_EDIT],
+            [BTN_MR_CANCEL],
+            [BTN_BACK_MAIN],
+        ]
+    )
+
+
+def material_request_edit_menu() -> dict:
+    """While picking an item to edit."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MR_BACK_REVIEW],
+            [BTN_MR_CANCEL],
+        ]
+    )
+
+
+
+def warehouse_return_review_menu() -> dict:
+    """Confirm / edit / cancel for برگشت به انبار (shared labels)."""
+    return material_request_review_menu()
+
+
+def warehouse_return_edit_menu() -> dict:
+    return material_request_edit_menu()
 
 
 def cancel_pending_menu() -> dict:

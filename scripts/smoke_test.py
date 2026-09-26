@@ -13,17 +13,19 @@ import pandas as pd
 from openpyxl import Workbook
 
 from bot import keyboards as kb
+from bot.jalali import format_date, format_datetime, parse_user_date, parse_user_date_range
 from bot.settings_text import DEFAULT_INVITE_TEXT, format_invite_text, format_welcome_text
 from analytics.tundish import (
     critical_materials,
     daily_rates,
     forecast,
     period_consumption,
+    apply_inventory_ledger,
     remaining,
     suggest_requests,
     surplus_materials,
 )
-from auth.rbac import can_configure_catalog, filter_dataframe_for_user
+from auth.rbac import can_configure_catalog, can_request_materials, filter_dataframe_for_user
 from config import CRITICAL_DAYS, DEFAULT_CATEGORY_CODES, REQUIRED_COLUMNS, SITE_STOCK_GROUPS
 from db.models import Database
 from excel.id_parse import extract_item_id, extract_product_name
@@ -123,6 +125,13 @@ def main() -> int:
     for full_menu in (owner_menu, manager_menu, officer_menu):
         assert {kb.BTN_INV_MENU, kb.BTN_ANALYTICS, kb.BTN_MONTHLY, kb.BTN_SITE_STOCK}.issubset(full_menu)
         assert kb.BTN_CATALOG_SETTINGS in full_menu
+        assert kb.BTN_MATERIAL_REQUEST in full_menu
+        assert kb.BTN_WAREHOUSE_RETURN in full_menu
+    assert kb.BTN_MATERIAL_REQUEST not in tech_menu
+    assert kb.BTN_WAREHOUSE_RETURN not in tech_menu
+    assert can_request_materials(db.get_user("998"))
+    assert can_request_materials(db.get_user("1002"))
+    assert not can_request_materials(db.get_user("1001"))
     assert kb.BTN_USERS in owner_menu and kb.BTN_USERS in manager_menu
     assert kb.BTN_USERS not in tech_menu
     assert kb.BTN_USERS not in officer_menu
@@ -466,6 +475,11 @@ def main() -> int:
     assert "site_stock_entries" in tables
     assert "invites" in tables
     assert "bot_settings" in tables
+    assert "material_requests" in tables
+    assert "material_request_lines" in tables
+    assert "inventory_ledger" in tables
+    assert "warehouse_returns" in tables
+    assert "warehouse_return_lines" in tables
 
     # --- bot settings persistence + template format ---
     assert db.get_setting("invite_text") is None
@@ -504,6 +518,112 @@ def main() -> int:
         rrow = dict(conn.execute("SELECT * FROM reports WHERE id = ?", (rid,)).fetchone())
     assert str(rrow["bale_user_id"]) == "998"
     assert str(rrow["created_by"]) == "998"
+
+
+    # --- Jalali display helpers ---
+    from datetime import date as _date
+    assert format_date(_date(2024, 9, 25)) == "1403/07/04"
+    assert parse_user_date("1403/07/04") == _date(2024, 9, 25)
+    assert parse_user_date("2024-09-25") == _date(2024, 9, 25)
+    jr = parse_user_date_range("از 1403/07/01 تا 1403/07/04")
+    assert jr is not None and jr[0] == _date(2024, 9, 22)
+
+    # --- material request: suggest from samples + confirm deducts remaining via ledger ---
+    assert "material_requests" in tables
+    assert "inventory_ledger" in tables
+    rates_mr = daily_rates(cf["tank_consumption"], cf["monthly_consumption"])
+    rem_before = remaining(cf["product_inventory"])
+    sug_mr = suggest_requests(rates_mr, rem_before, 7)
+    assert "suggest_qty" in sug_mr.columns
+    assert (sug_mr["suggest_qty"] > 0).any(), "expected some suggest qty from samples"
+    # Deduct a known warehouse item (ACID01) so remaining() clearly drops
+    inv_df = cf["product_inventory"]
+    acid_rows = inv_df[inv_df["id"].astype(str) == "ACID01"]
+    assert not acid_rows.empty
+    mat_name = str(acid_rows.iloc[0]["product_name"])
+    rem_qty_before = float(
+        rem_before.loc[rem_before["material_name"].astype(str) == mat_name, "remaining_qty"].sum()
+    )
+    assert rem_qty_before > 0
+    qty = min(5.0, rem_qty_before)
+    req = db.create_material_request(
+        "1002",
+        actor_display_name="مریم احمدی",
+        coverage_days=7,
+        lines=[{
+            "item_id": "ACID01",
+            "item_name": mat_name,
+            "unit": None,
+            "avg_daily": 1.0,
+            "remaining_qty": rem_qty_before,
+            "quantity": qty,
+        }],
+    )
+    assert req["id"] > 0
+    assert req["status"] == "confirmed"
+    assert len(req["lines"]) == 1
+    assert str(req["bale_user_id"]) == "1002"
+    assert req.get("actor_display_name") == "مریم احمدی"
+    sums = db.inventory_ledger_sums()
+    assert "ACID01" in sums["by_id"]
+    assert abs(sums["by_id"]["ACID01"] + qty) < 1e-6  # negative delta
+    ledgered = apply_inventory_ledger(inv_df, sums["by_id"], sums["by_name"])
+    rem_after = remaining(ledgered)
+    rem_qty_after = float(
+        rem_after.loc[rem_after["material_name"].astype(str) == mat_name, "remaining_qty"].sum()
+    )
+    assert abs((rem_qty_before - qty) - rem_qty_after) < 1e-6, (
+        rem_qty_before, qty, rem_qty_after
+    )
+    print("material_request OK", mat_name, "deducted", qty)
+
+    # --- warehouse return: surplus confirm adds positive ledger ---
+    assert "warehouse_returns" in tables
+    rem_site2 = remaining(pd.DataFrame(db.site_stock_as_remaining_rows(day)))
+    surplus_wr = surplus_materials(rates_mr, rem_site2)
+    assert not surplus_wr.empty
+    # Prefer OIL05 (seeded billet site stock 100 — classic surplus)
+    oil_match = surplus_wr[surplus_wr["material_name"].astype(str).str.contains("روغن|OIL05", regex=True)]
+    srow = oil_match.iloc[0] if not oil_match.empty else surplus_wr.iloc[0]
+    sname = str(srow["material_name"])
+    sqty = float(srow["surplus_qty"])
+    assert sqty > 0
+    sid = "OIL05"
+    for rr in db.site_stock_as_remaining_rows(day):
+        if str(rr.get("id")) == "OIL05" or "روغن" in str(rr.get("product_name") or ""):
+            sid = str(rr.get("id"))
+            sname = str(rr.get("product_name") or sname)
+            break
+    ret_qty = min(sqty, 5.0)
+    sums_before_ret = db.inventory_ledger_sums()
+    oil_before = float(sums_before_ret["by_id"].get(sid, 0.0))
+    ret = db.create_warehouse_return(
+        "999",
+        actor_display_name="مدیر تست",
+        lines=[{
+            "item_id": sid,
+            "item_name": sname,
+            "unit": srow.get("unit"),
+            "site_qty": float(srow.get("remaining_qty") or 0),
+            "surplus_qty": sqty,
+            "quantity": ret_qty,
+            "surplus_reason": srow.get("surplus_reason"),
+        }],
+    )
+    assert ret["id"] > 0
+    assert ret["status"] == "confirmed"
+    assert float(ret["lines"][0]["quantity"]) == ret_qty
+    assert str(ret["bale_user_id"]) == "999"
+    sums2 = db.inventory_ledger_sums()
+    oil_after = float(sums2["by_id"].get(sid, 0.0))
+    assert abs((oil_before + ret_qty) - oil_after) < 1e-6, (oil_before, ret_qty, oil_after)
+    # remaining for OIL05 should rise after return
+    rem_wh = remaining(apply_inventory_ledger(
+        cf["product_inventory"], sums2["by_id"], sums2["by_name"]
+    ))
+    oil_names = rem_wh[rem_wh["material_name"].astype(str).str.contains("روغن", regex=False)]
+    assert not oil_names.empty
+    print("warehouse_return OK", sname, "qty", ret_qty, "ledger", oil_after)
 
     print("SMOKE OK CRITICAL_DAYS=", CRITICAL_DAYS, "site_stock_date=", day)
     return 0
