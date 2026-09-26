@@ -38,6 +38,13 @@ from auth.rbac import can_configure_catalog, can_request_materials, filter_dataf
 from config import CRITICAL_DAYS, DEFAULT_CATEGORY_CODES, REQUIRED_COLUMNS, SITE_STOCK_GROUPS
 from db.models import Database
 from excel.id_parse import extract_item_id, extract_product_name
+from excel.inbound import (
+    STATUS_INCREASE,
+    STATUS_NEW,
+    compute_inbound_delta,
+    format_inbound_list_fa,
+    write_inbound_excel,
+)
 from excel.processor import (
     extract_and_save_clean,
     format_inventory_table_fa,
@@ -229,6 +236,7 @@ def _test_merge_and_monthly_summary() -> None:
         )
         assert pdf_out.exists() and pdf_out.stat().st_size > 1000
         assert kb.BTN_MONTHLY_SUMMARY in str(kb.analytics_menu())
+        assert kb.BTN_INBOUND in str(kb.analytics_menu())
         assert kb.BTN_MY_CURRENT in str(kb.month_year_range_menu())
         # Month/year filter: Farvardin–Ordibehesht only
         filt = filter_summary_by_month_range(data, start=(1405, 1), end=(1405, 2))
@@ -241,8 +249,145 @@ def _test_merge_and_monthly_summary() -> None:
         assert abs(float(data3.grand_kg) - float(filt.grand_kg)) < 0.5
 
 
+def _test_inbound_delta() -> None:
+    """Unit/smoke: inbound = new or increase; decreases/unchanged ignored; allowlist filter."""
+    previous = pd.DataFrame(
+        [
+            {
+                "id": "A1",
+                "item_code_desc": "A1 - اسید",
+                "product_name": "اسید",
+                "category_code": "1201",
+                "quantity": 10,
+                "priority": 1,
+            },
+            {
+                "id": "B2",
+                "item_code_desc": "B2 - روغن",
+                "product_name": "روغن",
+                "category_code": "1201",
+                "quantity": 50,
+                "priority": 1,
+            },
+            {
+                "id": "D4",
+                "item_code_desc": "D4 - کاهش",
+                "product_name": "کاهش",
+                "category_code": "1201",
+                "quantity": 30,
+                "priority": 1,
+            },
+            {
+                "id": "E5",
+                "item_code_desc": "E5 - ثابت",
+                "product_name": "ثابت",
+                "category_code": "1201",
+                "quantity": 7,
+                "priority": 1,
+            },
+        ]
+    )
+    current = pd.DataFrame(
+        [
+            # increase
+            {
+                "id": "A1",
+                "item_code_desc": "A1 - اسید",
+                "product_name": "اسید",
+                "category_code": "1201",
+                "quantity": 25,
+                "priority": 1,
+            },
+            # decrease — omit
+            {
+                "id": "D4",
+                "item_code_desc": "D4 - کاهش",
+                "product_name": "کاهش",
+                "category_code": "1201",
+                "quantity": 10,
+                "priority": 1,
+            },
+            # unchanged — omit
+            {
+                "id": "E5",
+                "item_code_desc": "E5 - ثابت",
+                "product_name": "ثابت",
+                "category_code": "1201",
+                "quantity": 7,
+                "priority": 1,
+            },
+            # brand-new allowlisted
+            {
+                "id": "C3",
+                "item_code_desc": "C3 - جدید",
+                "product_name": "جدید",
+                "category_code": "1201",
+                "quantity": 12,
+                "priority": 1,
+            },
+            # brand-new NOT in allowlist — omit
+            {
+                "id": "X9",
+                "item_code_desc": "X9 - خارجی",
+                "product_name": "خارجی",
+                "category_code": "9999",
+                "quantity": 100,
+                "priority": 1,
+            },
+            # increase but unknown category — omit
+            {
+                "id": "B2",
+                "item_code_desc": "B2 - روغن",
+                "product_name": "روغن",
+                "category_code": "8888",
+                "quantity": 80,
+                "priority": 1,
+            },
+            # new with missing category — omit
+            {
+                "id": "Z0",
+                "item_code_desc": "Z0 - بدون دسته",
+                "product_name": "بدون دسته",
+                "category_code": None,
+                "quantity": 5,
+                "priority": 1,
+            },
+        ]
+    )
+    allow = {"1201"}
+    inbound = compute_inbound_delta(previous, current, category_allowlist=allow)
+    ids = set(inbound["کد کالا"].astype(str))
+    assert ids == {"A1", "C3"}, ids
+    assert "D4" not in ids and "E5" not in ids and "X9" not in ids
+    assert "B2" not in ids and "Z0" not in ids
+    a1 = inbound.loc[inbound["کد کالا"].astype(str) == "A1"].iloc[0]
+    assert float(a1["مقدار قبلی"]) == 10
+    assert float(a1["مقدار جدید"]) == 25
+    assert float(a1["مقدار ورودی"]) == 15
+    assert a1["وضعیت"] == STATUS_INCREASE
+    c3 = inbound.loc[inbound["کد کالا"].astype(str) == "C3"].iloc[0]
+    assert float(c3["مقدار قبلی"]) == 0
+    assert float(c3["مقدار ورودی"]) == 12
+    assert c3["وضعیت"] == STATUS_NEW
+    # empty allowlist → no rows
+    empty = compute_inbound_delta(previous, current, category_allowlist=set())
+    assert empty.empty
+    # first upload (no previous) → all allowlisted current items as new
+    first = compute_inbound_delta(None, current, category_allowlist=allow)
+    assert set(first["کد کالا"].astype(str)) == {"A1", "C3", "D4", "E5"}
+    assert (first["وضعیت"] == STATUS_NEW).all()
+    chunks = format_inbound_list_fa(inbound)
+    assert chunks and "A1" in chunks[0]
+    out = ROOT / "reports" / "smoke_inbound.xlsx"
+    write_inbound_excel(inbound, out)
+    assert out.exists() and out.stat().st_size > 100
+    print("inbound_delta OK", list(inbound["کد کالا"]))
+
+
+
 def main() -> int:
     make_samples()
+    _test_inbound_delta()
     _test_first_owner_claim()
     _test_install_help_soft_seed()
     db_path = ROOT / "data" / "smoke.db"

@@ -723,6 +723,33 @@ class Database:
             ).fetchone()
             return dict(row) if row else None
 
+    def get_previous_extracted(
+        self, bale_user_id: str | int, file_type: str
+    ) -> Optional[dict[str, Any]]:
+        """Second-latest extract for a user/type (baseline for inventory inbound)."""
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM extracted_datasets
+                WHERE bale_user_id = ? AND file_type = ?
+                ORDER BY id DESC LIMIT 1 OFFSET 1
+                """,
+                (str(bale_user_id), file_type),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def update_extracted_clean_path(self, extract_id: int, clean_path: str) -> None:
+        """Point an extract row at a preserved snapshot file (after overwrite)."""
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE extracted_datasets
+                SET clean_path = ?
+                WHERE id = ?
+                """,
+                (str(clean_path), int(extract_id)),
+            )
+
     def list_extracted_for_session(self, session_id: int) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(

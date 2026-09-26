@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -53,8 +54,13 @@ from bot.settings_text import (
     format_invite_text,
     format_welcome_text,
 )
-from config import BOT_ASSETS_DIR, BOT_USERNAME, CRITICAL_DAYS, FILE_TYPES, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
+from config import BOT_ASSETS_DIR, BOT_USERNAME, CRITICAL_DAYS, FILE_TYPES, REPORT_DIR, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
 from db.models import Database
+from excel.inbound import (
+    compute_inbound_delta,
+    format_inbound_list_fa,
+    write_inbound_excel,
+)
 from excel.processor import (
     ExcelValidationError,
     extract_and_save_clean,
@@ -1011,7 +1017,9 @@ class BotApp:
                 )
                 return
 
-        # Snapshot previous clean DF before extract overwrites the same clean_path
+        # Snapshot previous clean DF before extract overwrites the same clean_path.
+        # For product_inventory also freeze the previous extract file so inbound
+        # delta can compare against a readable pre-upload baseline later.
         slot_col = {
             "tank_consumption": "tank_path",
             "product_inventory": "inventory_path",
@@ -1020,6 +1028,27 @@ class BotApp:
         previous_clean = Path(session[slot_col]) if slot_col and session.get(slot_col) else None
         old_df = None
         prev_kept = 0
+        if pending == "product_inventory":
+            latest_inv = self.db.get_latest_extracted(
+                user["bale_user_id"], "product_inventory"
+            )
+            if latest_inv and latest_inv.get("clean_path"):
+                latest_path = Path(latest_inv["clean_path"])
+                if latest_path.exists():
+                    try:
+                        snap_dir = latest_path.parent / "snapshots"
+                        snap_dir.mkdir(parents=True, exist_ok=True)
+                        snap_path = snap_dir / f"product_inventory_{latest_inv['id']}.xlsx"
+                        if not snap_path.exists():
+                            shutil.copy2(latest_path, snap_path)
+                        self.db.update_extracted_clean_path(
+                            int(latest_inv["id"]), str(snap_path)
+                        )
+                        previous_clean = snap_path
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "could not preserve inventory snapshot: %s", exc
+                        )
         if previous_clean is not None and previous_clean.exists():
             try:
                 old_df = pd.read_excel(previous_clean, engine="openpyxl")
@@ -1074,6 +1103,7 @@ class BotApp:
         )
 
         catalog_note = ""
+        inbound_note = ""
         if pending == "product_inventory":
             try:
                 counts = self.db.seed_catalog_from_inventory_extract(
@@ -1096,6 +1126,28 @@ class BotApp:
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("WO group sync after inventory failed: %s", exc)
+            try:
+                new_clean_df = pd.read_excel(result.clean_path, engine="openpyxl")
+                inbound_df = compute_inbound_delta(
+                    old_df,
+                    new_clean_df,
+                    category_allowlist=allowlist
+                    or self.db.active_category_code_set(),
+                )
+                n_in = int(len(inbound_df))
+                if old_df is None or (isinstance(old_df, pd.DataFrame) and old_df.empty):
+                    inbound_note = (
+                        "\nپایه مقایسه ورودی موجود نیست (اولین آپلود موجودی)."
+                    )
+                elif n_in > 0:
+                    inbound_note = (
+                        f"\n{n_in} قلم ورودی شناسایی شد — "
+                        "از «گزارش ورودی به انبار» جزئیات را ببینید."
+                    )
+                else:
+                    inbound_note = "\nقلم ورودی جدیدی نسبت به موجودی قبلی شناسایی نشد."
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inbound delta after inventory failed: %s", exc)
         elif pending == "monthly_consumption":
             try:
                 # Prefer the just-uploaded raw/clean path for WO→group sync
@@ -1143,7 +1195,7 @@ class BotApp:
             (
                 f"✅ فایل «{label}» دریافت شد.\n"
                 f"از {result.raw_row_count} ردیف خام، {new_kept} ردیف نگه داشته شد."
-                f"{merge_note}{dropped_note}{extra_cols_note}{catalog_note}\n"
+                f"{merge_note}{dropped_note}{extra_cols_note}{catalog_note}{inbound_note}\n"
                 f"نسخه تمیز ذخیره و در پایگاه‌داده ثبت شد.\n"
                 f"{actor_line}\n\n"
             )
@@ -1406,6 +1458,80 @@ class BotApp:
             return
         # Inventory snapshot + rates from monthly/tank filtered by selected months.
         self._ask_month_year_range(message, user, "surplus")
+
+    def on_inbound_report(self, message: dict) -> None:
+        """Snapshot-diff inbound report — no month/year range prompt."""
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        uid = user["bale_user_id"]
+        latest = self.db.get_latest_extracted(uid, "product_inventory")
+        previous = self.db.get_previous_extracted(uid, "product_inventory")
+        if not latest or not latest.get("clean_path"):
+            self._reply(
+                message,
+                "هیچ موجودی انباری برای مقایسه یافت نشد.\n"
+                "ابتدا از منوی «موجودی انبار» فایل اکسل را آپلود کنید.",
+                kb.analytics_menu(),
+            )
+            return
+        if not previous or not previous.get("clean_path"):
+            self._reply(
+                message,
+                "پایه مقایسه موجود نیست.\n"
+                "این اولین موجودی ذخیره‌شده است؛ پس از آپلود موجودی بعدی "
+                "می‌توانید «گزارش ورودی به انبار» را ببینید.",
+                kb.analytics_menu(),
+            )
+            return
+        prev_path = Path(previous["clean_path"])
+        curr_path = Path(latest["clean_path"])
+        if not prev_path.exists() or not curr_path.exists():
+            self._reply(
+                message,
+                "فایل موجودی قبلی یا فعلی روی سرور یافت نشد.\n"
+                "لطفاً دوباره موجودی انبار را آپلود کنید.",
+                kb.analytics_menu(),
+            )
+            return
+        try:
+            prev_df = pd.read_excel(prev_path, engine="openpyxl")
+            curr_df = pd.read_excel(curr_path, engine="openpyxl")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("inbound load failed")
+            self._reply(
+                message,
+                f"خواندن فایل‌های موجودی برای گزارش ورودی ناموفق بود: {exc}",
+                kb.analytics_menu(),
+            )
+            return
+        allowlist = self.db.active_category_code_set()
+        inbound = compute_inbound_delta(
+            prev_df, curr_df, category_allowlist=allowlist
+        )
+        n = int(len(inbound))
+        title = (
+            f"📥 گزارش ورودی به انبار\n"
+            f"{n} قلم (جدید یا افزایش) در دسته‌های مجاز\n"
+            f"(فقط کدهای دسته‌بندی تعریف‌شده در ربات)\n"
+        )
+        chunks = format_inbound_list_fa(inbound)
+        self._reply(message, title + "\n" + chunks[0], kb.analytics_menu())
+        for extra in chunks[1:]:
+            self._reply(message, extra, kb.analytics_menu())
+        if n > 0:
+            try:
+                excel_path = REPORT_DIR / "گزارش_ورودی_به_انبار.xlsx"
+                write_inbound_excel(inbound, excel_path)
+                self.client.send_document(
+                    self._chat_id(message),
+                    excel_path,
+                    caption=f"اکسل گزارش ورودی به انبار — {n} قلم",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inbound excel send failed: %s", exc)
 
     def _ask_month_year_range(self, message: dict, user: dict, mode: str) -> None:
         """Central prompt: every time-based report asks Jalali month+year from–to first."""
@@ -3936,6 +4062,9 @@ class BotApp:
             return
         if text == kb.BTN_SURPLUS:
             self.on_surplus_report(message)
+            return
+        if text == kb.BTN_INBOUND:
+            self.on_inbound_report(message)
             return
         if text == kb.BTN_PERIOD:
             self.on_period_prompt(message)
