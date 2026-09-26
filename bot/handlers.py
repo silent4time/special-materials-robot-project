@@ -453,11 +453,28 @@ class BotApp:
         if token:
             self._redeem_invite(message, token)
             return
-        user = self._user_or_deny(message)
-        if not user:
+        uid = self._uid(message)
+        name = self._display_name(message)
+        user = ensure_registered(self.db, uid, name)
+        if user:
+            self.db.get_or_create_session(user["bale_user_id"])
+            self._send_welcome(message, user)
             return
-        self.db.get_or_create_session(user["bale_user_id"])
-        self._send_welcome(message, user)
+        # Bare /start with zero active owners → first user claims owner (race-safe).
+        claimed = self.db.try_claim_first_owner(uid, name)
+        if claimed:
+            self.db.get_or_create_session(claimed["bale_user_id"])
+            self._send_welcome(
+                message,
+                claimed,
+                prefix="شما به‌عنوان اولین کاربر، مالک سیستم شدید.\n\n",
+            )
+            return
+        self._reply(
+            message,
+            "شما در سیستم ثبت نشده‌اید.\n"
+            "از مدیر بخواهید از منوی «کاربران → اضافه کردن کاربر» لینک دعوت برایتان بفرستد.",
+        )
 
     def cmd_help(self, message: dict) -> None:
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))

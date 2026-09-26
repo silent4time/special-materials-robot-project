@@ -50,7 +50,9 @@ def main() -> int:
             except Exception:  # noqa: BLE001
                 logger.exception("Initial real sample seed failed")
     else:
-        logger.warning("ADMIN_BALE_USER_ID خالی است — مدیر اولیه ساخته نشد.")
+        logger.info(
+            "ADMIN_BALE_USER_ID خالی است — مالک با اولین /start ساخته می‌شود."
+        )
 
     client = BaleClient()
     app = BotApp(client, db)

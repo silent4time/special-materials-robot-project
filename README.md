@@ -29,6 +29,8 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash
+# سپس در ترمینال واقعی (ویزارد توکن):
+cd special-materials-robot-project && bash install.sh
 ```
 
 یا:
@@ -36,9 +38,11 @@ curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot
 ```bash
 git clone https://github.com/silent4time/special-materials-robot-project.git
 cd special-materials-robot-project
-bash install.sh --seed-admin --systemd --start
+bash install.sh                 # ویزارد فارسی: توکن + اختیاری systemd
+bash install.sh --systemd --start
 ```
 
+اولین کسی که در بله `/start` بزند **مالک** می‌شود؛ دانستن `ADMIN_BALE_USER_ID` از قبل لازم نیست.
 جزئیات، پرچم‌ها (`--update` و …) و هشدار «فقط یک نمونه polling»: **[DEPLOY.md](DEPLOY.md)**.
 
 ## پیش‌نیاز و اجرا
@@ -49,9 +53,9 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# BALE_BOT_TOKEN و ADMIN_BALE_USER_ID را ویرایش کنید
-python scripts/seed_admin.py
+# فقط BALE_BOT_TOKEN الزامی است (ADMIN اختیاری)
 python main.py
+# در بله /start بزنید → اولین کاربر = مالک
 ```
 
 ### ورودی پیش‌فرض فعلی

@@ -357,6 +357,67 @@ class Database:
             ).fetchone()
             return int(row["c"] if row else 0)
 
+    def try_claim_first_owner(
+        self,
+        bale_user_id: str | int,
+        display_name: str | None = None,
+    ) -> Optional[dict[str, Any]]:
+        """Race-safe: if no active owners, promote/insert this user as owner.
+
+        Returns the owner user dict when this caller wins the claim, else None
+        (another owner already exists). Uses BEGIN IMMEDIATE so concurrent
+        first /start calls cannot both become owner.
+        """
+        uid = str(bale_user_id)
+        now = _utcnow()
+        conn = sqlite3.connect(self.path, timeout=15)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        claimed = False
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM users WHERE active = 1 AND role = 'owner'"
+            ).fetchone()
+            if int(row["c"] if row else 0) > 0:
+                conn.rollback()
+                return None
+            existing = conn.execute(
+                "SELECT * FROM users WHERE bale_user_id = ?", (uid,)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET display_name = COALESCE(?, display_name),
+                        role = 'owner',
+                        scope = NULL,
+                        active = 1,
+                        updated_at = ?
+                    WHERE bale_user_id = ?
+                    """,
+                    (display_name, now, uid),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO users
+                    (bale_user_id, display_name, role, scope, active, created_at, updated_at)
+                    VALUES (?, ?, 'owner', NULL, 1, ?, ?)
+                    """,
+                    (uid, display_name or uid, now, now),
+                )
+            conn.commit()
+            claimed = True
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        if not claimed:
+            return None
+        return self.get_user(uid)
+
     # --- invites (deep-link onboarding) ---
     def create_invite(
         self,

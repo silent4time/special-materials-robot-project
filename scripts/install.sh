@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # نصب و راه‌اندازی بازوی مواد تاندیش (بله) روی سرور لینوکس
 # Usage:
-#   bash install.sh                 # فقط venv + deps + راهنما
-#   bash install.sh --seed-admin    # + seed مالک
+#   bash install.sh                 # venv + deps + ویزارد تعاملی .env (در TTY)
+#   bash install.sh --seed-admin    # اختیاری؛ مالک با اولین /start ساخته می‌شود
 #   bash install.sh --systemd       # + نصب unit systemd
 #   bash install.sh --start         # اجرا (foreground یا systemd)
 #   bash install.sh --update        # git pull + pip + restart
 # Env:
 #   INSTALL_DIR=/path/to/dir        # مسیر کلون/نصب (اختیاری)
+#   BALE_BOT_TOKEN=...              # در حالت غیرتعاملی، از env هم پذیرفته می‌شود
 set -euo pipefail
 
 REPO_URL="https://github.com/silent4time/special-materials-robot-project.git"
@@ -31,15 +32,16 @@ for arg in "$@"; do
       cat <<'HELP'
 Usage: bash install.sh [options]
 
-  (default)     ساخت venv، نصب وابستگی‌ها، کپی .env.example در صورت نبود
-  --seed-admin  اجرای scripts/seed_admin.py (بعد از تنظیم .env)
+  (default)     ساخت venv، نصب وابستگی‌ها، ویزارد تعاملی .env (در ترمینال واقعی)
+  --seed-admin  اختیاری؛ مالک با اولین /start ساخته می‌شود (scripts/seed_admin.py)
   --systemd     نصب سرویس systemd از scripts/nasoz-bot.service.in
   --start       اجرای ربات (اگر systemd نصب باشد: systemctl start؛ وگرنه foreground)
   --update      git pull + pip install -r requirements.txt + restart systemd
   -h, --help    این راهنما
 
 متغیر محیطی:
-  INSTALL_DIR   مسیر نصب / کلون (پیش‌فرض: cwd اگر داخل ریپو باشد، وگرنه ./special-materials-robot-project)
+  INSTALL_DIR      مسیر نصب / کلون (پیش‌فرض: cwd اگر داخل ریپو باشد، وگرنه ./special-materials-robot-project)
+  BALE_BOT_TOKEN   در نصب غیرتعاملی (piped)، اگر ست باشد در .env نوشته می‌شود
 HELP
       exit 0
       ;;
@@ -181,49 +183,186 @@ setup_venv() {
 ensure_env() {
   local root="$1"
   cd "$root"
-  if [[ -f .env ]]; then
-    log "✓ فایل .env موجود است"
+  if env_looks_configured "$root"; then
+    log "✓ فایل .env پیکربندی شده است (توکن موجود)"
     return 0
   fi
-  if [[ ! -f .env.example ]]; then
-    die ".env.example پیدا نشد."
+
+  # Prefer interactive wizard when stdin is a TTY
+  if [[ -t 0 ]]; then
+    run_env_wizard "$root"
+    return $?
   fi
-  cp .env.example .env
-  cat <<'PERSIAN'
+
+  # Non-interactive (e.g. curl | bash): env var or stub
+  if [[ -n "${BALE_BOT_TOKEN:-}" ]] && token_format_ok "${BALE_BOT_TOKEN}"; then
+    write_env_file "$root" "${BALE_BOT_TOKEN}" "${BOT_USERNAME:-nasoz_bot}" "${CRITICAL_DAYS:-3}" ""
+    log "✓ .env از متغیر محیطی BALE_BOT_TOKEN نوشته شد (…${BALE_BOT_TOKEN: -4})"
+    return 0
+  fi
+
+  if [[ ! -f .env ]]; then
+    if [[ ! -f .env.example ]]; then
+      die ".env.example پیدا نشد."
+    fi
+    cp .env.example .env
+  fi
+  cat <<PERSIAN
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-فایل .env ساخته شد — حتماً ویرایش کنید:
+نصب غیرتعاملی (بدون TTY): فایل .env از روی نمونه ساخته/باقی ماند.
 
-  nano .env
+برای ویزارد تعاملی توکن، در یک ترمینال واقعی اجرا کنید:
 
-حداقل این دو مقدار را پر کنید (توکن جعلی نسازید):
+  cd $root && bash install.sh
 
-  BALE_BOT_TOKEN=...          # از @botfather در بله
-  ADMIN_BALE_USER_ID=...      # شناسه عددی شما در بله
+یا قبل از نصب متغیر را ست کنید:
 
-سپس:
+  export BALE_BOT_TOKEN='digits:rest'
+  bash install.sh
 
-  bash install.sh --seed-admin
-  bash install.sh --systemd --start
+مالک با اولین /start در بله ساخته می‌شود (ADMIN لازم نیست).
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 PERSIAN
 }
 
-env_looks_configured() {
-  local root="$1"
-  [[ -f "$root/.env" ]] || return 1
-  # Non-placeholder token: not empty and not the example stub
-  grep -qE '^BALE_BOT_TOKEN=[0-9]+:.+' "$root/.env" 2>/dev/null || return 1
-  grep -qE '^ADMIN_BALE_USER_ID=[0-9]+' "$root/.env" 2>/dev/null || return 1
-  # Reject obvious placeholders from .env.example
-  if grep -qE '^BALE_BOT_TOKEN=123456789:' "$root/.env" 2>/dev/null; then
-    return 1
-  fi
-  if grep -qE '^ADMIN_BALE_USER_ID=123456789$' "$root/.env" 2>/dev/null; then
-    return 1
-  fi
+token_format_ok() {
+  local t="$1"
+  [[ "$t" =~ ^[0-9]+:.+$ ]] || return 1
+  # reject obvious placeholder
+  [[ "$t" != 123456789:* ]] || return 1
   return 0
+}
+
+validate_token_getme() {
+  local token="$1"
+  local url resp ok
+  url="https://tapi.bale.ai/bot${token}/getMe"
+  if ! need_cmd curl; then
+    warn "curl نیست — اعتبارسنجی getMe رد شد."
+    return 0
+  fi
+  resp="$(curl -fsS --max-time 12 "$url" 2>/dev/null || true)"
+  if printf '%s' "$resp" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
+    local uname
+    uname="$(printf '%s' "$resp" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    if [[ -n "$uname" ]]; then
+      log "✓ توکن معتبر است (getMe: @$uname)"
+    else
+      log "✓ توکن معتبر است (getMe ok)"
+    fi
+    return 0
+  fi
+  warn "getMe ناموفق بود — توکن را دوباره بررسی کنید."
+  return 1
+}
+
+write_env_file() {
+  local root="$1" token="$2" bot_user="$3" critical="$4" admin_id="$5"
+  local tmp
+  tmp="$(mktemp)"
+  {
+    printf '%s\n' "# تولید شده توسط install.sh — توکن را در گیت commit نکنید"
+    printf 'BALE_BOT_TOKEN=%s\n' "$token"
+    printf '\n'
+    printf '%s\n' "# اختیاری: اگر خالی باشد، اولین /start مالک می‌شود"
+    if [[ -n "$admin_id" ]]; then
+      printf 'ADMIN_BALE_USER_ID=%s\n' "$admin_id"
+    else
+      printf '%s\n' "# ADMIN_BALE_USER_ID="
+    fi
+    printf '\n'
+    if [[ -n "$bot_user" ]]; then
+      printf 'BOT_USERNAME=%s\n' "$bot_user"
+    else
+      printf '%s\n' "# BOT_USERNAME=nasoz_bot"
+    fi
+    printf 'CRITICAL_DAYS=%s\n' "${critical:-3}"
+  } > "$tmp"
+  mv "$tmp" "$root/.env"
+  chmod 600 "$root/.env" 2>/dev/null || true
+}
+
+prompt_default() {
+  # usage: prompt_default "پرسش" "پیش‌فرض" → echoes answer
+  local prompt="$1" default="${2:-}" reply
+  if [[ -n "$default" ]]; then
+    read -r -p "${prompt} [${default}]: " reply || true
+    printf '%s' "${reply:-$default}"
+  else
+    read -r -p "${prompt}: " reply || true
+    printf '%s' "$reply"
+  fi
+}
+
+run_env_wizard() {
+  local root="$1"
+  local token bot_user do_systemd critical admin_existing
+  cd "$root"
+
+  cat <<'WIZ'
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ویزارد پیکربندی بازو (بله)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WIZ
+
+  # Token (required)
+  while true; do
+    read -r -p "۱) توکن بازو (BALE_BOT_TOKEN): " token || true
+    token="$(printf '%s' "$token" | tr -d '[:space:]')"
+    if [[ -z "$token" ]]; then
+      warn "توکن الزامی است."
+      continue
+    fi
+    if ! token_format_ok "$token"; then
+      warn "فرمت توکن نامعتبر است (باید شبیه digits:rest باشد)."
+      continue
+    fi
+    if validate_token_getme "$token"; then
+      break
+    fi
+    local retry
+    read -r -p "با همین توکن ادامه دهیم؟ (y/N): " retry || true
+    case "${retry:-}" in
+      y|Y|yes|YES) break ;;
+      *) continue ;;
+    esac
+  done
+
+  bot_user="$(prompt_default "۲) نام کاربری بازو بدون @" "nasoz_bot")"
+  bot_user="$(printf '%s' "$bot_user" | sed 's/^@//' | tr -d '[:space:]')"
+
+  do_systemd="$(prompt_default "۳) آیا همین الان سرویس systemd نصب و استارت شود؟ (y/N)" "N")"
+
+  critical="$(prompt_default "۴) CRITICAL_DAYS" "3")"
+  if ! [[ "$critical" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    warn "CRITICAL_DAYS نامعتبر — از ۳ استفاده می‌شود."
+    critical=3
+  fi
+
+  write_env_file "$root" "$token" "$bot_user" "$critical" ""
+  log "✓ فایل .env نوشته شد (توکن …${token: -4})"
+  log "نکته: ADMIN_BALE_USER_ID لازم نیست — اولین /start مالک می‌شود."
+
+  case "${do_systemd:-}" in
+    y|Y|yes|YES)
+      DO_SYSTEMD=1
+      DO_START=1
+      ;;
+  esac
+  return 0
+}
+
+env_looks_configured() {
+  local root="$1" line token
+  [[ -f "$root/.env" ]] || return 1
+  line="$(grep -E '^BALE_BOT_TOKEN=' "$root/.env" 2>/dev/null | head -1 || true)"
+  [[ -n "$line" ]] || return 1
+  token="${line#BALE_BOT_TOKEN=}"
+  token="$(printf '%s' "$token" | tr -d '\r' | sed 's/^["'\'']//;s/["'\'']$//')"
+  token_format_ok "$token"
 }
 
 run_seed_admin() {
@@ -232,8 +371,18 @@ run_seed_admin() {
   # shellcheck disable=SC1091
   source .venv/bin/activate
   if ! env_looks_configured "$root"; then
-    warn "به نظر می‌رسد .env هنوز با توکن/شناسه واقعی پر نشده."
-    warn "ابتدا nano .env را ویرایش کنید، بعد دوباره --seed-admin بزنید."
+    warn "به نظر می‌رسد .env هنوز با توکن واقعی پر نشده."
+    warn "ابتدا bash install.sh را در ترمینال واقعی بزنید یا nano .env کنید."
+    return 1
+  fi
+  # Soften: seed only works if ADMIN_BALE_USER_ID is set
+  if ! grep -qE '^ADMIN_BALE_USER_ID=[0-9]+' "$root/.env" 2>/dev/null; then
+    warn "--seed-admin اختیاری است؛ ADMIN_BALE_USER_ID خالی است."
+    warn "مالک با اولین /start ساخته می‌شود — seed رد شد."
+    return 0
+  fi
+  if grep -qE '^ADMIN_BALE_USER_ID=123456789$' "$root/.env" 2>/dev/null; then
+    warn "ADMIN_BALE_USER_ID هنوز مقدار نمونه است — seed رد شد."
     return 1
   fi
   python scripts/seed_admin.py
@@ -274,7 +423,7 @@ do_start() {
   # shellcheck disable=SC1091
   source .venv/bin/activate
   if ! env_looks_configured "$root"; then
-    die "قبل از --start باید .env را با توکن واقعی پر کنید."
+    die "قبل از --start باید .env را با توکن واقعی پر کنید (ویزارد: bash install.sh)."
   fi
   warn "systemd نصب نیست — اجرای foreground. برای توقف: Ctrl+C"
   warn "فقط یک نمونه polling با یک توکن مجاز است."
@@ -309,12 +458,13 @@ print_next_steps() {
 
 مراحل بعدی:
 
-  1) ویرایش تنظیمات:
-       cd $root && nano .env
-     (BALE_BOT_TOKEN و ADMIN_BALE_USER_ID)
+  1) اگر هنوز توکن ندارید، در ترمینال واقعی:
+       cd $root && bash install.sh
+     (ویزارد توکن را می‌پرسد و .env می‌نویسد)
 
-  2) ثبت مالک:
-       bash install.sh --seed-admin
+  2) ربات را روشن کنید و در بله /start بزنید —
+     اولین کاربر به‌صورت خودکار مالک می‌شود.
+     (--seed-admin اختیاری است اگر ADMIN_BALE_USER_ID را دستی گذاشته‌اید)
 
   3) اجرای دائمی:
        bash install.sh --systemd --start

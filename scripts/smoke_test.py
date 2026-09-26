@@ -63,8 +63,40 @@ def _write_wide_inventory(path: Path) -> None:
     wb.save(path)
 
 
+def _test_first_owner_claim() -> None:
+    """Empty DB: first bare claim wins owner; second user cannot claim."""
+    claim_db_path = ROOT / "data" / "smoke_first_owner.db"
+    if claim_db_path.exists():
+        claim_db_path.unlink()
+    cdb = Database(claim_db_path)
+    assert cdb.count_active_owners() == 0
+    first = cdb.try_claim_first_owner("7001", display_name="اولین")
+    assert first is not None
+    assert first["role"] == "owner"
+    assert first["bale_user_id"] == "7001"
+    assert cdb.count_active_owners() == 1
+    second = cdb.try_claim_first_owner("7002", display_name="دومین")
+    assert second is None
+    assert cdb.count_active_owners() == 1
+    assert cdb.get_user("7002") is None
+    # already-registered owner path stays owner
+    again = cdb.try_claim_first_owner("7001", display_name="اولین")
+    assert again is None  # owners already exist → no re-claim path returns None
+    assert cdb.count_active_owners() == 1
+    claim_db_path.unlink(missing_ok=True)
+
+
+def _test_install_help_soft_seed() -> None:
+    help_txt = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+    assert "مالک با اولین /start" in help_txt
+    assert "env_looks_configured" in help_txt
+    assert "run_env_wizard" in help_txt
+
+
 def main() -> int:
     make_samples()
+    _test_first_owner_claim()
+    _test_install_help_soft_seed()
     db_path = ROOT / "data" / "smoke.db"
     if db_path.exists():
         db_path.unlink()

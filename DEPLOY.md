@@ -10,12 +10,19 @@
 curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash
 ```
 
+اگر نصب از طریق `curl | bash` باشد (بدون TTY)، بعداً در ترمینال واقعی ویزارد توکن را اجرا کنید:
+
+```bash
+cd special-materials-robot-project
+bash install.sh
+```
+
 یا به‌صورت دستی:
 
 ```bash
 git clone https://github.com/silent4time/special-materials-robot-project.git
 cd special-materials-robot-project
-bash install.sh --seed-admin
+bash install.sh
 ```
 
 اسکریپت `install.sh` (و `scripts/install.sh`) روی سرور تازه‌کار:
@@ -24,21 +31,22 @@ bash install.sh --seed-admin
 2. در صورت نیاز `python3-venv` و `git` را با apt نصب می‌کند
 3. در صورت نبود ریپو، کلون می‌کند (یا از `INSTALL_DIR` / cwd استفاده می‌کند)
 4. `.venv` می‌سازد و `requirements.txt` را نصب می‌کند
-5. اگر `.env` نباشد از `.env.example` کپی می‌کند و راهنمای فارسی چاپ می‌کند
+5. اگر `.env` پیکربندی نشده باشد و stdin یک TTY باشد، **ویزارد فارسی** توکن و تنظیمات را می‌پرسد و `.env` می‌نویسد
+6. مالک را لازم نیست از قبل بدانید: **اولین `/start` در بله → نقش مالک**
 
 پرچم‌های مفید:
 
 | پرچم | کار |
 |------|-----|
-| `--seed-admin` | اجرای `scripts/seed_admin.py` |
+| `--seed-admin` | اختیاری؛ مالک با اولین `/start` ساخته می‌شود (`scripts/seed_admin.py` اگر `ADMIN_BALE_USER_ID` ست باشد) |
 | `--systemd` | نصب unit از `scripts/nasoz-bot.service.in` |
 | `--start` | شروع سرویس systemd یا اجرای foreground |
 | `--update` | `git pull` + pip + restart systemd |
 
-مثال استقرار کامل:
+مثال استقرار کامل (بعد از ویزارد، یا با پاسخ y به سوال systemd):
 
 ```bash
-bash install.sh --seed-admin --systemd --start
+bash install.sh --systemd --start
 ```
 
 به‌روزرسانی بعدی:
@@ -49,19 +57,20 @@ bash install.sh --update
 
 ## توکن و مالک
 
+در ویزارد تعاملی:
+
+1. **توکن بازو** (`BALE_BOT_TOKEN`) — الزامی؛ از `@botfather`
+2. **نام کاربری بازو** بدون `@` — اختیاری (پیش‌فرض `nasoz_bot`)
+3. نصب/استارت systemd؟ (`y/N`)
+4. `CRITICAL_DAYS` — پیش‌فرض `3`
+
+`ADMIN_BALE_USER_ID` دیگر الزامی نیست. اگر خالی باشد، اولین کسی که در بله `/start` بزند مالک می‌شود.
+
+در حالت غیرتعاملی می‌توانید قبل از نصب ست کنید:
+
 ```bash
-cp .env.example .env   # اگر install.sh قبلاً نکرده
-nano .env
-```
-
-حداقل این دو را پر کنید (توکن جعلی نسازید؛ از `@botfather` بگیرید):
-
-- `BALE_BOT_TOKEN` — توکن بازو (مثل رمز؛ **در گیت نگذارید**)
-- `ADMIN_BALE_USER_ID` — شناسه عددی بلهٔ مالک
-
-```bash
-bash install.sh --seed-admin
-# یا: python scripts/seed_admin.py
+export BALE_BOT_TOKEN='123456789:ABC...'
+bash install.sh
 ```
 
 ## اجرای آزمایشی (بدون systemd)
@@ -71,7 +80,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-در بله به بازو پیام `/start` بدهید. با `Ctrl+C` متوقف کنید.
+در بله به بازو پیام `/start` بدهید (اولین نفر = مالک). با `Ctrl+C` متوقف کنید.
 
 ## systemd دستی
 
@@ -105,7 +114,6 @@ cd special-materials-robot-project
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env && nano .env
-python scripts/seed_admin.py
-python main.py
+cp .env.example .env && nano .env   # فقط BALE_BOT_TOKEN الزامی است
+python main.py                      # اولین /start → مالک
 ```
