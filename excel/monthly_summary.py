@@ -16,6 +16,13 @@ from excel.processor import (
     _read_raw_excel,
     _normalize_columns,
 )
+from excel.work_order import (
+    CONSUMPTION_LABELS_FA,
+    UNKNOWN_GROUP,
+    UNKNOWN_LABEL_FA,
+    dominant_work_order,
+    tundish_kg_totals_from_items,
+)
 
 SUMMARY_SHEET_NAME = "خلاصه مصرفی ماهیانه"
 SUMMARY_FILE_NAME = "خلاصه مصرفی ماهیانه.xlsx"
@@ -175,6 +182,8 @@ class MonthlySummaryData:
     grand_kg: float
     group_order: list[str] = field(default_factory=list)
     month_sections: list[dict[str, Any]] = field(default_factory=list)
+    # kg/count per slab|bloom|billet|unknown from aggregated item rows
+    tundish_totals: dict[str, dict[str, float | int]] = field(default_factory=dict)
 
 
 def _map_cleaned_to_plant_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -334,13 +343,19 @@ def aggregate_monthly_detail(detail: pd.DataFrame) -> MonthlySummaryData:
         coeff = float(first["ضریب"]) if not _blank(first["ضریب"]) else 1.0
         cat = first.get("کد دسته بندی")
         cat_norm = _normalize_category_code(cat)
+        # Dominant WO by |signed_qty * coeff|; first appearance as tie-break
+        wo_weights = [
+            abs(float(sq) * (float(c) if not _blank(c) else 1.0))
+            for sq, c in zip(grp_sorted["signed_qty"], grp_sorted["ضریب"])
+        ]
+        wo_value = dominant_work_order(grp_sorted["سفارش کار"].tolist(), wo_weights)
         rows.append(
             {
                 "کد دسته بندی": int(cat_norm) if cat_norm and cat_norm.isdigit() else cat_norm,
                 "کد کالا": item_code,
                 "مقدار": qty,
                 "ضریب": coeff,
-                "سفارش کار": first.get("سفارش کار"),
+                "سفارش کار": wo_value,
                 "تاریخ": _year_only_latin(first.get("تاریخ")),
                 "ماه": int(month_num),
                 "واحد": first.get("واحد"),
@@ -352,7 +367,13 @@ def aggregate_monthly_detail(detail: pd.DataFrame) -> MonthlySummaryData:
 
     items = pd.DataFrame(rows)
     if items.empty:
-        return MonthlySummaryData(items=items, grand_kg=0.0, group_order=[], month_sections=[])
+        return MonthlySummaryData(
+            items=items,
+            grand_kg=0.0,
+            group_order=[],
+            month_sections=[],
+            tundish_totals=tundish_kg_totals_from_items(items),
+        )
 
     # Sort within each شرح by month; groups by first appearance
     items["_group_rank"] = items["شرح"].map(
@@ -383,11 +404,13 @@ def aggregate_monthly_detail(detail: pd.DataFrame) -> MonthlySummaryData:
             }
         )
 
+    tundish_totals = tundish_kg_totals_from_items(items)
     return MonthlySummaryData(
         items=items,
         grand_kg=grand_kg,
         group_order=group_order,
         month_sections=month_sections,
+        tundish_totals=tundish_totals,
     )
 
 
@@ -520,6 +543,74 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
         ws.row_dimensions[row_idx].height = 32
         row_idx += 2
 
+    # --- مصرف مواد بر حسب اسلب، بلوم و بیلت (after last month block) ---
+    # month loop already left one blank via +=2; add one more ≈ two rows gap
+    row_idx += 1
+    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=9)
+    title_cell = ws.cell(
+        row=row_idx,
+        column=1,
+        value="مصرف مواد بر حسب اسلب، بلوم و بیلت",
+    )
+    title_cell.fill = SECTION_FILL
+    title_cell.font = SECTION_FONT
+    title_cell.alignment = CENTER
+    for col in range(1, 10):
+        ws.cell(row=row_idx, column=col).border = THIN
+        ws.cell(row=row_idx, column=col).fill = SECTION_FILL
+    ws.row_dimensions[row_idx].height = 32
+    row_idx += 1
+
+    totals = data.tundish_totals or tundish_kg_totals_from_items(data.items)
+    section_order = ["slab", "bloom", "billet"]
+    for key in section_order:
+        info = totals.get(key) or {"kg": 0.0, "count": 0}
+        label = CONSUMPTION_LABELS_FA[key]
+        count = int(info.get("count") or 0)
+        kg = float(info.get("kg") or 0)
+        ws.cell(row=row_idx, column=3, value=kg)
+        ws.cell(row=row_idx, column=8, value="کیلوگرم")
+        ws.cell(
+            row=row_idx,
+            column=9,
+            value=f"{label} ({to_persian_digits(count)} قلم)",
+        )
+        _style_row(ws, row_idx, fill=YELLOW_FILL, bold=True)
+        ws.row_dimensions[row_idx].height = 32
+        row_idx += 1
+
+    unk = totals.get(UNKNOWN_GROUP) or {"kg": 0.0, "count": 0}
+    unk_kg = float(unk.get("kg") or 0)
+    unk_count = int(unk.get("count") or 0)
+    if unk_count or abs(unk_kg) > 1e-9:
+        ws.cell(row=row_idx, column=3, value=unk_kg)
+        ws.cell(row=row_idx, column=8, value="کیلوگرم")
+        ws.cell(
+            row=row_idx,
+            column=9,
+            value=f"{UNKNOWN_LABEL_FA} ({to_persian_digits(unk_count)} قلم)",
+        )
+        _style_row(ws, row_idx, fill=YELLOW_FILL, bold=True)
+        ws.row_dimensions[row_idx].height = 32
+        row_idx += 1
+
+    check_kg = (
+        float((totals.get("slab") or {}).get("kg") or 0)
+        + float((totals.get("bloom") or {}).get("kg") or 0)
+        + float((totals.get("billet") or {}).get("kg") or 0)
+        + unk_kg
+    )
+    ws.cell(row=row_idx, column=3, value=check_kg)
+    ws.cell(row=row_idx, column=8, value="کیلوگرم")
+    ws.cell(
+        row=row_idx,
+        column=9,
+        value="جمع کنترل (اسلب+بلوم+بیلت+ناشناخته) — باید برابر جمع کل مصرفی باشد",
+    )
+    _style_row(ws, row_idx, fill=GREEN_FILL, bold=True)
+    ws.row_dimensions[row_idx].height = 36
+    row_idx += 1
+
     return wb
 
 
@@ -636,4 +727,36 @@ def summary_sections_for_pdf(data: MonthlySummaryData) -> list[dict[str, Any]]:
                 "total_title": section["total_title"],
             }
         )
+    totals = data.tundish_totals or tundish_kg_totals_from_items(data.items)
+    tundish_rows = []
+    for key in ("slab", "bloom", "billet"):
+        info = totals.get(key) or {"kg": 0.0, "count": 0}
+        tundish_rows.append(
+            {
+                "description": CONSUMPTION_LABELS_FA[key],
+                "count": int(info.get("count") or 0),
+                "kg": float(info.get("kg") or 0),
+                "unit": "کیلوگرم",
+            }
+        )
+    unk = totals.get(UNKNOWN_GROUP) or {"kg": 0.0, "count": 0}
+    if int(unk.get("count") or 0) or abs(float(unk.get("kg") or 0)) > 1e-9:
+        tundish_rows.append(
+            {
+                "description": UNKNOWN_LABEL_FA,
+                "count": int(unk.get("count") or 0),
+                "kg": float(unk.get("kg") or 0),
+                "unit": "کیلوگرم",
+            }
+        )
+    sections.append(
+        {
+            "title": "مصرف مواد بر حسب اسلب، بلوم و بیلت",
+            "kind": "tundish_wo",
+            "columns": ["description", "count", "kg", "unit"],
+            "rows": tundish_rows,
+            "grand_kg": data.grand_kg,
+            "check_kg": sum(float(r["kg"]) for r in tundish_rows),
+        }
+    )
     return sections

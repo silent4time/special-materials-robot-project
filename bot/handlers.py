@@ -77,7 +77,7 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 
 تنظیمات اقلام سایت / تخصیص به گروه (مالک، مدیر، کاردان مسئول — نه تکنسین):
 • همگام‌سازی اقلام از آخرین استخراج موجودی انبار
-• تخصیص هر قلم به اسلب یا بلوم یا بیلت
+• تخصیص خودکار از ستون سفارش کار مصرف ماهیانه (اسلب/بلوم/بیلت) + تخصیص دستی
 
 انواع فایل Excel:
 • موجودی انبار — ۳ ستون: کد دسته بندی، کد و شرح کالا، موجودی
@@ -1072,6 +1072,35 @@ class BotApp:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("catalog seed after inventory failed: %s", exc)
+            try:
+                wo_sync = self.db.sync_catalog_groups_from_latest_monthly(
+                    user["bale_user_id"]
+                )
+                if wo_sync.get("ok"):
+                    catalog_note += (
+                        f"\nتخصیص گروه از سفارش کار: "
+                        f"{wo_sync.get('counts', {}).get('assigned', 0)} قلم."
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("WO group sync after inventory failed: %s", exc)
+        elif pending == "monthly_consumption":
+            try:
+                # Prefer the just-uploaded raw/clean path for WO→group sync
+                wo_sync = self.db.sync_catalog_groups_from_monthly_path(
+                    result.raw_path
+                )
+                if not wo_sync.get("ok"):
+                    wo_sync = self.db.sync_catalog_groups_from_monthly_path(
+                        result.clean_path
+                    )
+                if wo_sync.get("ok"):
+                    catalog_note = (
+                        f"\nتخصیص گروه اسلب/بلوم/بیلت از سفارش کار: "
+                        f"{wo_sync.get('counts', {}).get('assigned', 0)} قلم "
+                        f"(نگاشت={wo_sync.get('mapping_size', 0)})."
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("WO group sync after monthly failed: %s", exc)
 
         label = FILE_TYPES[pending]["label_fa"]
         reasons = result.drop_reasons or {}
@@ -1759,11 +1788,19 @@ class BotApp:
             return
         items = self.db.list_items_for_group(group_key, active_only=True)
         if not items:
+            # Soft-sync from latest monthly work_order so the three menus fill automatically
+            try:
+                self.db.sync_catalog_groups_from_latest_monthly()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("WO sync before site stock group failed: %s", exc)
+            items = self.db.list_items_for_group(group_key, active_only=True)
+        if not items:
             self._reply(
                 message,
                 f"هیچ قلمی به «{label}» تخصیص داده نشده است.\n"
                 + (
-                    "از منوی «تنظیمات اقلام سایت / تخصیص به گروه» اقلام را تخصیص دهید."
+                    "ابتدا مصرف ماهیانه را آپلود کنید (تخصیص از سفارش کار) "
+                    "یا از منوی «تنظیمات اقلام سایت / تخصیص به گروه» اقلام را تخصیص دهید."
                     if can_configure_catalog(user)
                     else "با مدیر یا کاردان مسئول برای تخصیص اقلام تماس بگیرید."
                 ),
@@ -1958,13 +1995,27 @@ class BotApp:
             return
         counts = result["counts"]
         extract = result["extract"]
+        wo_note = ""
+        try:
+            wo_sync = self.db.sync_catalog_groups_from_latest_monthly()
+            if wo_sync.get("ok"):
+                wo_note = (
+                    f"\nتخصیص از سفارش کار مصرف ماهیانه: "
+                    f"{wo_sync.get('counts', {}).get('assigned', 0)} قلم "
+                    f"(نگاشت={wo_sync.get('mapping_size', 0)})."
+                )
+            elif wo_sync.get("error"):
+                wo_note = f"\n(سفارش کار: {wo_sync.get('error')})"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("WO sync on catalog seed failed: %s", exc)
         self._reply(
             message,
             "✅ همگام‌سازی کاتالوگ از آخرین موجودی انبار انجام شد.\n"
             f"ردیف‌های فایل: {counts.get('total_rows', 0)}\n"
             f"افزوده: {counts.get('inserted', 0)} | به‌روز: {counts.get('updated', 0)} | "
             f"ردشده/موجود: {counts.get('skipped', 0)}\n"
-            f"منبع: extract#{extract.get('id')} ({extract.get('row_count')} ردیف تمیز)",
+            f"منبع: extract#{extract.get('id')} ({extract.get('row_count')} ردیف تمیز)"
+            f"{wo_note}",
             kb.catalog_settings_menu(),
         )
 
@@ -2513,16 +2564,34 @@ class BotApp:
         if not lines:
             header.append("پیشنهادی نیست — موجودی برای بازه درخواست کافی به‌نظر می‌رسد.")
             return "\n".join(header)
+        from config import TUNDISH_TYPES
+        from excel.work_order import GROUP_LABELS_FA
+
+        order = ["slab", "bloom", "billet", None]
+        grouped: dict[str | None, list[tuple[int, dict]]] = {k: [] for k in order}
         for i, ln in enumerate(lines, 1):
-            unit = ln.get("unit") or ""
-            iid = ln.get("item_id") or "—"
-            header.append(
-                f"{i}) {ln.get('item_name')} (شناسه: {iid})\n"
-                f"   موجودی: {float(ln.get('remaining_qty') or 0):.2f} {unit} | "
-                f"مصرف روز: {float(ln.get('avg_daily') or 0):.2f} | "
-                f"پیشنهاد: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
-            )
-        header.append("")
+            g = ln.get("tundish_group")
+            if g not in grouped:
+                g = None
+            grouped[g].append((i, ln))
+        for g in order:
+            bucket = grouped.get(g) or []
+            if not bucket:
+                continue
+            if g:
+                header.append(f"—— {GROUP_LABELS_FA.get(g) or TUNDISH_TYPES.get(g) or g} ——")
+            else:
+                header.append("—— بدون گروه سفارش کار ——")
+            for i, ln in bucket:
+                unit = ln.get("unit") or ""
+                iid = ln.get("item_id") or "—"
+                header.append(
+                    f"{i}) {ln.get('item_name')} (شناسه: {iid})\n"
+                    f"   موجودی: {float(ln.get('remaining_qty') or 0):.2f} {unit} | "
+                    f"مصرف روز: {float(ln.get('avg_daily') or 0):.2f} | "
+                    f"پیشنهاد: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
+                )
+            header.append("")
         header.append("تأیید همه / اصلاح / انصراف را انتخاب کنید.")
         return "\n".join(header)
 
@@ -2579,19 +2648,65 @@ class BotApp:
                     if key and key not in id_by_name:
                         id_by_name[key] = str(iid).strip()
 
+        # Resolve item_id → tundish_group (catalog assignment, else monthly WO map)
+        group_by_id: dict[str, str] = {}
+        for asg in self.db.list_catalog_with_assignments(active_only=True):
+            if asg.get("tundish_group") and asg.get("id"):
+                group_by_id[str(asg["id"]).strip()] = str(asg["tundish_group"]).strip().lower()
+        try:
+            from excel.work_order import build_item_to_group_map
+
+            # Prefer session monthly frame WO when available
+            if monthly is not None and not monthly.empty:
+                id_col = "id" if "id" in monthly.columns else None
+                wo_col = "work_order" if "work_order" in monthly.columns else None
+                if id_col and wo_col:
+                    m = monthly.copy()
+                    qty = pd.to_numeric(m["quantity"], errors="coerce").fillna(0).abs()
+                    if "coefficient" in m.columns:
+                        qty = qty * pd.to_numeric(m["coefficient"], errors="coerce").fillna(1).abs()
+                    m["_w"] = qty
+                    for iid, g in build_item_to_group_map(
+                        m, id_col=id_col, work_order_col=wo_col, weight_col="_w"
+                    ).items():
+                        group_by_id.setdefault(iid, g)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MR WO map failed: %s", exc)
+
         lines: list[dict] = []
         for _, row in positive.iterrows():
             name = str(row["material_name"]).strip()
+            iid = id_by_name.get(name)
+            # Try extract leading id from "CODE - desc"
+            if not iid and " - " in name:
+                maybe = name.split(" - ", 1)[0].strip()
+                if maybe:
+                    iid = maybe
+            g = group_by_id.get(str(iid).strip()) if iid else None
+            if not g:
+                # tank/monthly rates may carry tundish_type already
+                tt = row.get("tundish_type")
+                if tt is not None and not (isinstance(tt, float) and pd.isna(tt)):
+                    from config import TUNDISH_TYPES
+                    label = str(tt).strip()
+                    for key, fa in TUNDISH_TYPES.items():
+                        if label == fa or label.casefold() == key:
+                            g = key
+                            break
             lines.append(
                 {
-                    "item_id": id_by_name.get(name),
+                    "item_id": iid,
                     "item_name": name,
                     "unit": row.get("unit"),
                     "avg_daily": float(row.get("avg_daily") or 0),
                     "remaining_qty": float(row.get("remaining_qty") or 0),
                     "quantity": float(row.get("suggest_qty") or 0),
+                    "tundish_group": g,
                 }
             )
+        # Stable order: slab, bloom, billet, then unknown
+        rank = {"slab": 0, "bloom": 1, "billet": 2}
+        lines.sort(key=lambda ln: (rank.get(ln.get("tundish_group") or "", 9), ln.get("item_name") or ""))
         return lines, None
 
     def on_material_request_start(self, message: dict) -> None:

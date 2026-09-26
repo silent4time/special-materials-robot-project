@@ -36,6 +36,12 @@ from excel.processor import (
     process_session_files,
 )
 from excel.monthly_summary import build_monthly_summary, load_monthly_detail, aggregate_monthly_detail
+from excel.work_order import (
+    WORK_ORDER_TO_GROUP,
+    group_for_work_order,
+    normalize_work_order,
+    tundish_kg_totals_from_items,
+)
 from pdf.generator import generate_monthly_summary_pdf, generate_report
 from excel.monthly_summary import summary_sections_for_pdf
 from scripts.make_samples import main as make_samples
@@ -148,6 +154,17 @@ def _test_merge_and_monthly_summary() -> None:
     assert float(merged.loc[merged["id"].astype(str) == "B2", "quantity"].iloc[0]) == 99
     assert float(merged.loc[merged["id"].astype(str) == "A1", "quantity"].iloc[0]) == 10
 
+    # work_order normalize + map
+    assert normalize_work_order("1102010000") == "1102010000"
+    assert normalize_work_order(1102020000) == "1102020000"
+    assert normalize_work_order(1102030000.0) == "1102030000"
+    assert normalize_work_order("۱۱۰۲۰۱۰۰۰۰") == "1102010000"
+    assert normalize_work_order(" 1102010000 ") == "1102010000"
+    assert group_for_work_order("1102010000") == "slab"
+    assert group_for_work_order("1102020000") == "bloom"
+    assert group_for_work_order("1102030000") == "billet"
+    assert WORK_ORDER_TO_GROUP["1102010000"] == "slab"
+
     sample = ROOT / "samples" / "real" / "monthly_consumption_sample.xlsx"
     if sample.exists():
         detail = load_monthly_detail(sample)
@@ -155,10 +172,35 @@ def _test_merge_and_monthly_summary() -> None:
         assert abs(float(data.grand_kg) - 1221814) < 0.5, data.grand_kg
         month_sum = sum(float(s["total_kg"]) for s in data.month_sections)
         assert abs(month_sum - float(data.grand_kg)) < 0.5
+        totals = data.tundish_totals or tundish_kg_totals_from_items(data.items)
+        slab_kg = float(totals["slab"]["kg"])
+        bloom_kg = float(totals["bloom"]["kg"])
+        billet_kg = float(totals["billet"]["kg"])
+        unk_kg = float(totals.get("unknown", {}).get("kg") or 0)
+        assert abs(slab_kg + bloom_kg + billet_kg + unk_kg - float(data.grand_kg)) < 0.5, (
+            slab_kg, bloom_kg, billet_kg, unk_kg, data.grand_kg
+        )
+        # Spot-check sample WO section magnitudes (dominant-WO aggregation)
+        assert abs(slab_kg - 848741.2) < 1.0, slab_kg
+        assert abs(bloom_kg - 10952.0) < 1.0, bloom_kg
+        assert abs(billet_kg - 362120.8) < 1.0, billet_kg
         excel_out = ROOT / "reports" / "smoke_monthly_summary.xlsx"
         pdf_out = ROOT / "reports" / "smoke_monthly_summary.pdf"
         data2, written = build_monthly_summary(sample, excel_out=excel_out)
         assert written.exists()
+        # Excel must contain the WO section title near the end
+        from openpyxl import load_workbook
+        wb = load_workbook(written, data_only=True)
+        ws = wb.active
+        found_title = False
+        found_slab = False
+        for row in ws.iter_rows(values_only=True):
+            joined = " ".join(str(c) for c in row if c is not None)
+            if "مصرف مواد بر حسب اسلب، بلوم و بیلت" in joined:
+                found_title = True
+            if "مصرف مواد اسلب" in joined:
+                found_slab = True
+        assert found_title and found_slab
         generate_monthly_summary_pdf(
             summary_sections_for_pdf(data2),
             grand_kg=data2.grand_kg,

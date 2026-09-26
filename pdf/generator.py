@@ -458,6 +458,7 @@ SUMMARY_HEADER_FA = {
     "unit": "واحد",
     "description": "شرح",
     "kg": "مصرف کیلوگرم (مقدار×ضریب)",
+    "count": "تعداد قلم",
 }
 
 
@@ -548,6 +549,22 @@ def generate_monthly_summary_pdf(
                 else:
                     total_cells.append(Paragraph(rtl(""), styles["cell"]))
             data.append(list(reversed(total_cells)))
+        elif section.get("kind") == "tundish_wo":
+            check_cells = []
+            for c in cols:
+                if c == "kg":
+                    check_cells.append(
+                        Paragraph(rtl(f"{float(section.get('check_kg') or 0):g}"), styles["cell"])
+                    )
+                elif c == "unit":
+                    check_cells.append(Paragraph(rtl("کیلوگرم"), styles["cell"]))
+                elif c == "description":
+                    check_cells.append(
+                        Paragraph(rtl("جمع کنترل (اسلب+بلوم+بیلت+ناشناخته)"), styles["cell"])
+                    )
+                else:
+                    check_cells.append(Paragraph(rtl(""), styles["cell"]))
+            data.append(list(reversed(check_cells)))
 
         table = Table(data, repeatRows=1)
         style_cmds = [

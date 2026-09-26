@@ -20,9 +20,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pandas as pd
 
-from config import ADMIN_BALE_USER_ID, UPLOAD_DIR, ensure_dirs
+from config import ADMIN_BALE_USER_ID, TUNDISH_TYPE_LABELS, UPLOAD_DIR, ensure_dirs
 from db.models import Database
 from excel.processor import extract_and_save_clean
+from excel.work_order import tundish_type_label_for_work_order
 
 INVENTORY_SAMPLE = PROJECT_ROOT / "samples" / "real" / "inventory_sample.xlsx"
 MONTHLY_SAMPLE = PROJECT_ROOT / "samples" / "real" / "monthly_consumption_sample.xlsx"
@@ -84,7 +85,9 @@ def _convert_monthly_sample(source: Path, destination: Path, uid: str, allowlist
     converted = pd.DataFrame(
         {
             "domain": filtered["_category_code"].astype(str),
-            "tundish_type": "تاندیش اسلب",
+            "tundish_type": filtered["سفارش کار"].map(
+                lambda v: tundish_type_label_for_work_order(v) or TUNDISH_TYPE_LABELS[0]
+            ),
             "assignee_id": uid,
             "assignee_name": DEFAULT_ADMIN_NAME,
             "material_name": filtered.apply(
@@ -101,6 +104,24 @@ def _convert_monthly_sample(source: Path, destination: Path, uid: str, allowlist
                 lambda row: f"cat={row['_category_code']}; order={row['سفارش کار']}",
                 axis=1,
             ),
+            "work_order": filtered["سفارش کار"],
+            "id": filtered["کد کالا"].map(
+                lambda v: (
+                    str(v).strip()[:-2]
+                    if str(v).strip().endswith(".0") and str(v).strip()[:-2].replace("-", "").isalnum()
+                    else str(v).strip()
+                )
+                if v is not None and not (isinstance(v, float) and pd.isna(v))
+                else None
+            ),
+            "coefficient": (
+                pd.to_numeric(filtered["ضریب"], errors="coerce").fillna(1.0)
+                if "ضریب" in filtered.columns
+                else 1.0
+            ),
+            "description": filtered["شرح"].astype(str),
+            "category_code": filtered["_category_code"].astype(str),
+            "request_return": status,
         }
     )
     if converted.empty:
@@ -165,6 +186,10 @@ def seed(uid: str | int | None = None, *, db: Database | None = None) -> dict[st
         columns=monthly.columns,
     )
 
+    wo_sync = database.sync_catalog_groups_from_monthly_path(MONTHLY_SAMPLE)
+    if not wo_sync.get("ok"):
+        wo_sync = database.sync_catalog_groups_from_monthly_path(monthly.clean_path)
+
     return {
         "uid": user_id,
         "session_id": session["id"],
@@ -177,6 +202,7 @@ def seed(uid: str | int | None = None, *, db: Database | None = None) -> dict[st
             "kept": monthly.kept_row_count,
         },
         "catalog": catalog,
+        "work_order_groups": wo_sync,
     }
 
 

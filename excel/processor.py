@@ -16,6 +16,7 @@ from config import (
     TUNDISH_TYPE_LABELS,
 )
 from excel.id_parse import extract_item_id, extract_product_name
+from excel.work_order import tundish_type_label_for_work_order
 
 # Critical for RBAC — required only on scoped file types (not warehouse inventory)
 CRITICAL_COLUMNS = ["domain", "assignee_id", "assignee_name"]
@@ -457,6 +458,13 @@ def enrich_plant_monthly(df: pd.DataFrame) -> pd.DataFrame:
             )
         else:
             out["domain"] = "plant"
+    # Derive tundish_type from سفارش کار when possible (slab/bloom/billet).
+    if "work_order" in out.columns:
+        mapped = out["work_order"].map(tundish_type_label_for_work_order)
+        if "tundish_type" not in out.columns:
+            out["tundish_type"] = mapped
+        else:
+            out.loc[mapped.notna(), "tundish_type"] = mapped[mapped.notna()]
     if "tundish_type" not in out.columns or out["tundish_type"].map(_is_blank).all():
         # Placeholder so standard tundish filter keeps plant rows for analytics
         out["tundish_type"] = TUNDISH_TYPE_LABELS[0]

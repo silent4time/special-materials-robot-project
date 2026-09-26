@@ -1125,6 +1125,137 @@ class Database:
         with self.connect() as conn:
             return [dict(r) for r in conn.execute(q).fetchall()]
 
+    def sync_catalog_groups_from_work_order_map(
+        self,
+        item_to_group: dict[str, str],
+        *,
+        only_unassigned_or_auto: bool = True,
+        assigned_by: str | None = None,
+    ) -> dict[str, int]:
+        """Assign catalog items to slab/bloom/billet from a work_order-derived map.
+
+        By default only fills unassigned rows, or overwrites previous auto
+        assignments (assigned_by == system:work_order). Manual assignments win.
+        """
+        from excel.work_order import WO_AUTO_ASSIGNED_BY
+
+        actor = assigned_by if assigned_by is not None else WO_AUTO_ASSIGNED_BY
+        assigned = skipped_missing = skipped_manual = skipped_same = 0
+        for raw_id, group in (item_to_group or {}).items():
+            iid = str(raw_id).strip()
+            g = (group or "").strip().lower()
+            if not iid or g not in SITE_STOCK_GROUP_KEYS:
+                continue
+            item = self.get_catalog_item(iid)
+            if not item or not item.get("active"):
+                skipped_missing += 1
+                continue
+            current = self.get_item_assignment(iid)
+            if current:
+                cur_g = (current.get("tundish_group") or "").strip().lower()
+                cur_by = (current.get("assigned_by") or "").strip()
+                if only_unassigned_or_auto:
+                    if cur_by and cur_by != WO_AUTO_ASSIGNED_BY:
+                        skipped_manual += 1
+                        continue
+                if cur_g == g:
+                    skipped_same += 1
+                    continue
+            self.assign_item_to_group(iid, g, assigned_by=actor)
+            assigned += 1
+        return {
+            "assigned": assigned,
+            "skipped_missing": skipped_missing,
+            "skipped_manual": skipped_manual,
+            "skipped_same": skipped_same,
+            "mapped": len(item_to_group or {}),
+        }
+
+    def sync_catalog_groups_from_monthly_path(
+        self,
+        monthly_path: str | Path,
+        *,
+        only_unassigned_or_auto: bool = True,
+    ) -> dict[str, Any]:
+        """Build item→group from a monthly Excel and sync catalog assignments."""
+        from pathlib import Path as _Path
+
+        from excel.monthly_summary import load_monthly_detail
+        from excel.work_order import build_item_to_group_map
+
+        path = _Path(monthly_path)
+        if not path.exists():
+            return {"ok": False, "error": f"فایل یافت نشد: {path}", "counts": {}}
+        try:
+            detail = load_monthly_detail(path)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc), "counts": {}}
+        # weight by |qty * coeff| for dominant WO per item
+        work = detail.copy()
+        import pandas as pd
+
+        qty = pd.to_numeric(work["مقدار"], errors="coerce").fillna(0).abs() if "مقدار" in work.columns else 0
+        coef = (
+            pd.to_numeric(work["ضریب"], errors="coerce").fillna(1.0).abs()
+            if "ضریب" in work.columns
+            else 1.0
+        )
+        work["_w"] = qty * coef
+        mapping = build_item_to_group_map(
+            work, id_col="کد کالا", work_order_col="سفارش کار", weight_col="_w"
+        )
+        counts = self.sync_catalog_groups_from_work_order_map(
+            mapping, only_unassigned_or_auto=only_unassigned_or_auto
+        )
+        return {"ok": True, "mapping_size": len(mapping), "counts": counts, "path": str(path)}
+
+    def sync_catalog_groups_from_latest_monthly(
+        self, bale_user_id: str | int | None = None
+    ) -> dict[str, Any]:
+        """Use newest monthly_consumption extract (prefer plant raw when present)."""
+        with self.connect() as conn:
+            if bale_user_id is not None:
+                row = conn.execute(
+                    """
+                    SELECT * FROM extracted_datasets
+                    WHERE file_type = 'monthly_consumption' AND bale_user_id = ?
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (str(bale_user_id),),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT * FROM extracted_datasets
+                    WHERE file_type = 'monthly_consumption'
+                    ORDER BY id DESC LIMIT 1
+                    """
+                ).fetchone()
+        if not row:
+            return {
+                "ok": False,
+                "error": "هیچ استخراج مصرف ماهیانه‌ای یافت نشد.",
+                "counts": {},
+            }
+        extract = dict(row)
+        # Prefer raw plant file (has سفارش کار sheet); fall back to clean
+        candidates = [extract.get("raw_path"), extract.get("clean_path")]
+        last_err = None
+        for cand in candidates:
+            if not cand:
+                continue
+            result = self.sync_catalog_groups_from_monthly_path(cand)
+            if result.get("ok"):
+                result["extract"] = extract
+                return result
+            last_err = result.get("error")
+        return {
+            "ok": False,
+            "error": last_err or "همگام‌سازی از مصرف ماهیانه ناموفق بود.",
+            "counts": {},
+            "extract": extract,
+        }
+
     # --- site stock daily entries ---
     @staticmethod
     def tehran_today() -> str:
