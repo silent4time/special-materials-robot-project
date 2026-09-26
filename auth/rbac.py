@@ -51,11 +51,12 @@ def role_label(role: str) -> str:
 def filter_dataframe_for_user(df: pd.DataFrame, user: dict[str, Any]) -> pd.DataFrame:
     """
     Apply RBAC row filters:
-    - owner / manager: all rows
+    - owner / manager / responsible_officer (FULL_DATA_ROLES): all rows
     - If domain/assignee columns are absent (e.g. موجودی انبار plant-wide):
       all authorized users see the full inventory.
-    - responsible_officer: rows where domain/scope matches user.scope
-    - technician: rows where assignee_id or assignee_name matches the user
+    - technician: rows where assignee_id or assignee_name matches the user;
+      plant-wide (no domain/assignee) stays full view.
+    Identity is by bale_user_id; officer scope text is not used for filtering.
     """
     if df is None or df.empty:
         return df.copy() if df is not None else pd.DataFrame()
@@ -72,16 +73,6 @@ def filter_dataframe_for_user(df: pd.DataFrame, user: dict[str, Any]) -> pd.Data
     # Plant-wide datasets (warehouse inventory): no domain/assignee → full view
     if not has_domain and not has_assignee:
         return work
-
-    if role == "responsible_officer":
-        scope = (user.get("scope") or "").strip()
-        if not scope:
-            return work.iloc[0:0].copy()
-        domain_col = cols.get("domain") or cols.get("scope")
-        if not domain_col:
-            return work.iloc[0:0].copy()
-        mask = work[domain_col].astype(str).str.strip().str.lower() == scope.lower()
-        return work.loc[mask].copy()
 
     if role == "technician":
         uid = str(user.get("bale_user_id", "")).strip()

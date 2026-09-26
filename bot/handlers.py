@@ -73,16 +73,19 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 
 نقش‌ها:
 • مالک / مدیر — همه ردیف‌ها + مدیریت کاربران + تنظیمات اقلام
-• کاردان مسئول — فیلتر حوزه + تنظیمات اقلام سایت
+• کاردان مسئول — مثل بقیه نقش‌های عملیاتی کار می‌کند؛ همه ردیف‌ها + تنظیمات اقلام سایت
 • تکنسین — فقط ورود موجودی روزانه سایت (سه گروه)؛ بدون تنظیمات/گزارش
+
+شناسایی افراد با شناسه اکانت بله (bale_user_id) انجام می‌شود.
+هر ورودی داده با ثبت‌کننده (شناسه بله / نام نمایشی) ذخیره می‌شود.
 
 مدیریت کاربران (مالک/مدیر):
 • از منوی «کاربران»: اضافه / اصلاح نقش / حذف / لیست + لینک دعوت
 • دستورات اختیاری:
   /users
-  /adduser <bale_id> <role> [scope] [name...]
+  /adduser <bale_id> <role> [name...]
   /setrole <bale_id> <role>
-  /setscope <bale_id> <scope>
+  /setscope <bale_id> <scope>  (ابزار قدیمی؛ معمولاً لازم نیست)
 /reset — پاک کردن جلسه آپلود و وضعیت ورود جاری
 """.format(
     critical=int(CRITICAL_DAYS) if CRITICAL_DAYS == int(CRITICAL_DAYS) else CRITICAL_DAYS,
@@ -119,6 +122,23 @@ class BotApp:
         parts = [u.get("first_name") or "", u.get("last_name") or ""]
         name = " ".join(p for p in parts if p).strip()
         return name or u.get("username") or str(u.get("id"))
+
+    @staticmethod
+    def _format_actor(user: dict | None, *, bale_user_id: str | int | None = None) -> str:
+        """Human-readable «ثبت‌کننده: name (id)» for replies / lists."""
+        uid = str(
+            (user or {}).get("bale_user_id")
+            if user is not None
+            else (bale_user_id if bale_user_id is not None else "")
+        ).strip()
+        name = ""
+        if user:
+            name = str(user.get("display_name") or "").strip()
+        if not name and uid:
+            name = uid
+        if name and uid and name != uid:
+            return f"{name} ({uid})"
+        return name or uid or "—"
 
     def _reply(self, message: dict, text: str, markup: dict | None = None) -> None:
         self.client.send_message(self._chat_id(message), text, reply_markup=markup)
@@ -351,10 +371,12 @@ class BotApp:
         return "\n".join(lines)
 
     def _welcome_text(self, user: dict) -> str:
+        scope = (user.get("scope") or "").strip()
+        scope_line = f"حوزه: {scope}\n" if scope else ""
         return (
             "سلام! به بازوی «گزارش مواد / تاندیش» خوش آمدید.\n\n"
             f"نقش شما: {role_label(user['role'])}\n"
-            f"حوزه: {user.get('scope') or '—'}\n\n"
+            f"{scope_line}\n"
             + (
                 "برای نقش تکنسین فقط ورود «موجودی روزانه سایت» فعال است.\n"
                 "از منو یکی از گروه‌های اسلب / بلوم / بیلت را انتخاب و مقادیر را یکی‌یکی بفرستید."
@@ -468,7 +490,7 @@ class BotApp:
             kb.users_menu(),
         )
 
-    def _invite_message_text(self, role: str, scope: str | None) -> str:
+    def _invite_message_text(self, role: str, scope: str | None = None) -> str:
         """Formal Persian invitation body for the invitee (no bot username / raw URL)."""
         role_fa = role_label(role)
         lines = [
@@ -478,8 +500,8 @@ class BotApp:
             "",
             f"نقش تعریف‌شده برای شما: {role_fa}",
         ]
-        if scope and role == "responsible_officer":
-            lines.append(f"حوزه: {scope}")
+        # scope is kept for backward compat on old invites but not shown for new ones
+        _ = scope
         lines.extend(
             [
                 "",
@@ -561,27 +583,16 @@ class BotApp:
                 self._reply(message, "فقط مالک می‌تواند نقش مالک بدهد.", kb.users_menu())
                 self._clear_users_pending(uid)
                 return True
-            if role == "responsible_officer":
-                self._users_pending[uid] = {"mode": "add_scope", "role": role}
-                self._reply(
-                    message,
-                    "حوزه (scope) کاردان مسئول را به‌صورت متن بفرستید (مثال: خط-A):",
-                    kb.users_menu(),
-                )
-                return True
+            # responsible_officer: no scope text — same invite path as other roles
             self._clear_users_pending(uid)
             self._create_and_send_invite(message, user, role, None)
             return True
 
-        # --- add: scope text ---
+        # Legacy: if an old pending add_scope somehow remains, invite without scope
         if mode == "add_scope":
             role = pending.get("role") or "responsible_officer"
-            scope = raw
-            if not scope:
-                self._reply(message, "حوزه خالی است. دوباره بفرستید:", kb.users_menu())
-                return True
             self._clear_users_pending(uid)
-            self._create_and_send_invite(message, user, role, scope)
+            self._create_and_send_invite(message, user, role, None)
             return True
 
         # --- edit: pick user id ---
@@ -697,7 +708,7 @@ class BotApp:
         if len(args) < 2:
             self._reply(
                 message,
-                "فرمت:\n/adduser <bale_id> <owner|manager|responsible_officer|technician> [scope] [name...]",
+                "فرمت:\n/adduser <bale_id> <owner|manager|responsible_officer|technician> [name...]",
             )
             return
         target_id, role = args[0], args[1]
@@ -708,21 +719,7 @@ class BotApp:
             self._reply(message, "فقط مالک می‌تواند نقش مالک بدهد.")
             return
         scope = None
-        name_parts: list[str] = []
-        if len(args) >= 3:
-            if role == "responsible_officer":
-                scope = args[2]
-                name_parts = args[3:]
-            else:
-                if role == "technician" and len(args) >= 3:
-                    maybe_scope = args[2]
-                    if len(args) >= 4:
-                        scope = maybe_scope
-                        name_parts = args[3:]
-                    else:
-                        name_parts = [maybe_scope]
-                else:
-                    name_parts = args[2:]
+        name_parts: list[str] = args[2:] if len(args) >= 3 else []
         display = " ".join(name_parts).strip() or target_id
         created = self.db.upsert_user(target_id, role=role, display_name=display, scope=scope)
         self._reply(
@@ -789,7 +786,9 @@ class BotApp:
             return
         self._reply(
             message,
-            f"حوزه به‌روز شد: {updated['bale_user_id']} → {updated.get('scope')}",
+            f"حوزه به‌روز شد: {updated['bale_user_id']} → {updated.get('scope')}
+"
+            "(توجه: حوزه برای کاردان مسئول دیگر در فیلتر داده استفاده نمی‌شود؛ ابزار قدیمی.)",
             kb.main_menu(user),
         )
 
@@ -965,13 +964,15 @@ class BotApp:
             if pending == "product_inventory"
             else kb.main_menu(user)
         )
+        actor_line = f"ثبت‌کننده: {self._format_actor(user)}"
         self._reply(
             message,
             (
                 f"✅ فایل «{label}» دریافت شد.\n"
                 f"از {result.raw_row_count} ردیف خام، {result.kept_row_count} ردیف نگه داشته شد."
                 f"{dropped_note}{extra_cols_note}{catalog_note}\n"
-                f"نسخه تمیز ذخیره و در پایگاه‌داده ثبت شد.\n\n"
+                f"نسخه تمیز ذخیره و در پایگاه‌داده ثبت شد.\n"
+                f"{actor_line}\n\n"
             )
             + self._status_text(session),
             reply_menu,
@@ -1501,11 +1502,25 @@ class BotApp:
         self._clear_site_stock_pending(uid)
         self._clear_catalog_pending(uid)
         self.db.set_pending_file_type(user["bale_user_id"], None)
+        day = self.db.tehran_today()
+        actor_note = ""
+        today_entries = self.db.list_site_stock_entries(entry_date=day)
+        if today_entries:
+            last = max(today_entries, key=lambda e: e.get("created_at") or "")
+            actor_note = (
+                "\nآخرین ثبت‌کننده امروز: "
+                + (
+                    f"{last.get('actor_display_name')} ({last.get('bale_user_id')})"
+                    if last.get("actor_display_name")
+                    else self._format_actor(None, bale_user_id=last.get("bale_user_id"))
+                )
+            )
         self._reply(
             message,
             "موجودی روزانه سایت\n"
             "یکی از گروه‌های زیر را انتخاب کنید؛ سپس مقادیر اقلام را یکی‌یکی بفرستید.\n"
-            f"تاریخ ورود (تهران): {self.db.tehran_today()}",
+            f"تاریخ ورود (تهران): {day}"
+            f"{actor_note}",
             kb.site_stock_menu(),
         )
 
@@ -1606,6 +1621,7 @@ class BotApp:
                 item_id=item["id"],
                 quantity=qty,
                 item_name_snapshot=item.get("name_desc"),
+                actor_display_name=user.get("display_name"),
             )
         except (ValueError, KeyError) as exc:
             self._reply(message, f"خطا در ذخیره: {exc}", kb.site_stock_entry_menu())
@@ -1662,6 +1678,7 @@ class BotApp:
         else:
             lines.append("(هیچ مقداری ثبت نشد)")
         lines.append("")
+        lines.append(f"ثبت‌کننده: {self._format_actor(user)}")
         lines.append("داده‌ها در پایگاه‌داده ذخیره شدند.")
         self._reply(message, "\n".join(lines), kb.site_stock_menu())
 

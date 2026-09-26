@@ -70,6 +70,7 @@ class Database:
                     pdf_path TEXT NOT NULL,
                     row_counts_json TEXT,
                     created_at TEXT NOT NULL,
+                    created_by TEXT,
                     FOREIGN KEY(session_id) REFERENCES upload_sessions(id)
                 );
 
@@ -126,6 +127,7 @@ class Database:
                     entry_date TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     session_id INTEGER,
+                    actor_display_name TEXT,
                     UNIQUE(entry_date, tundish_group, item_id),
                     FOREIGN KEY(item_id) REFERENCES catalog_items(id),
                     FOREIGN KEY(session_id) REFERENCES upload_sessions(id)
@@ -165,6 +167,7 @@ class Database:
                 """
             )
             self._migrate_users_role_check(conn)
+            self._migrate_add_columns(conn)
             self._ensure_default_category_codes(conn)
 
     def _ensure_default_category_codes(self, conn: sqlite3.Connection) -> None:
@@ -218,6 +221,38 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_users_bale ON users(bale_user_id);
             """
         )
+
+    def _migrate_add_columns(self, conn: sqlite3.Connection) -> None:
+        """Safe ALTER TABLE ADD COLUMN for older DBs."""
+        additions = [
+            ("catalog_group_assignments", "assigned_by", "TEXT"),
+            ("reports", "created_by", "TEXT"),
+            ("site_stock_entries", "actor_display_name", "TEXT"),
+        ]
+        for table, column, coltype in additions:
+            try:
+                cols = {
+                    r[1]
+                    for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+            except sqlite3.OperationalError:
+                continue
+            if column in cols:
+                continue
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+            except sqlite3.OperationalError:
+                pass
+        try:
+            conn.execute(
+                """
+                UPDATE reports
+                SET created_by = bale_user_id
+                WHERE created_by IS NULL OR created_by = ''
+                """
+            )
+        except sqlite3.OperationalError:
+            pass
 
     # --- users ---
     def upsert_user(
@@ -650,19 +685,21 @@ class Database:
             )
 
     def save_report(
-
         self,
         bale_user_id: str | int,
         session_id: int,
         pdf_path: str,
         row_counts: dict[str, int],
+        *,
+        created_by: str | int | None = None,
     ) -> int:
+        actor = str(created_by if created_by is not None else bale_user_id)
         with self.connect() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO reports
-                (bale_user_id, session_id, pdf_path, row_counts_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                (bale_user_id, session_id, pdf_path, row_counts_json, created_at, created_by)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(bale_user_id),
@@ -670,6 +707,7 @@ class Database:
                     pdf_path,
                     json.dumps(row_counts, ensure_ascii=False),
                     _utcnow(),
+                    actor,
                 ),
             )
             return int(cur.lastrowid)
@@ -969,6 +1007,7 @@ class Database:
         item_id: str,
         quantity: float,
         item_name_snapshot: str | None = None,
+        actor_display_name: str | None = None,
         pallet_qty: float | None = None,
         unit_qty: float | None = None,
         quantity_detail: dict | list | None = None,
@@ -995,13 +1034,14 @@ class Database:
         )
         now = _utcnow()
         with self.connect() as conn:
+            actor_name = (actor_display_name or "").strip() or None
             conn.execute(
                 """
                 INSERT INTO site_stock_entries
                     (bale_user_id, tundish_group, item_id, item_name_snapshot,
                      quantity, pallet_qty, unit_qty, quantity_detail,
-                     entry_date, created_at, session_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     entry_date, created_at, session_id, actor_display_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(entry_date, tundish_group, item_id) DO UPDATE SET
                     bale_user_id = excluded.bale_user_id,
                     item_name_snapshot = excluded.item_name_snapshot,
@@ -1010,7 +1050,8 @@ class Database:
                     unit_qty = excluded.unit_qty,
                     quantity_detail = excluded.quantity_detail,
                     created_at = excluded.created_at,
-                    session_id = COALESCE(excluded.session_id, site_stock_entries.session_id)
+                    session_id = COALESCE(excluded.session_id, site_stock_entries.session_id),
+                    actor_display_name = COALESCE(excluded.actor_display_name, site_stock_entries.actor_display_name)
                 """,
                 (
                     str(bale_user_id),
@@ -1024,6 +1065,7 @@ class Database:
                     day,
                     now,
                     session_id,
+                    actor_name,
                 ),
             )
             row = conn.execute(

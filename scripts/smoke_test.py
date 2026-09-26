@@ -22,7 +22,7 @@ from analytics.tundish import (
     suggest_requests,
     surplus_materials,
 )
-from auth.rbac import can_configure_catalog
+from auth.rbac import can_configure_catalog, filter_dataframe_for_user
 from config import CRITICAL_DAYS, DEFAULT_CATEGORY_CODES, REQUIRED_COLUMNS, SITE_STOCK_GROUPS
 from db.models import Database
 from excel.id_parse import extract_item_id, extract_product_name
@@ -71,7 +71,8 @@ def main() -> int:
     db.upsert_user("998", role="owner", display_name="مالک تست")
     db.upsert_user("999", role="manager", display_name="مدیر تست")
     db.upsert_user("1001", role="technician", display_name="علی رضایی", scope="خط-A")
-    db.upsert_user("1002", role="responsible_officer", display_name="مریم احمدی", scope="خط-B")
+    # officer: no scope required — identity is bale_user_id
+    db.upsert_user("1002", role="responsible_officer", display_name="مریم احمدی")
 
     # --- role-specific main menus ---
     def menu_texts(menu: dict) -> set[str]:
@@ -131,6 +132,13 @@ def main() -> int:
     revived = db.consume_invite(inv2["token"], "555001", display_name="دوباره فعال")
     assert revived["role"] == "technician" and revived["active"] == 1
 
+    # officer invite does NOT need scope
+    inv_off = db.create_invite(role="responsible_officer", created_by="998", scope=None)
+    assert inv_off.get("scope") in (None, "")
+    off_new = db.consume_invite(inv_off["token"], "555010", display_name="کاردان جدید")
+    assert off_new["role"] == "responsible_officer"
+    assert off_new.get("scope") in (None, "")
+    assert off_new["bale_user_id"] == "555010"
 
     # site stock submenu labels
     site_menu = menu_texts(kb.site_stock_menu())
@@ -226,7 +234,19 @@ def main() -> int:
     assert tm["product_inventory"]["visible_rows"] == mm["product_inventory"]["visible_rows"]
     off = db.get_user("1002")
     of, om = process_session_files(paths, off)
-    assert om["tank_consumption"]["visible_rows"] == 4  # خط-B
+    # officer is FULL_DATA: sees all tank rows (even with domain column / leftover scope)
+    assert om["tank_consumption"]["visible_rows"] == mm["tank_consumption"]["visible_rows"]
+    # explicit filter_dataframe: officer with domain column + empty/any scope → all rows
+    tank_df = mf["tank_consumption"]
+    assert "domain" in [c.lower() for c in tank_df.columns] or any(
+        c.lower() == "domain" for c in tank_df.columns
+    )
+    filtered_off = filter_dataframe_for_user(tank_df, off)
+    assert len(filtered_off) == len(tank_df)
+    # even if scope were set historically, officer still sees all
+    off_scoped = dict(off)
+    off_scoped["scope"] = "خط-B"
+    assert len(filter_dataframe_for_user(tank_df, off_scoped)) == len(tank_df)
 
     rates = daily_rates(mf["tank_consumption"], mf["monthly_consumption"])
     assert not rates.empty
@@ -297,6 +317,7 @@ def main() -> int:
     latest = db.get_latest_extracted("999", "product_inventory")
     assert latest and latest["clean_path"] == str(result.clean_path)
     assert latest["row_count"] == 4
+    assert str(latest["bale_user_id"]) == "999"
 
     clean_paths = {
         "tank_consumption": paths["tank_consumption"],
@@ -348,17 +369,23 @@ def main() -> int:
         item_id="ACID01",
         quantity=12.5,
         item_name_snapshot="ACID01 - اسید سولفوریک",
+        actor_display_name="علی رضایی",
     )
     assert e1["entry_date"] == day
     assert float(e1["quantity"]) == 12.5
-    # re-entry same day upserts
+    assert str(e1["bale_user_id"]) == "1001"
+    assert e1.get("actor_display_name") == "علی رضایی"
+    # re-entry same day upserts and updates actor
     e1b = db.upsert_site_stock_entry(
-        bale_user_id="1001",
+        bale_user_id="999",
         tundish_group="slab",
         item_id="ACID01",
         quantity=15,
+        actor_display_name="مدیر تست",
     )
     assert float(e1b["quantity"]) == 15.0
+    assert str(e1b["bale_user_id"]) == "999"
+    assert e1b.get("actor_display_name") == "مدیر تست"
     same_day = db.list_site_stock_entries(entry_date=day, tundish_group="slab", item_id="ACID01")
     assert len(same_day) == 1
 
@@ -392,6 +419,25 @@ def main() -> int:
     assert "catalog_group_assignments" in tables
     assert "site_stock_entries" in tables
     assert "invites" in tables
+    # reports.created_by + catalog assigned_by present
+    with db.connect() as conn:
+        report_cols = {r[1] for r in conn.execute("PRAGMA table_info(reports)").fetchall()}
+        assign_cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(catalog_group_assignments)").fetchall()
+        }
+        stock_cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(site_stock_entries)").fetchall()
+        }
+    assert "created_by" in report_cols
+    assert "bale_user_id" in report_cols
+    assert "assigned_by" in assign_cols
+    assert "actor_display_name" in stock_cols
+    rid = db.save_report("998", sess["id"], "/tmp/smoke_report.pdf", {"n": 1})
+    assert rid > 0
+    with db.connect() as conn:
+        rrow = dict(conn.execute("SELECT * FROM reports WHERE id = ?", (rid,)).fetchone())
+    assert str(rrow["bale_user_id"]) == "998"
+    assert str(rrow["created_by"]) == "998"
 
     print("SMOKE OK CRITICAL_DAYS=", CRITICAL_DAYS, "site_stock_date=", day)
     return 0

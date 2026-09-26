@@ -56,8 +56,8 @@ ROLES = {
 
 # Roles that can manage users and see full admin menus
 ADMIN_ROLES = frozenset({"owner", "manager"})
-# Roles that see all report rows
-FULL_DATA_ROLES = frozenset({"owner", "manager"})
+# Roles that see all report rows (plant-wide; no domain/scope filter)
+FULL_DATA_ROLES = frozenset({"owner", "manager", "responsible_officer"})
 
 
 TUNDISH_TYPES = {
