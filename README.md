@@ -29,7 +29,7 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash
-# سپس در ترمینال واقعی (ویزارد توکن):
+# سپس در ترمینال واقعی (ویزارد توکن و نام کاربری ربات):
 cd special-materials-robot-project && bash install.sh
 ```
 
@@ -38,7 +38,7 @@ cd special-materials-robot-project && bash install.sh
 ```bash
 git clone https://github.com/silent4time/special-materials-robot-project.git
 cd special-materials-robot-project
-bash install.sh                 # ویزارد فارسی: توکن + اختیاری systemd
+bash install.sh                 # ویزارد فارسی: توکن + نام کاربری ربات + اختیاری systemd
 bash install.sh --systemd --start
 ```
 

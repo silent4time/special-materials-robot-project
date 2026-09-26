@@ -238,6 +238,7 @@ token_format_ok() {
 validate_token_getme() {
   local token="$1"
   local url resp ok
+  GETME_USERNAME=""
   url="https://tapi.bale.ai/bot${token}/getMe"
   if ! need_cmd curl; then
     warn "curl نیست — اعتبارسنجی getMe رد شد."
@@ -245,9 +246,11 @@ validate_token_getme() {
   fi
   resp="$(curl -fsS --max-time 12 "$url" 2>/dev/null || true)"
   if printf '%s' "$resp" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
-    local uname
-    uname="$(printf '%s' "$resp" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    local uname json
+    json="$(printf '%s' "$resp" | tr -d '\r\n')"
+    uname="$(printf '%s' "$json" | sed -n 's/.*"result"[[:space:]]*:[[:space:]]*{[^}]*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
     if [[ -n "$uname" ]]; then
+      GETME_USERNAME="$uname"
       log "✓ توکن معتبر است (getMe: @$uname)"
     else
       log "✓ توکن معتبر است (getMe ok)"
@@ -298,7 +301,7 @@ prompt_default() {
 
 run_env_wizard() {
   local root="$1"
-  local token bot_user do_systemd critical admin_existing
+  local token bot_user bot_user_default suggested_username previous_bot_user do_systemd critical admin_existing
   cd "$root"
 
   cat <<'WIZ'
@@ -321,6 +324,7 @@ WIZ
       continue
     fi
     if validate_token_getme "$token"; then
+      suggested_username="$GETME_USERNAME"
       break
     fi
     local retry
@@ -331,8 +335,25 @@ WIZ
     esac
   done
 
-  bot_user="$(prompt_default "۲) نام کاربری بازو بدون @" "nasoz_bot")"
-  bot_user="$(printf '%s' "$bot_user" | sed 's/^@//' | tr -d '[:space:]')"
+  # Keep an existing username as a fallback, but always ask the question.
+  previous_bot_user=""
+  if [[ -f .env ]]; then
+    previous_bot_user="$(sed -n 's/^BOT_USERNAME=//p' .env | head -1 || true)"
+    previous_bot_user="${previous_bot_user#\"}"
+    previous_bot_user="${previous_bot_user%\"}"
+    previous_bot_user="${previous_bot_user#\'}"
+    previous_bot_user="${previous_bot_user%\'}"
+    previous_bot_user="$(printf '%s' "$previous_bot_user" | tr -d '@[:space:]')"
+  fi
+  bot_user_default="${suggested_username:-$previous_bot_user}"
+  while true; do
+    bot_user="$(prompt_default "۲) نام کاربری ربات در بله (بدون @، برای لینک دعوت ضروری است)" "$bot_user_default")"
+    bot_user="$(printf '%s' "$bot_user" | tr -d '@[:space:]')"
+    if [[ -n "$bot_user" ]]; then
+      break
+    fi
+    warn "نام کاربری ربات الزامی است."
+  done
 
   do_systemd="$(prompt_default "۳) آیا همین الان سرویس systemd نصب و استارت شود؟ (y/N)" "N")"
 
@@ -344,6 +365,7 @@ WIZ
 
   write_env_file "$root" "$token" "$bot_user" "$critical" ""
   log "✓ فایل .env نوشته شد (توکن …${token: -4})"
+  log "نام کاربری ذخیره‌شده: @${bot_user}"
   log "نکته: ADMIN_BALE_USER_ID لازم نیست — اولین /start مالک می‌شود."
 
   case "${do_systemd:-}" in
@@ -460,7 +482,7 @@ print_next_steps() {
 
   1) اگر هنوز توکن ندارید، در ترمینال واقعی:
        cd $root && bash install.sh
-     (ویزارد توکن را می‌پرسد و .env می‌نویسد)
+     (ویزارد توکن و نام کاربری ربات را می‌پرسد و .env می‌نویسد)
 
   2) ربات را روشن کنید و در بله /start بزنید —
      اولین کاربر به‌صورت خودکار مالک می‌شود.
