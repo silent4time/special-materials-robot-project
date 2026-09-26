@@ -14,15 +14,15 @@ from db.models import Database  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Seed admin manager user")
+    parser = argparse.ArgumentParser(description="Seed owner (admin) user")
     parser.add_argument("--user-id", default=ADMIN_BALE_USER_ID, help="Bale user id")
-    parser.add_argument("--name", default="مدیر سیستم")
+    parser.add_argument("--name", default="مالک سیستم")
     args = parser.parse_args()
     if not args.user_id:
         print("ADMIN_BALE_USER_ID یا --user-id لازم است.", file=sys.stderr)
         return 1
     db = Database()
-    user = db.upsert_user(args.user_id, role="manager", display_name=args.name, scope=None)
+    user = db.upsert_user(args.user_id, role="owner", display_name=args.name, scope=None)
     print(f"Admin OK: {user}")
     return 0
 

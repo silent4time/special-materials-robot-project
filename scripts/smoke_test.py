@@ -20,6 +20,7 @@ def main() -> int:
     if db_path.exists():
         db_path.unlink()
     db = Database(db_path)
+    db.upsert_user("998", role="owner", display_name="مالک تست")
     db.upsert_user("999", role="manager", display_name="مدیر تست")
     db.upsert_user("1001", role="technician", display_name="علی رضایی", scope="خط-A")
     db.upsert_user("1002", role="responsible_officer", display_name="مریم احمدی", scope="خط-B")
@@ -30,7 +31,7 @@ def main() -> int:
         "monthly_consumption": str(ROOT / "samples" / "03_monthly_consumption.xlsx"),
     }
 
-    for uid, label in [("999", "manager"), ("1002", "officer"), ("1001", "tech")]:
+    for uid, label in [("998", "owner"), ("999", "manager"), ("1002", "officer"), ("1001", "tech")]:
         user = db.get_user(uid)
         frames, metas = process_session_files(paths, user)
         out = ROOT / "reports" / f"smoke_{label}.pdf"

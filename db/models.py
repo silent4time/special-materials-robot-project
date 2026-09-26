@@ -43,7 +43,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     bale_user_id TEXT NOT NULL UNIQUE,
                     display_name TEXT,
-                    role TEXT NOT NULL CHECK(role IN ('manager','responsible_officer','technician')),
+                    role TEXT NOT NULL CHECK(role IN ('owner','manager','responsible_officer','technician')),
                     scope TEXT,
                     active INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
@@ -76,6 +76,40 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_sessions_user ON upload_sessions(bale_user_id);
                 """
             )
+            self._migrate_users_role_check(conn)
+
+
+    def _migrate_users_role_check(self, conn: sqlite3.Connection) -> None:
+        """Recreate users table if CHECK constraint predates the owner role."""
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+        ).fetchone()
+        if not row or not row[0]:
+            return
+        sql = row[0]
+        if "'owner'" in sql:
+            return
+        conn.executescript(
+            """
+            CREATE TABLE users_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bale_user_id TEXT NOT NULL UNIQUE,
+                display_name TEXT,
+                role TEXT NOT NULL CHECK(role IN ('owner','manager','responsible_officer','technician')),
+                scope TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO users_new
+                (id, bale_user_id, display_name, role, scope, active, created_at, updated_at)
+            SELECT id, bale_user_id, display_name, role, scope, active, created_at, updated_at
+            FROM users;
+            DROP TABLE users;
+            ALTER TABLE users_new RENAME TO users;
+            CREATE INDEX IF NOT EXISTS idx_users_bale ON users(bale_user_id);
+            """
+        )
 
     # --- users ---
     def upsert_user(
@@ -294,12 +328,12 @@ class Database:
             )
             return int(cur.lastrowid)
 
-    def bootstrap_admin(self, admin_bale_user_id: str, display_name: str = "مدیر سیستم") -> None:
+    def bootstrap_admin(self, admin_bale_user_id: str, display_name: str = "مالک سیستم") -> None:
         if not admin_bale_user_id:
             return
         existing = self.get_user(admin_bale_user_id)
         if existing:
-            if existing["role"] != "manager":
-                self.set_role(admin_bale_user_id, "manager")
+            if existing["role"] not in ("owner", "manager"):
+                self.set_role(admin_bale_user_id, "owner")
             return
-        self.upsert_user(admin_bale_user_id, role="manager", display_name=display_name)
+        self.upsert_user(admin_bale_user_id, role="owner", display_name=display_name)

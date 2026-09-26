@@ -226,7 +226,7 @@ def generate_report(
 
     story: list = []
     story.append(Paragraph(rtl("گزارش مواد / خلاصه داده‌های آپلود‌شده"), styles["title"]))
-    role_fa = {"manager": "مدیر", "responsible_officer": "کاردان مسئول", "technician": "تکنسین"}.get(
+    role_fa = {"owner": "مالک", "manager": "مدیر", "responsible_officer": "کاردان مسئول", "technician": "تکنسین"}.get(
         user.get("role"), user.get("role")
     )
     info = (

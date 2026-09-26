@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from config import ROLES
+from config import ADMIN_ROLES, FULL_DATA_ROLES, ROLES
 from db.models import Database
 
 
@@ -30,7 +30,12 @@ def ensure_registered(db: Database, bale_user_id: str | int, display_name: str |
 
 
 def require_manager(user: dict | None) -> bool:
-    return bool(user and user.get("role") == "manager" and user.get("active"))
+    """True for owner or manager (admin menu / user management)."""
+    return bool(user and user.get("active") and user.get("role") in ADMIN_ROLES)
+
+
+def require_owner(user: dict | None) -> bool:
+    return bool(user and user.get("active") and user.get("role") == "owner")
 
 
 def role_label(role: str) -> str:
@@ -40,7 +45,7 @@ def role_label(role: str) -> str:
 def filter_dataframe_for_user(df: pd.DataFrame, user: dict[str, Any]) -> pd.DataFrame:
     """
     Apply RBAC row filters:
-    - manager: all rows
+    - owner / manager: all rows
     - responsible_officer: rows where domain/scope matches user.scope
     - technician: rows where assignee_id or assignee_name matches the user
     """
@@ -48,7 +53,7 @@ def filter_dataframe_for_user(df: pd.DataFrame, user: dict[str, Any]) -> pd.Data
         return df.copy() if df is not None else pd.DataFrame()
 
     role = user.get("role")
-    if role == "manager":
+    if role in FULL_DATA_ROLES:
         return df.copy()
 
     work = df.copy()
@@ -82,7 +87,7 @@ def filter_dataframe_for_user(df: pd.DataFrame, user: dict[str, Any]) -> pd.Data
 
 def can_generate_report(user: dict, session: dict, completeness: dict[str, bool]) -> tuple[bool, str]:
     """
-    Manager needs all three files.
+    Owner/manager need all three files.
     Officer/technician can generate with all three as well (filtered view).
     """
     if not user or not user.get("active"):

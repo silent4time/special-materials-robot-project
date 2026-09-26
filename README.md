@@ -73,7 +73,8 @@ python main.py
 
 | نقش | کلید انگلیسی | دسترسی در گزارش |
 |-----|--------------|-----------------|
-| مدیر | `manager` | همه ردیف‌ها + دستورات مدیریت کاربران |
+| مالک | `owner` | همه ردیف‌ها + مدیریت کاربران؛ تنها کسی که می‌تواند نقش مالک بدهد. ادمین اولیه از `.env` به‌عنوان مالک ساخته می‌شود |
+| مدیر | `manager` | همه ردیف‌ها + دستورات مدیریت کاربران (به‌جز اعطای نقش مالک) |
 | کاردان مسئول | `responsible_officer` | فقط ردیف‌هایی که ستون `domain` برابر `scope` کاربر است |
 | تکنسین | `technician` | فقط ردیف‌هایی که `assignee_id` یا `assignee_name` با کاربر یکی است |
 
@@ -81,7 +82,7 @@ python main.py
 
 ```text
 /users
-/adduser <bale_id> <manager|responsible_officer|technician> [scope] [name...]
+/adduser <bale_id> <owner|manager|responsible_officer|technician> [scope] [name...]
 /setrole <bale_id> <role>
 /setscope <bale_id> <scope>
 /reset

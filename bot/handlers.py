@@ -9,6 +9,7 @@ from auth.rbac import (
     can_generate_report,
     ensure_registered,
     require_manager,
+    require_owner,
     role_label,
 )
 from bot import keyboards as kb
@@ -139,17 +140,20 @@ class BotApp:
     def cmd_adduser(self, message: dict, args: list[str]) -> None:
         user = self._user_or_deny(message)
         if not user or not require_manager(user):
-            self._reply(message, "فقط مدیر می‌تواند کاربر اضافه کند.")
+            self._reply(message, "فقط مالک یا مدیر می‌تواند کاربر اضافه کند.")
             return
         if len(args) < 2:
             self._reply(
                 message,
-                "فرمت:\n/adduser <bale_id> <manager|responsible_officer|technician> [scope] [name...]",
+                "فرمت:\n/adduser <bale_id> <owner|manager|responsible_officer|technician> [scope] [name...]",
             )
             return
         target_id, role = args[0], args[1]
         if role not in ROLES:
             self._reply(message, "نقش نامعتبر. یکی از: " + "، ".join(ROLES))
+            return
+        if role == "owner" and not require_owner(user):
+            self._reply(message, "فقط مالک می‌تواند نقش مالک بدهد.")
             return
         scope = None
         name_parts: list[str] = []
@@ -182,10 +186,13 @@ class BotApp:
     def cmd_setrole(self, message: dict, args: list[str]) -> None:
         user = self._user_or_deny(message)
         if not user or not require_manager(user):
-            self._reply(message, "فقط مدیر.")
+            self._reply(message, "فقط مالک یا مدیر.")
             return
         if len(args) < 2 or args[1] not in ROLES:
-            self._reply(message, "فرمت: /setrole <bale_id> <role>")
+            self._reply(message, "فرمت: /setrole <bale_id> <owner|manager|responsible_officer|technician>")
+            return
+        if args[1] == "owner" and not require_owner(user):
+            self._reply(message, "فقط مالک می‌تواند نقش مالک بدهد.")
             return
         try:
             updated = self.db.set_role(args[0], args[1])
@@ -201,7 +208,7 @@ class BotApp:
     def cmd_setscope(self, message: dict, args: list[str]) -> None:
         user = self._user_or_deny(message)
         if not user or not require_manager(user):
-            self._reply(message, "فقط مدیر.")
+            self._reply(message, "فقط مالک یا مدیر.")
             return
         if len(args) < 2:
             self._reply(message, "فرمت: /setscope <bale_id> <scope>")

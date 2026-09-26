@@ -41,10 +41,16 @@ FILE_TYPES = {
 }
 
 ROLES = {
+    "owner": "مالک",
     "manager": "مدیر",
     "responsible_officer": "کاردان مسئول",
     "technician": "تکنسین",
 }
+
+# Roles that can manage users and see full admin menus
+ADMIN_ROLES = frozenset({"owner", "manager"})
+# Roles that see all report rows
+FULL_DATA_ROLES = frozenset({"owner", "manager"})
 
 REQUIRED_COLUMNS = {
     "tank_consumption": [
