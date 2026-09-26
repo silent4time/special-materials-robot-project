@@ -33,6 +33,22 @@ def main() -> int:
     if ADMIN_BALE_USER_ID:
         db.bootstrap_admin(ADMIN_BALE_USER_ID)
         logger.info("Admin bootstrap: %s", ADMIN_BALE_USER_ID)
+
+        # Keep the first-run demo usable after a restart, but never replace a
+        # real warehouse upload once an inventory extract exists.
+        if db.get_latest_extracted(ADMIN_BALE_USER_ID, "product_inventory") is None:
+            try:
+                from scripts.seed_real_samples import seed as seed_real_samples
+
+                seeded = seed_real_samples(ADMIN_BALE_USER_ID, db=db)
+                logger.info(
+                    "Seeded real samples: inventory=%s, monthly=%s, catalog=%s",
+                    seeded["inventory"]["kept"],
+                    seeded["monthly"]["kept"],
+                    seeded["catalog"],
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Initial real sample seed failed")
     else:
         logger.warning("ADMIN_BALE_USER_ID خالی است — مدیر اولیه ساخته نشد.")
 
