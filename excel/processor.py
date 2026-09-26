@@ -35,6 +35,7 @@ COLUMN_ALIASES = {
         "میزان",
         "تعداد",
         "موجودی",
+        "موجودي",  # Arabic yeh variant (normalized too)
         "stock",
     ],
     "unit": ["unit", "واحد"],
@@ -47,6 +48,7 @@ COLUMN_ALIASES = {
         "category_code",
         "category",
         "کد دسته بندی",
+        "کد دسته بندي",  # Arabic yeh variant
         "کد دسته‌بندی",
         "کد_دسته_بندی",
         "کد دسته",
@@ -85,14 +87,25 @@ class ExtractResult:
     drop_reasons: dict[str, int] = field(default_factory=dict)
 
 
+def _normalize_fa_header(value: object) -> str:
+    """Normalize Excel header for alias match (Arabic/Persian yeh/kaf, spaces)."""
+    text = "" if value is None else str(value)
+    text = text.replace("ي", "ی")  # Arabic yeh ي → Persian ی
+    text = text.replace("ى", "ی")  # Alef maksura ى → ی
+    text = text.replace("ك", "ک")  # Arabic kaf ك → Persian ک
+    text = " ".join(text.strip().split())
+    return text.casefold()
+
+
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     rename: dict[str, str] = {}
-    lower_map = {str(c).strip().lower(): c for c in df.columns}
+    # Map normalized header → original column label
+    norm_map = {_normalize_fa_header(c): c for c in df.columns}
     for canonical, aliases in COLUMN_ALIASES.items():
         for alias in aliases:
-            key = alias.lower()
-            if key in lower_map:
-                rename[lower_map[key]] = canonical
+            key = _normalize_fa_header(alias)
+            if key in norm_map:
+                rename[norm_map[key]] = canonical
                 break
     out = df.rename(columns=rename)
     out.columns = [str(c).strip() for c in out.columns]
@@ -282,13 +295,76 @@ def project_required_columns(df: pd.DataFrame, file_type: str) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
+# Preferred detail sheet name used by plant exports (warehouse + monthly).
+_DETAIL_SHEET = "ریز اطلاعات"
+# Warehouse inventory header fingerprints (after FA normalization).
+_WAREHOUSE_HEADER_HINTS = (
+    "کد دسته بندی",
+    "کد و شرح کالا",
+    "موجودی",
+)
+
+
+def _sheet_names(path: Path) -> list[str]:
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        return list(wb.sheetnames)
+    finally:
+        wb.close()
+
+
+def _headers_of_sheet(path: Path, sheet_name: str) -> list[str]:
+    peek = pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl", nrows=0)
+    return [str(c) for c in peek.columns]
+
+
+def _sheet_has_warehouse_headers(headers: list[str]) -> bool:
+    norms = {_normalize_fa_header(h) for h in headers}
+    needed = {_normalize_fa_header(h) for h in _WAREHOUSE_HEADER_HINTS}
+    return needed.issubset(norms)
+
+
+def _pick_excel_sheet(path: Path) -> str | int:
+    """Choose workbook sheet: «ریز اطلاعات» preferred, else warehouse 3-col, else first.
+
+    Rules (in order):
+    1. Sheet whose name is exactly «ریز اطلاعات»
+    2. Sheet whose name contains «ریز اطلاعات»
+    3. First sheet that looks like 3-column warehouse inventory
+    4. First sheet (pandas default index 0)
+    """
+    try:
+        names = _sheet_names(path)
+    except Exception:  # noqa: BLE001
+        return 0
+    if not names:
+        return 0
+    if _DETAIL_SHEET in names:
+        return _DETAIL_SHEET
+    for name in names:
+        if _DETAIL_SHEET in str(name):
+            return name
+    # Optional: detect warehouse headers across sheets
+    for name in names:
+        try:
+            headers = _headers_of_sheet(path, name)
+        except Exception:  # noqa: BLE001
+            continue
+        if _sheet_has_warehouse_headers(headers):
+            return name
+    return names[0]
+
+
 def _read_raw_excel(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise ExcelValidationError(f"فایل یافت نشد: {path}")
     if path.suffix.lower() not in {".xlsx", ".xlsm"}:
         raise ExcelValidationError("فقط فایل Excel با پسوند .xlsx پذیرفته می‌شود.")
+    sheet = _pick_excel_sheet(path)
     try:
-        df = pd.read_excel(path, engine="openpyxl")
+        df = pd.read_excel(path, sheet_name=sheet, engine="openpyxl")
     except Exception as exc:  # noqa: BLE001
         raise ExcelValidationError(f"خواندن Excel ناموفق بود: {exc}") from exc
     if df.empty:

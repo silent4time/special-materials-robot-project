@@ -3,7 +3,7 @@
 Default assumption (adjust here if the plant confirms a different format):
 
   Take the leading token of digits and optional letters before the first
-  whitespace, spaced hyphen `` - ``, or en-dash ``–`` in the cell text.
+  whitespace, spaced hyphen `` - ``, en-dash ``–``, or em-dash ``—`` in the cell text.
 
 Examples
 --------
@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 
 # Split on spaced hyphen/en-dash first, else first whitespace run.
-_SPLIT_RE = re.compile(r"\s+[-–]\s+|\s+")
+_SPLIT_RE = re.compile(r"\s+[-–—]\s+|\s+")
 # Leading id: letters/digits with at least one digit (easy to tighten later).
 _ID_TOKEN_RE = re.compile(r"^[0-9A-Za-z]*\d[0-9A-Za-z]*$")
 
