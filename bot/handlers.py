@@ -786,9 +786,10 @@ class BotApp:
             return
         self._reply(
             message,
-            f"حوزه به‌روز شد: {updated['bale_user_id']} → {updated.get('scope')}
-"
-            "(توجه: حوزه برای کاردان مسئول دیگر در فیلتر داده استفاده نمی‌شود؛ ابزار قدیمی.)",
+            (
+                f"حوزه به‌روز شد: {updated['bale_user_id']} → {updated.get('scope')}\n"
+                "(توجه: حوزه برای کاردان مسئول دیگر در فیلتر داده استفاده نمی‌شود؛ ابزار قدیمی.)"
+            ),
             kb.main_menu(user),
         )
 
