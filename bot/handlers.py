@@ -2587,7 +2587,7 @@ class BotApp:
             message,
             "موجودی روزانه سایت\n"
             "یکی از گروه‌های زیر را انتخاب کنید؛ سپس مقادیر اقلام را یکی‌یکی بفرستید.\n"
-            f"تاریخ ورود (تهران): {format_date(day)}"
+            f"تاریخ ورود: {format_date(day)}"
             f"{actor_note}",
             kb.site_stock_menu(),
         )
