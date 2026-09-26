@@ -26,6 +26,13 @@ SURPLUS_FORECAST_DAYS = float(os.getenv("SURPLUS_FORECAST_DAYS", "30"))
 BALE_API_BASE = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}" if BALE_BOT_TOKEN else ""
 
 # دستیار هوشمند — local report-only (Ollama or compatible — no cloud LLM)
+# Default OFF: menu hidden; /assistant replies «فعلاً غیرفعال» unless explicitly enabled.
+ASSISTANT_ENABLED = os.getenv("ASSISTANT_ENABLED", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b").strip() or "qwen2.5:3b"
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "60"))

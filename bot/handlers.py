@@ -57,7 +57,7 @@ from bot.settings_text import (
     format_invite_text,
     format_welcome_text,
 )
-from config import BOT_ASSETS_DIR, BOT_USERNAME, CRITICAL_DAYS, FILE_TYPES, REPORT_DIR, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
+from config import ASSISTANT_ENABLED, BOT_ASSETS_DIR, BOT_USERNAME, CRITICAL_DAYS, FILE_TYPES, REPORT_DIR, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
 from db.models import Database
 from excel.inbound import (
     compute_inbound_delta,
@@ -107,7 +107,7 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • مواد بحرانی — پوشش < CRITICAL_DAYS={critical} روز
 • اگر موجودی روزانه سایت ثبت شده باشد، برای «موجودی و مواد بحرانی» به‌عنوان منبع باقیمانده سایت استفاده می‌شود
 • سربرگ PDF (اختیاری): از «تنظیمات ربات» → «سربرگ PDF» آپلود کنید؛ روی همه صفحات گزارش اعمال می‌شود
-• دستیار هوشمند — گفتگوی محلی با Ollama فقط دربارهٔ گزارش‌ها (غیرتکنسین؛ بدون API ابری)
+• دستیار هوشمند — فعلاً غیرفعال (گفتگوی محلی با Ollama؛ فقط با ASSISTANT_ENABLED=1 فعال می‌شود)
 
 درخواست مواد (مالک / مدیر / کاردان مسئول):
 • دکمه «🛒 درخواست مواد» در منوی اصلی
@@ -272,8 +272,38 @@ class BotApp:
             "monthly_consumption": session.get("monthly_path"),
         }
 
+    def _resolved_file_paths(self, user: dict, session: dict) -> dict[str, str | None]:
+        """Session slot first; fall back to latest extract clean_path if on disk.
+
+        Reports must keep working after a new empty session is created while
+        extracted_datasets still hold the last successful clean Excel files.
+        """
+        uid = str(user["bale_user_id"])
+        type_to_col = {
+            "tank_consumption": "tank_path",
+            "product_inventory": "inventory_path",
+            "monthly_consumption": "monthly_path",
+        }
+        resolved: dict[str, str | None] = {}
+        for file_type, col in type_to_col.items():
+            path = session.get(col)
+            if path and Path(str(path)).exists():
+                resolved[file_type] = str(path)
+                continue
+            latest = self.db.get_latest_extracted(uid, file_type)
+            clean = latest.get("clean_path") if latest else None
+            if clean and Path(str(clean)).exists():
+                resolved[file_type] = str(clean)
+            else:
+                resolved[file_type] = None
+        return resolved
+
+    def _effective_completeness(self, user: dict, session: dict) -> dict[str, bool]:
+        """Like session_completeness, but treats on-disk latest extracts as present."""
+        return {k: bool(v) for k, v in self._resolved_file_paths(user, session).items()}
+
     def _load_frames(self, user: dict, session: dict) -> tuple[dict, dict]:
-        paths = self._session_paths(session)
+        paths = self._resolved_file_paths(user, session)
         # only process present paths
         present = {k: v for k, v in paths.items() if v}
         if not present:
@@ -418,7 +448,7 @@ class BotApp:
         if self._deny_technician(message, user):
             return None
         session = self.db.get_or_create_session(user["bale_user_id"])
-        completeness = self.db.session_completeness(session)
+        completeness = self._effective_completeness(user, session)
         missing = missing_files_for_goal(goal, completeness)
         if missing:
             self._reply(
@@ -3535,7 +3565,7 @@ class BotApp:
     ) -> tuple[list[dict], str | None]:
         """Build draft request lines from suggest_requests; error message or None."""
         session = self.db.get_or_create_session(user["bale_user_id"])
-        completeness = self.db.session_completeness(session)
+        completeness = self._effective_completeness(user, session)
         missing = missing_files_for_goal("suggest", completeness)
         if missing:
             return [], (
@@ -3961,7 +3991,7 @@ class BotApp:
     def _build_wr_lines(self, user: dict) -> tuple[list[dict], str | None]:
         """Suggest surplus lines from site stock (preferred) or warehouse remaining."""
         session = self.db.get_or_create_session(user["bale_user_id"])
-        completeness = self.db.session_completeness(session)
+        completeness = self._effective_completeness(user, session)
         # Need consumption rates + some remaining source
         missing = missing_files_for_goal("surplus", completeness)
         # surplus needs tank or monthly + inventory; but site stock can replace inventory
@@ -4270,12 +4300,43 @@ class BotApp:
     # ---------- dispatcher ----------
 
     # ---------- local report assistant ----------
+    _ASSISTANT_DISABLED_FA = (
+        "دستیار هوشمند فعلاً غیرفعال است.\n"
+        "این قابلیت به‌صورت موقت خاموش شده و گفتگو با Ollama باز نمی‌شود."
+    )
+
+    def _assistant_disabled_reply(self, message: dict, user: dict | None = None) -> None:
+        """Reply that دستیار هوشمند is temporarily off (no Ollama chat)."""
+        self._clear_report_assistant_pending(self._uid(message))
+        if user is None:
+            user = self.db.get_user(self._uid(message))
+        if user and user.get("role") != "technician":
+            menu = kb.analytics_menu()
+        elif user:
+            menu = kb.main_menu(user)
+        else:
+            menu = None
+        self._reply(message, self._ASSISTANT_DISABLED_FA, menu)
+
+    def cmd_assistant(self, message: dict) -> None:
+        """Slash command: /assistant — gated by ASSISTANT_ENABLED (default off)."""
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if not ASSISTANT_ENABLED:
+            self._assistant_disabled_reply(message, user)
+            return
+        self.on_report_assistant_start(message)
+
     def on_report_assistant_start(self, message: dict) -> None:
         """Enter report-only assistant conversation (all roles except technician)."""
         user = self._user_or_deny(message)
         if not user:
             return
         if self._deny_technician(message, user):
+            return
+        if not ASSISTANT_ENABLED:
+            self._assistant_disabled_reply(message, user)
             return
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(uid)
@@ -4306,6 +4367,9 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             self._clear_report_assistant_pending(uid)
+            return True
+        if not ASSISTANT_ENABLED:
+            self._assistant_disabled_reply(message, user)
             return True
         if user.get("role") == "technician":
             self._clear_report_assistant_pending(uid)
@@ -4395,6 +4459,7 @@ class BotApp:
                 "/status": lambda: self.on_status(message),
                 "/report": lambda: self.on_generate(message),
                 "/analytics": lambda: self.on_analytics_menu(message),
+                "/assistant": lambda: self.cmd_assistant(message),
             }
             handler = mapping.get(cmd)
             if handler:

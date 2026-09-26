@@ -1,7 +1,7 @@
 """Persian reply keyboards for upload flow, warehouse inventory submenu, site stock, and analytics."""
 from __future__ import annotations
 
-from config import FILE_TYPES, SITE_STOCK_GROUPS, TUNDISH_TYPES
+from config import ASSISTANT_ENABLED, FILE_TYPES, SITE_STOCK_GROUPS, TUNDISH_TYPES
 from bot.bale_api import BaleClient
 
 
@@ -282,11 +282,15 @@ def analytics_menu() -> dict:
         [BTN_FORECAST],
         [BTN_MONTHLY_SUMMARY],
         [BTN_USER_ACTIVITY],
-        [BTN_REPORT_ASSISTANT],
         [BTN_ANALYTICS_PDF],
         [BTN_TUNDISH_FILTER],
         [BTN_BACK_MAIN],
     ]
+    # دستیار هوشمند — only when ASSISTANT_ENABLED=1 (default off)
+    if ASSISTANT_ENABLED:
+        # Insert before PDF full analytics
+        pdf_idx = next(i for i, r in enumerate(rows) if r == [BTN_ANALYTICS_PDF])
+        rows.insert(pdf_idx, [BTN_REPORT_ASSISTANT])
     return BaleClient.reply_keyboard(rows)
 
 
