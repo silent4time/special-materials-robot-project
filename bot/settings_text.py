@@ -26,7 +26,6 @@ DEFAULT_WELCOME_TEXT = (
     "سلام{name_suffix}! به بازوی «گزارش مواد / تاندیش» خوش آمدید.\n"
     "\n"
     "نقش شما: {role_fa}\n"
-    "{scope_line}\n"
     "از منو: موجودی انبار / مصرف ماهیانه / موجودی روزانه سایت را انتخاب کنید.\n"
     "موجودی روزانه سایت تعاملی است (سه گروه اسلب/بلوم/بیلت).\n"
     "از «تنظیمات اقلام سایت / تخصیص به گروه» اقلام را به گروه تخصیص دهید.\n"
@@ -78,8 +77,6 @@ def format_welcome_text(template: str | None, user: dict) -> str:
     role = user.get("role") or ""
     role_fa = role_label(role)
     name = str(user.get("display_name") or "").strip()
-    scope = str(user.get("scope") or "").strip()
-    scope_line = f"حوزه: {scope}\n" if scope else ""
     name_suffix = f" {name}" if name else ""
 
     body = (template or "").strip()
@@ -89,7 +86,6 @@ def format_welcome_text(template: str | None, user: dict) -> str:
             return (
                 "سلام! به بازوی «گزارش مواد / تاندیش» خوش آمدید.\n\n"
                 f"نقش شما: {role_fa}\n"
-                f"{scope_line}\n"
                 + TECHNICIAN_WELCOME_TIP
             )
         return _safe_format(
@@ -98,7 +94,7 @@ def format_welcome_text(template: str | None, user: dict) -> str:
             role=role_fa,
             name=name,
             name_suffix=name_suffix,
-            scope_line=scope_line,
+            scope_line="",
         ).strip()
 
     text = _safe_format(
@@ -107,7 +103,7 @@ def format_welcome_text(template: str | None, user: dict) -> str:
         role=role_fa,
         name=name,
         name_suffix=name_suffix,
-        scope_line=scope_line,
+        scope_line="",
     ).strip()
     if not text:
         return format_welcome_text(None, user)

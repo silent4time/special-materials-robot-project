@@ -132,7 +132,6 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
   /users
   /adduser <bale_id> <role> [name...]
   /setrole <bale_id> <role>
-  /setscope <bale_id> <scope>  (ابزار قدیمی؛ معمولاً لازم نیست)
 
 تنظیمات ربات (مالک/مدیر):
 • متن دعوت‌نامه کاربران (قالب + تصویر اختیاری)
@@ -494,7 +493,7 @@ class BotApp:
             flag = "🟢" if r["active"] else "🔴"
             lines.append(
                 f"{i}) {flag} شناسه={r['bale_user_id']} | {r.get('display_name')} | "
-                f"{role_label(r['role'])} | حوزه={r.get('scope') or '—'}"
+                f"{role_label(r['role'])}"
             )
         return "\n".join(lines)
 
@@ -682,10 +681,9 @@ class BotApp:
         if not sent_photo:
             # Forwardable invite: formal body + inline URL button only (no reply keyboard).
             self._reply(message, body, markup)
-        scope_note = f" — حوزه: {scope}" if scope else ""
         self._reply(
             message,
-            f"لینک دعوت ساخته شد — نقش: {role_label(role)}{scope_note} — "
+            f"لینک دعوت ساخته شد — نقش: {role_label(role)} — "
             "این پیام بالا را برای فرد بفرستید.\n"
             "برای ادامه مدیریت کاربران از منو استفاده کنید",
             kb.users_menu(),
@@ -883,7 +881,7 @@ class BotApp:
         self._reply(
             message,
             f"کاربر ذخیره شد:\n{created['bale_user_id']} | {created['display_name']} | "
-            f"{role_label(created['role'])} | حوزه={created.get('scope') or '—'}",
+            f"{role_label(created['role'])}",
             kb.main_menu(user),
         )
 
@@ -945,8 +943,7 @@ class BotApp:
         self._reply(
             message,
             (
-                f"حوزه به‌روز شد: {updated['bale_user_id']} → {updated.get('scope')}\n"
-                "(توجه: حوزه برای کاردان مسئول دیگر در فیلتر داده استفاده نمی‌شود؛ ابزار قدیمی.)"
+                "تنظیم قدیمی کاربر به‌روز شد."
             ),
             kb.main_menu(user),
         )
