@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Generator, Iterable, Optional
 
-from config import DATABASE_PATH, ROLES, ensure_dirs
+from config import DATABASE_PATH, DEFAULT_CATEGORY_CODES, ROLES, ensure_dirs
 
 
 def _utcnow() -> str:
@@ -104,7 +104,27 @@ class Database:
                 """
             )
             self._migrate_users_role_check(conn)
+            self._ensure_default_category_codes(conn)
 
+    def _ensure_default_category_codes(self, conn: sqlite3.Connection) -> None:
+        """Insert missing DEFAULT_CATEGORY_CODES (does not overwrite or reactivate)."""
+        now = _utcnow()
+        for code in DEFAULT_CATEGORY_CODES:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO category_codes (code, label, active, created_at, created_by)
+                VALUES (?, ?, 1, ?, ?)
+                """,
+                (code, None, now, "bootstrap"),
+            )
+
+    def ensure_default_category_codes(self) -> int:
+        """Public seed helper; returns number of codes newly inserted."""
+        before = {r["code"] for r in self.list_category_codes(active_only=False)}
+        with self.connect() as conn:
+            self._ensure_default_category_codes(conn)
+        after = {r["code"] for r in self.list_category_codes(active_only=False)}
+        return len(after - before)
 
     def _migrate_users_role_check(self, conn: sqlite3.Connection) -> None:
         """Recreate users table if CHECK constraint predates the owner role."""

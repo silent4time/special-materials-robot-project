@@ -16,6 +16,7 @@ Copied from production-style attachments for loader regression tests.
 
 - Also has sheet **«ریز اطلاعات»** with `کد دسته بندي`, `کد کالا`, `مقدار`, …
 - **29** category codes, all overlapping the inventory sample.
+Default bot allowlist (`DEFAULT_CATEGORY_CODES` in `config.py`) is these **29** overlapping codes; more can still be added from the bot menu.
 - Current bot monthly schema is still the older tundish/RBAC layout; do not treat this file as a drop-in for `monthly_consumption` yet. Warehouse inventory path is the one fixed against these samples.
 
 Loader rules live in `excel/processor.py` (`_pick_excel_sheet`, `_normalize_fa_header`).

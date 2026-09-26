@@ -21,7 +21,7 @@ from analytics.tundish import (
     suggest_requests,
     surplus_materials,
 )
-from config import CRITICAL_DAYS, REQUIRED_COLUMNS
+from config import CRITICAL_DAYS, DEFAULT_CATEGORY_CODES, REQUIRED_COLUMNS
 from db.models import Database
 from excel.id_parse import extract_item_id, extract_product_name
 from excel.processor import extract_and_save_clean, process_session_files
@@ -67,8 +67,8 @@ def main() -> int:
     db.upsert_user("1001", role="technician", display_name="علی رضایی", scope="خط-A")
     db.upsert_user("1002", role="responsible_officer", display_name="مریم احمدی", scope="خط-B")
 
-    # --- category allowlist ---
-    assert db.active_category_code_set() == set()
+    # --- category allowlist (defaults seeded on DB init) ---
+    assert db.active_category_code_set() == set(DEFAULT_CATEGORY_CODES)
     row = db.add_category_code("1201", label="مواد ویژه", created_by="999")
     assert row["code"] == "1201"
     assert "1201" in db.active_category_code_set()

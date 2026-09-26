@@ -69,6 +69,40 @@ TUNDISH_TYPE_LABELS = list(TUNDISH_TYPES.values())
 # Files that still require domain/assignee for RBAC row filtering
 RBAC_SCOPED_FILE_TYPES = frozenset({"tank_consumption", "monthly_consumption"})
 
+# Default warehouse category allowlist (inventory ∩ monthly real samples).
+# Seeded on DB bootstrap; users can still add more via the bot menu.
+DEFAULT_CATEGORY_CODES: list[str] = [
+    "1203",
+    "1207",
+    "1274",
+    "1451",
+    "1473",
+    "1581",
+    "1603",
+    "1604",
+    "1623",
+    "1626",
+    "1628",
+    "1633",
+    "1634",
+    "1637",
+    "1638",
+    "1640",
+    "1643",
+    "1655",
+    "1656",
+    "1658",
+    "1662",
+    "1664",
+    "1667",
+    "1672",
+    "1674",
+    "1676",
+    "1712",
+    "1714",
+    "1716",
+]
+
 REQUIRED_COLUMNS = {
     "tank_consumption": [
         "domain",
