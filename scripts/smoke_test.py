@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""Offline smoke test: RBAC filter + PDF generation without Bale network."""
+"""Offline smoke test: RBAC filter + analytics + PDF generation without Bale network."""
 from __future__ import annotations
 
 import sys
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from analytics.tundish import (
+    critical_materials,
+    daily_rates,
+    forecast,
+    period_consumption,
+    remaining,
+    suggest_requests,
+)
+from config import CRITICAL_DAYS
 from db.models import Database
 from excel.processor import process_session_files
 from pdf.generator import generate_report
@@ -34,10 +44,28 @@ def main() -> int:
     for uid, label in [("998", "owner"), ("999", "manager"), ("1002", "officer"), ("1001", "tech")]:
         user = db.get_user(uid)
         frames, metas = process_session_files(paths, user)
+        rates = daily_rates(frames.get("tank_consumption"), frames.get("monthly_consumption"))
+        rem = remaining(frames.get("product_inventory"))
+        crit = critical_materials(rates, rem, CRITICAL_DAYS)
+        fc = forecast(rates, 7)
+        sug = suggest_requests(rates, rem, 7)
+        period = period_consumption(frames.get("tank_consumption"), date(2026, 9, 1), date(2026, 9, 7))
+        analytics = {
+            "start": date(2026, 9, 1),
+            "end": date(2026, 9, 7),
+            "days": 7,
+            "critical_days": CRITICAL_DAYS,
+            "daily_rates": rates,
+            "period_consumption": period,
+            "remaining": rem,
+            "critical": crit,
+            "forecast": fc,
+            "suggest": sug,
+        }
         out = ROOT / "reports" / f"smoke_{label}.pdf"
-        generate_report(frames, metas, user, out)
+        generate_report(frames, metas, user, out, analytics=analytics)
         visible = {k: metas[k]["visible_rows"] for k in metas}
-        print(label, "visible", visible, "->", out)
+        print(label, "visible", visible, "crit", len(crit), "->", out)
         assert out.exists() and out.stat().st_size > 1000
 
     # technician must see fewer tank rows than manager
@@ -46,11 +74,25 @@ def main() -> int:
     mf, mm = process_session_files(paths, mgr)
     tf, tm = process_session_files(paths, tech)
     assert tm["tank_consumption"]["visible_rows"] < mm["tank_consumption"]["visible_rows"]
-    assert tm["tank_consumption"]["visible_rows"] == 2  # علی رضایی rows
+    assert tm["tank_consumption"]["visible_rows"] == 4  # علی رضایی rows
     off = db.get_user("1002")
     of, om = process_session_files(paths, off)
-    assert om["tank_consumption"]["visible_rows"] == 2  # خط-B
-    print("SMOKE OK")
+    assert om["tank_consumption"]["visible_rows"] == 4  # خط-B
+
+    # analytics sanity on full (manager) data
+    rates = daily_rates(mf["tank_consumption"], mf["monthly_consumption"])
+    assert not rates.empty
+    assert (rates["avg_daily"] > 0).any()
+    rem = remaining(mf["product_inventory"])
+    assert not rem.empty
+    crit = critical_materials(rates, rem, CRITICAL_DAYS)
+    # اسید (~11.75/day, rem 20) and کلر (~2.875/day, rem 8) should be critical with CRITICAL_DAYS=3
+    crit_names = set(crit["material_name"].astype(str))
+    assert "اسید سولفوریک" in crit_names
+    sug = suggest_requests(rates, rem, 10)
+    assert "suggest_qty" in sug.columns
+    assert float(CRITICAL_DAYS) == 3.0
+    print("SMOKE OK CRITICAL_DAYS=", CRITICAL_DAYS)
     return 0
 
 

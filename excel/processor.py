@@ -14,7 +14,7 @@ COLUMN_ALIASES = {
     "domain": ["domain", "scope", "حوزه", "دامنه", "بخش"],
     "assignee_id": ["assignee_id", "user_id", "شناسه", "شناسه_کاربر", "کد_کاربر"],
     "assignee_name": ["assignee_name", "name", "نام", "نام_مسئول", "تکنسین"],
-    "tundish_id": ["tundish_id", "tank", "تانک", "شماره_تانک"],
+    "tundish_id": ["tundish_id", "tank", "تانک", "تاندیش", "شماره_تانک", "شماره_تاندیش"],
     "material_name": ["material_name", "material", "ماده", "نام_ماده", "مواد"],
     "product_name": ["product_name", "product", "محصول", "نام_محصول"],
     "quantity": ["quantity", "qty", "مقدار", "میزان", "تعداد"],

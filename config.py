@@ -16,6 +16,8 @@ UPLOAD_DIR = BASE_DIR / "uploads"
 REPORT_DIR = BASE_DIR / "reports"
 FONTS_DIR = BASE_DIR / "fonts"
 POLL_TIMEOUT = int(os.getenv("POLL_TIMEOUT", "25"))
+# Materials with days_of_cover = remaining / avg_daily below this are critical
+CRITICAL_DAYS = float(os.getenv("CRITICAL_DAYS", "3"))
 BALE_API_BASE = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}" if BALE_BOT_TOKEN else ""
 
 # File type keys used across bot / excel / pdf / db

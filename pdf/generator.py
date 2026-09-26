@@ -1,4 +1,4 @@
-"""Generate a combined Persian/RTL PDF report from three Excel datasets."""
+"""Generate a combined Persian/RTL PDF report from Excel datasets + tundish analytics."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -23,7 +23,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from config import FILE_TYPES, FONTS_DIR, REPORT_DIR, ensure_dirs
+from config import CRITICAL_DAYS, FILE_TYPES, FONTS_DIR, REPORT_DIR, ensure_dirs
 
 _FONT_REGISTERED = False
 FONT_NAME = "DejaVuSans"
@@ -143,7 +143,7 @@ HEADER_FA = {
     "domain": "حوزه",
     "assignee_id": "شناسه",
     "assignee_name": "مسئول",
-    "tundish_id": "تانک",
+    "tundish_id": "تاندیش",
     "material_name": "ماده",
     "product_name": "محصول",
     "quantity": "مقدار",
@@ -153,31 +153,58 @@ HEADER_FA = {
     "location": "محل",
     "status": "وضعیت",
     "notes": "توضیحات",
+    "avg_daily": "میانگین روزانه",
+    "total_qty": "مجموع",
+    "days_span": "روزهای بازه",
+    "remaining_qty": "باقیمانده",
+    "days_of_cover": "روز پوشش",
+    "forecast_need": "نیاز پیش‌بینی",
+    "suggest_qty": "پیشنهاد درخواست",
+    "days": "روز",
+    "source": "منبع",
+    "start": "از",
+    "end": "تا",
+    "critical": "بحرانی",
 }
 
 
-def _df_to_table(df: pd.DataFrame, file_type: str, styles: dict) -> Table | Paragraph:
-    cols = [c for c in DISPLAY_COLUMNS.get(file_type, list(df.columns)) if c in df.columns]
-    if not cols:
-        cols = list(df.columns)[:8]
-    if df.empty or not cols:
-        return Paragraph(rtl("هیچ ردیفی مطابق نقش شما یافت نشد."), styles["body"])
+def _df_to_table(
+    df: pd.DataFrame,
+    cols: list[str] | None,
+    styles: dict,
+    *,
+    max_rows: int = 200,
+    header_bg: str = "#1f4e79",
+) -> Table | Paragraph:
+    use_cols = [c for c in (cols or list(df.columns)) if c in df.columns]
+    if not use_cols:
+        use_cols = list(df.columns)[:8]
+    if df is None or df.empty or not use_cols:
+        return Paragraph(rtl("هیچ ردیفی یافت نشد."), styles["body"])
 
-    header = [Paragraph(rtl(HEADER_FA.get(c, c)), styles["cell"]) for c in cols]
-    # RTL table: reverse column order so rightmost is first domain
+    header = [Paragraph(rtl(HEADER_FA.get(c, c)), styles["cell"]) for c in use_cols]
     header = list(reversed(header))
     data = [header]
-    for _, row in df.head(200).iterrows():
-        cells = [
-            Paragraph(rtl(row.get(c, "")), styles["cell"]) for c in cols
-        ]
+    view = df.head(max_rows)
+    for _, row in view.iterrows():
+        cells = []
+        for c in use_cols:
+            val = row.get(c, "")
+            if isinstance(val, float):
+                if val != val:  # NaN
+                    val = ""
+                elif val == float("inf"):
+                    val = "∞"
+                else:
+                    val = f"{val:.2f}"
+            cells.append(Paragraph(rtl(val), styles["cell"]))
         data.append(list(reversed(cells)))
 
     table = Table(data, repeatRows=1)
     table.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f4e79")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(header_bg)),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                 ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
                 ("FONTSIZE", (0, 0), (-1, -1), 7),
@@ -194,15 +221,123 @@ def _df_to_table(df: pd.DataFrame, file_type: str, styles: dict) -> Table | Para
     return table
 
 
+def _append_analytics(story: list, analytics: dict[str, Any], styles: dict) -> None:
+    if not analytics:
+        return
+    start = analytics.get("start")
+    end = analytics.get("end")
+    days = analytics.get("days")
+    crit_days = analytics.get("critical_days", CRITICAL_DAYS)
+    range_label = ""
+    if start and end:
+        range_label = f" (بازه {start} تا {end} — {days} روز)"
+
+    story.append(Paragraph(rtl("تحلیل تاندیش"), styles["heading"]))
+    story.append(
+        Paragraph(
+            rtl(
+                f"آستانه مواد بحرانی: پوشش موجودی کمتر از {crit_days} روز "
+                f"(CRITICAL_DAYS). پیشنهاد درخواست = max(0, نیاز پیش‌بینی − موجودی)."
+            ),
+            styles["body"],
+        )
+    )
+    story.append(Spacer(1, 0.3 * cm))
+
+    story.append(Paragraph(rtl("۱) خلاصه مصرف روزانه مواد"), styles["heading"]))
+    story.append(
+        _df_to_table(
+            analytics.get("daily_rates") if analytics.get("daily_rates") is not None else pd.DataFrame(),
+            ["material_name", "tundish_id", "avg_daily", "total_qty", "days_span", "unit", "source"],
+            styles,
+            header_bg="#0d47a1",
+        )
+    )
+    story.append(Spacer(1, 0.3 * cm))
+
+    story.append(Paragraph(rtl(f"۲) مصرف در بازه درخواستی{range_label}"), styles["heading"]))
+    story.append(
+        _df_to_table(
+            analytics.get("period_consumption") if analytics.get("period_consumption") is not None else pd.DataFrame(),
+            ["material_name", "tundish_id", "quantity", "unit", "start", "end"],
+            styles,
+            header_bg="#1565c0",
+        )
+    )
+    story.append(Spacer(1, 0.3 * cm))
+
+    story.append(Paragraph(rtl("۳) موجودی باقیمانده و مواد بحرانی"), styles["heading"]))
+    story.append(
+        _df_to_table(
+            analytics.get("remaining") if analytics.get("remaining") is not None else pd.DataFrame(),
+            ["material_name", "remaining_qty", "unit", "location"],
+            styles,
+            header_bg="#2e7d32",
+        )
+    )
+    story.append(Spacer(1, 0.2 * cm))
+    story.append(
+        Paragraph(
+            rtl(f"مواد در حال اتمام (بحرانی — پوشش < {crit_days} روز):"),
+            styles["body"],
+        )
+    )
+    story.append(
+        _df_to_table(
+            analytics.get("critical") if analytics.get("critical") is not None else pd.DataFrame(),
+            ["material_name", "remaining_qty", "avg_daily", "days_of_cover", "unit"],
+            styles,
+            header_bg="#c62828",
+        )
+    )
+    story.append(Spacer(1, 0.3 * cm))
+
+    story.append(
+        Paragraph(
+            rtl(f"۴) پیش‌بینی مواد مورد نیاز تاندیش‌ها{range_label}"),
+            styles["heading"],
+        )
+    )
+    story.append(
+        _df_to_table(
+            analytics.get("forecast") if analytics.get("forecast") is not None else pd.DataFrame(),
+            ["material_name", "tundish_id", "avg_daily", "days", "forecast_need", "unit"],
+            styles,
+            header_bg="#6a1b9a",
+        )
+    )
+    story.append(Spacer(1, 0.3 * cm))
+
+    story.append(Paragraph(rtl("۵) پیشنهاد درخواست مواد"), styles["heading"]))
+    story.append(
+        _df_to_table(
+            analytics.get("suggest") if analytics.get("suggest") is not None else pd.DataFrame(),
+            [
+                "material_name",
+                "avg_daily",
+                "days",
+                "forecast_need",
+                "remaining_qty",
+                "suggest_qty",
+                "unit",
+            ],
+            styles,
+            header_bg="#ef6c00",
+        )
+    )
+    story.append(Spacer(1, 0.4 * cm))
+
+
 def generate_report(
     frames: dict[str, pd.DataFrame],
     metas: dict[str, dict],
     user: dict[str, Any],
     output_path: Path | str | None = None,
+    analytics: dict[str, Any] | None = None,
 ) -> Path:
     """
     Build PDF with title «گزارش تاندیش / خلاصه داده‌های آپلود‌شده»,
-    one section per source file, plus a summary.
+    analytics sections (when provided), then one section per source file.
     """
     _register_fonts()
     ensure_dirs()
@@ -226,9 +361,12 @@ def generate_report(
 
     story: list = []
     story.append(Paragraph(rtl("گزارش تاندیش / خلاصه داده‌های آپلود‌شده"), styles["title"]))
-    role_fa = {"owner": "مالک", "manager": "مدیر", "responsible_officer": "کاردان مسئول", "technician": "تکنسین"}.get(
-        user.get("role"), user.get("role")
-    )
+    role_fa = {
+        "owner": "مالک",
+        "manager": "مدیر",
+        "responsible_officer": "کاردان مسئول",
+        "technician": "تکنسین",
+    }.get(user.get("role"), user.get("role"))
     info = (
         f"کاربر: {user.get('display_name') or user.get('bale_user_id')} | "
         f"نقش: {role_fa} | "
@@ -238,9 +376,14 @@ def generate_report(
     story.append(Paragraph(rtl(info), styles["body"]))
     story.append(Spacer(1, 0.4 * cm))
 
-    # Summary section
-    story.append(Paragraph(rtl("خلاصه"), styles["heading"]))
-    summary_rows = [[Paragraph(rtl("منبع"), styles["cell"]), Paragraph(rtl("کل ردیف‌ها"), styles["cell"]), Paragraph(rtl("پس از فیلتر نقش"), styles["cell"])]]
+    story.append(Paragraph(rtl("خلاصه فایل‌ها"), styles["heading"]))
+    summary_rows = [
+        [
+            Paragraph(rtl("منبع"), styles["cell"]),
+            Paragraph(rtl("کل ردیف‌ها"), styles["cell"]),
+            Paragraph(rtl("پس از فیلتر نقش"), styles["cell"]),
+        ]
+    ]
     for key in SECTION_ORDER:
         meta = metas.get(key)
         if not meta:
@@ -252,7 +395,6 @@ def generate_report(
                 Paragraph(rtl(str(meta.get("visible_rows", 0))), styles["cell"]),
             ]
         )
-    # reverse cells for RTL feel
     summary_rows = [list(reversed(r)) for r in summary_rows]
     summary = Table(summary_rows, colWidths=[4 * cm, 4 * cm, 8 * cm])
     summary.setStyle(
@@ -269,12 +411,21 @@ def generate_report(
     story.append(summary)
     story.append(Spacer(1, 0.5 * cm))
 
+    if analytics:
+        _append_analytics(story, analytics, styles)
+
     for key in SECTION_ORDER:
         if key not in frames:
             continue
         label = FILE_TYPES[key]["label_fa"]
         story.append(Paragraph(rtl(f"بخش: {label}"), styles["heading"]))
-        story.append(_df_to_table(frames[key], key, styles))
+        story.append(
+            _df_to_table(
+                frames[key],
+                DISPLAY_COLUMNS.get(key),
+                styles,
+            )
+        )
         story.append(Spacer(1, 0.4 * cm))
 
     doc.build(story)
