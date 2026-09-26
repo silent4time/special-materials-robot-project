@@ -268,3 +268,11 @@ def date_range_menu() -> dict:
 
 def cancel_pending_menu() -> dict:
     return BaleClient.reply_keyboard([[BTN_CANCEL_PENDING], [BTN_HELP]])
+
+
+BTN_INVITE_ENTER = "ورود به ربات"
+
+
+def invite_url_button(url: str) -> dict:
+    """Inline URL button for invite deep links (forwardable invite message)."""
+    return BaleClient.inline_url_keyboard(BTN_INVITE_ENTER, url)

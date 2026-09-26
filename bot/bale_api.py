@@ -159,5 +159,12 @@ class BaleClient:
         }
 
     @staticmethod
+    def inline_url_keyboard(button_text: str, url: str) -> dict:
+        """Inline keyboard with a single URL button (dict, same as reply_keyboard)."""
+        return {
+            "inline_keyboard": [[{"text": button_text, "url": url}]]
+        }
+
+    @staticmethod
     def remove_keyboard() -> dict:
         return {"remove_keyboard": True}

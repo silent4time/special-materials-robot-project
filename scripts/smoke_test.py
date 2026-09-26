@@ -97,6 +97,13 @@ def main() -> int:
     assert kb.BTN_USERS_EDIT in users_submenu
     assert kb.BTN_USERS_DELETE in users_submenu
     assert kb.BTN_USERS_LIST in users_submenu
+    # inline URL invite button (forwardable deep link)
+    inv_kb = kb.invite_url_button("https://ble.ir/nasoz_bot?start=tok123")
+    assert "inline_keyboard" in inv_kb
+    btn = inv_kb["inline_keyboard"][0][0]
+    assert btn["text"] == kb.BTN_INVITE_ENTER == "ورود به ربات"
+    assert btn["url"].startswith("https://ble.ir/")
+    assert "keyboard" not in inv_kb  # not a reply keyboard
 
     # --- invites: create + consume as new technician ---
     inv = db.create_invite(role="technician", created_by="998", expires_days=7)

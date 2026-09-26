@@ -468,6 +468,30 @@ class BotApp:
             kb.users_menu(),
         )
 
+    def _invite_message_text(self, role: str, scope: str | None) -> str:
+        """Formal Persian invitation body for the invitee (no bot username / raw URL)."""
+        role_fa = role_label(role)
+        lines = [
+            "سلام؛",
+            "",
+            "شما برای استفاده از سامانهٔ مدیریت مواد ویژه تاندیش دعوت شده‌اید.",
+            "",
+            f"نقش تعریف‌شده برای شما: {role_fa}",
+        ]
+        if scope and role == "responsible_officer":
+            lines.append(f"حوزه: {scope}")
+        lines.extend(
+            [
+                "",
+                "لطفاً برای فعال‌سازی حساب و شروع کار، دکمهٔ زیر را بزنید. "
+                "این لینک شخصی است و تا ۷ روز معتبر می‌باشد.",
+                "",
+                "با احترام",
+                "مدیریت سیستم مواد تاندیش",
+            ]
+        )
+        return "\n".join(lines)
+
     def _create_and_send_invite(
         self, message: dict, actor: dict, role: str, scope: str | None
     ) -> None:
@@ -478,14 +502,14 @@ class BotApp:
             expires_days=7,
         )
         url = self._invite_url(invite["token"])
-        scope_line = f"\nحوزه: {scope}" if scope else ""
+        # Forwardable invite: formal body + inline URL button only (no reply keyboard).
+        self._reply(message, self._invite_message_text(role, scope), kb.invite_url_button(url))
+        scope_note = f" — حوزه: {scope}" if scope else ""
         self._reply(
             message,
-            "✅ لینک دعوت ساخته شد.\n"
-            f"نقش: {role_label(role)}{scope_line}\n"
-            f"اعتبار تقریبی: ۷ روز\n\n"
-            f"این لینک را برای فرد بفرستید تا با باز کردن آن و زدن Start به‌صورت خودکار ثبت شود:\n"
-            f"{url}",
+            f"لینک دعوت ساخته شد — نقش: {role_label(role)}{scope_note} — "
+            "این پیام بالا را برای فرد بفرستید.\n"
+            "برای ادامه مدیریت کاربران از منو استفاده کنید",
             kb.users_menu(),
         )
 
