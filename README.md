@@ -23,6 +23,24 @@
 5. **پیش‌بینی نیاز** — `forecast_need = avg_daily × requested_days`
 6. **گزارش مواد مازاد** — موجودی خیلی بیش از نیاز کوتاه‌مدت (جزئیات پایین).
 
+## نصب روی سرور
+
+برای استقرار روی VPS / سرور لینوکس، از اسکریپت یک‌مرحله‌ای استفاده کنید:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash
+```
+
+یا:
+
+```bash
+git clone https://github.com/silent4time/special-materials-robot-project.git
+cd special-materials-robot-project
+bash install.sh --seed-admin --systemd --start
+```
+
+جزئیات، پرچم‌ها (`--update` و …) و هشدار «فقط یک نمونه polling»: **[DEPLOY.md](DEPLOY.md)**.
+
 ## پیش‌نیاز و اجرا
 
 ```bash

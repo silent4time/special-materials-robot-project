@@ -1,0 +1,16 @@
+[Unit]
+Description=Bale tundish materials report bot (nasoz_bot)
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+Environment=PATH=__WORKDIR__/.venv/bin
+EnvironmentFile=-__WORKDIR__/.env
+ExecStart=__WORKDIR__/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

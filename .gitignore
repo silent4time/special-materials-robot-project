@@ -19,3 +19,4 @@ reports/*
 data/bot_assets/*
 !data/bot_assets/.gitkeep
 data/bot.pid
+data/bot.log
