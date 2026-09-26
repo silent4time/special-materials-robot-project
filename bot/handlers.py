@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 import shutil
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import pandas as pd
@@ -36,6 +37,7 @@ from auth.rbac import (
     role_label,
 )
 from bot import keyboards as kb
+from bot.activity import log_activity
 from bot.jalali import (
     format_date,
     format_datetime,
@@ -620,6 +622,7 @@ class BotApp:
             created_by=str(actor["bale_user_id"]),
             expires_days=7,
         )
+        log_activity(self.db, actor, "user_add")
         url = self._invite_url(invite["token"])
         body = self._invite_message_text(role, scope)
         markup = kb.invite_url_button(url)
@@ -769,6 +772,7 @@ class BotApp:
                 return True
             updated = self.db.set_role(target_id, role)
             self._clear_users_pending(uid)
+            log_activity(self.db, user, "user_edit")
             self._reply(
                 message,
                 f"✅ نقش به‌روز شد: {updated['bale_user_id']} → {role_label(updated['role'])}",
@@ -788,6 +792,7 @@ class BotApp:
                 return True
             self.db.deactivate_user(target_id)
             self._clear_users_pending(uid)
+            log_activity(self.db, user, "user_delete")
             self._reply(
                 message,
                 f"✅ کاربر {target_id} غیرفعال شد.",
@@ -1192,6 +1197,10 @@ class BotApp:
             else kb.main_menu(user)
         )
         actor_line = f"ثبت‌کننده: {self._format_actor(user)}"
+        if pending == "product_inventory":
+            log_activity(self.db, user, "upload_product_inventory")
+        elif pending == "monthly_consumption":
+            log_activity(self.db, user, "upload_monthly_consumption")
         self._reply(
             message,
             (
@@ -1248,6 +1257,7 @@ class BotApp:
                 "از «گزارش‌ها / تحلیل تاندیش» استفاده کنید یا با /reset جلسه را پاک کنید.",
                 kb.main_menu(user),
             )
+            log_activity(self.db, user, "report_generate_pdf")
         except Exception as exc:  # noqa: BLE001
             logger.exception("generate failed")
             self._reply(message, f"خطا در تولید گزارش: {exc}", kb.main_menu(user))
@@ -1523,6 +1533,12 @@ class BotApp:
             "مقدار ورودی",
             "وضعیت",
         ]
+        if n <= 0:
+            self._empty_range_reply(
+                message,
+                text="هیچ قلم ورودی (جدید یا افزایش موجودی) در دسته‌های مجاز شناسایی نشد.",
+            )
+            return
         title = "گزارش ورودی به انبار"
         subtitle = (
             f"{n} قلم (جدید یا افزایش) در دسته‌های مجاز "
@@ -1534,11 +1550,12 @@ class BotApp:
             subtitle=subtitle,
             columns=cols,
             rows=self._df_to_row_dicts(inbound, cols),
-            empty_message="هیچ قلم ورودی (جدید یا افزایش موجودی) در دسته‌های مجاز شناسایی نشد.",
             filename_stem="inbound",
             output_name="گزارش_ورودی_به_انبار.pdf",
             caption=f"گزارش ورودی به انبار — {n} قلم",
             reply_ok="گزارش ارسال شد.",
+            log_user=user,
+            log_action="report_inbound",
         )
         if n > 0:
             try:
@@ -1628,6 +1645,65 @@ class BotApp:
         if not self._require_files(message, user, "full"):
             return
         self._ask_month_year_range(message, user, "analytics_pdf")
+
+    def on_user_activity_report(self, message: dict) -> None:
+        """Owner/manager+/non-technician: گزارش فعالیت کاربران for a Jalali month range."""
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        self._ask_month_year_range(message, user, "user_activity")
+
+    def _gregorian_range_to_utc_iso(
+        self, start_g: date, end_g: date
+    ) -> tuple[str, str]:
+        """Inclusive Tehran-local calendar days → UTC ISO bounds for created_at filter."""
+        tehran = ZoneInfo("Asia/Tehran")
+        start_local = datetime.combine(start_g, time.min, tzinfo=tehran)
+        # inclusive end-of-day
+        end_local = datetime.combine(end_g, time(23, 59, 59), tzinfo=tehran)
+        return (
+            start_local.astimezone(timezone.utc).isoformat(),
+            end_local.astimezone(timezone.utc).isoformat(),
+        )
+
+    def _run_user_activity_report(
+        self,
+        message: dict,
+        user: dict,
+        start_ym: tuple[int, int],
+        end_ym: tuple[int, int],
+        range_label: str,
+    ) -> None:
+        start_g, end_g = month_year_to_gregorian_bounds(start_ym, end_ym)
+        start_iso, end_iso = self._gregorian_range_to_utc_iso(start_g, end_g)
+        rows = self.db.list_user_activities(
+            start_iso=start_iso, end_iso=end_iso, newest_first=True
+        )
+        if not rows:
+            self._empty_range_reply(message, range_label)
+            return
+        pdf_rows = []
+        for r in rows:
+            line = r.get("message_fa") or ""
+            when = format_datetime(r.get("created_at"))
+            pdf_rows.append({"زمان": when, "فعالیت": line})
+        title = f"گزارش فعالیت کاربران — {range_label}"
+        self._send_simple_pdf_report(
+            message,
+            title=title,
+            subtitle=f"{len(pdf_rows)} فعالیت (جدیدترین ابتدا)",
+            columns=["زمان", "فعالیت"],
+            rows=pdf_rows,
+            empty_message="در این بازه داده‌ای برای این گزارش نیست.",
+            filename_stem="user_activity",
+            output_name="گزارش_فعالیت_کاربران.pdf",
+            caption=f"گزارش فعالیت کاربران — {range_label}",
+            reply_ok="گزارش ارسال شد.",
+            log_user=user,
+            log_action="report_user_activity",
+        )
 
     def on_monthly_summary(self, message: dict) -> None:
         """Prompt for month/year range, then build خلاصه مصرفی ماهیانه."""
@@ -1862,6 +1938,19 @@ class BotApp:
             rows.append(item)
         return rows
 
+    @staticmethod
+    def _report_has_rows(
+        sections: list[dict[str, Any]] | None = None,
+        rows: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        """True when there is at least one data row to put in a PDF."""
+        if sections:
+            for sec in sections:
+                if sec.get("rows"):
+                    return True
+            return False
+        return bool(rows)
+
     def _send_simple_pdf_report(
         self,
         message: dict,
@@ -1871,13 +1960,25 @@ class BotApp:
         sections: list[dict[str, Any]] | None = None,
         columns: list[str] | None = None,
         rows: list[dict[str, Any]] | None = None,
-        empty_message: str = "داده‌ای یافت نشد.",
+        empty_message: str = "در این بازه داده‌ای برای این گزارش نیست.",
         filename_stem: str = "report",
         output_name: str | None = None,
         caption: str | None = None,
         reply_ok: str | None = None,
+        log_user: dict | None = None,
+        log_action: str | None = None,
     ) -> Path | None:
-        """Build a simple RTL PDF under REPORT_DIR and sendDocument to the user."""
+        """Build a simple RTL PDF under REPORT_DIR and sendDocument to the user.
+
+        If there is no data, only a short Persian text reply is sent (no empty PDF).
+        """
+        if not self._report_has_rows(sections=sections, rows=rows):
+            self._empty_range_reply(
+                message,
+                subtitle or title,
+                text=empty_message or "در این بازه داده‌ای برای این گزارش نیست.",
+            )
+            return None
         try:
             out = REPORT_DIR / (output_name or f"{filename_stem}.pdf")
             pdf_path = generate_simple_report_pdf(
@@ -1901,6 +2002,8 @@ class BotApp:
                 reply_ok or "گزارش ارسال شد.",
                 kb.analytics_menu(),
             )
+            if log_user and log_action:
+                log_activity(self.db, log_user, log_action)
             return pdf_path
         except Exception as exc:  # noqa: BLE001
             logger.exception("simple pdf report failed: %s", title)
@@ -1910,28 +2013,21 @@ class BotApp:
     def _empty_range_reply(
         self,
         message: dict,
-        range_label: str,
+        range_label: str | None = None,
         *,
         title: str | None = None,
         filename_stem: str = "empty_range",
+        text: str | None = None,
     ) -> None:
-        empty_msg = (
-            f"در بازه انتخاب‌شده ({range_label}) داده‌ای یافت نشد. "
-            "بازه دیگری را امتحان کنید یا ابتدا فایل‌ها را بررسی کنید."
-        )
-        report_title = title or f"گزارش — {range_label}"
-        self._send_simple_pdf_report(
-            message,
-            title=report_title,
-            subtitle=f"بازه: {range_label}",
-            columns=[],
-            rows=[],
-            empty_message=empty_msg,
-            filename_stem=filename_stem,
-            output_name=f"{filename_stem}.pdf",
-            caption=f"{report_title} — بدون داده",
-            reply_ok="گزارش ارسال شد (بدون داده در بازه).",
-        )
+        """Text-only empty state — never generate or send an empty PDF."""
+        _ = title, filename_stem  # kept for call-site compatibility
+        if text:
+            msg = text
+        elif range_label:
+            msg = f"در این بازه ({range_label}) داده‌ای برای این گزارش نیست."
+        else:
+            msg = "در این بازه داده‌ای برای این گزارش نیست."
+        self._reply(message, msg, kb.analytics_menu())
 
 
     def _run_month_ranged_report(
@@ -1948,6 +2044,10 @@ class BotApp:
 
         if mode == "monthly_summary":
             self._run_monthly_summary(message, user, start_ym, end_ym, range_label)
+            return
+
+        if mode == "user_activity":
+            self._run_user_activity_report(message, user, start_ym, end_ym, range_label)
             return
 
         if mode == "analytics_pdf":
@@ -2012,10 +2112,12 @@ class BotApp:
             subtitle=f"میانگین مصرف روزانه (ماده / تاندیش) — {range_label}",
             columns=cols,
             rows=self._df_to_row_dicts(rates, cols),
-            empty_message="داده‌ای برای مصرف روزانه یافت نشد.",
+            empty_message="در این بازه داده‌ای برای این گزارش نیست.",
             filename_stem="daily_rates",
             output_name="مصرف_روزانه_مواد.pdf",
             caption=f"گزارش مصرف روزانه مواد — {range_label}",
+            log_user=user,
+            log_action="report_daily",
         )
 
     def _run_remaining_critical(
@@ -2041,8 +2143,11 @@ class BotApp:
         rem_cols = ["material_name", "remaining_qty", "unit", "location"]
         crit_cols = ["material_name", "remaining_qty", "avg_daily", "days_of_cover", "unit"]
         title = f"موجودی و مواد بحرانی — {range_label}"
-        rem_empty = "موجودی خالی است." if rem.empty else "موجودی خالی است."
-        crit_empty = "ماده بحرانی‌ای شناسایی نشد."
+        rem_rows = self._df_to_row_dicts(rem, rem_cols)
+        crit_rows = self._df_to_row_dicts(crit, crit_cols)
+        if not rem_rows and not crit_rows:
+            self._empty_range_reply(message, range_label)
+            return
         self._send_simple_pdf_report(
             message,
             title=title,
@@ -2054,21 +2159,23 @@ class BotApp:
                 {
                     "title": f"موجودی باقیمانده ({rem_source})",
                     "columns": rem_cols,
-                    "rows": self._df_to_row_dicts(rem, rem_cols),
-                    "empty_message": rem_empty,
+                    "rows": rem_rows,
+                    "empty_message": "موجودی خالی است.",
                     "header_bg": "#2e7d32",
                 },
                 {
                     "title": f"مواد بحرانی (پوشش < {CRITICAL_DAYS} روز)",
                     "columns": crit_cols,
-                    "rows": self._df_to_row_dicts(crit, crit_cols),
-                    "empty_message": crit_empty,
+                    "rows": crit_rows,
+                    "empty_message": "ماده بحرانی‌ای شناسایی نشد.",
                     "header_bg": "#c62828",
                 },
             ],
             filename_stem="remaining_critical",
             output_name="موجودی_و_مواد_بحرانی.pdf",
             caption=f"گزارش موجودی و مواد بحرانی — {range_label}",
+            log_user=user,
+            log_action="report_remaining",
         )
 
     def _run_surplus_report(
@@ -2093,10 +2200,8 @@ class BotApp:
         surplus = surplus_materials(rates, rem)
         cover_th = max(float(CRITICAL_DAYS) * 3.0, float(SURPLUS_COVER_DAYS))
         title = f"گزارش مواد مازاد — {range_label}"
-        if surplus.empty and rates.empty:
-            self._empty_range_reply(
-                message, range_label, title=title, filename_stem="surplus"
-            )
+        if surplus.empty:
+            self._empty_range_reply(message, range_label)
             return
         cols = [
             "material_name",
@@ -2118,10 +2223,12 @@ class BotApp:
             ),
             columns=cols,
             rows=self._df_to_row_dicts(surplus, cols),
-            empty_message="ماده مازادی شناسایی نشد.",
+            empty_message="در این بازه داده‌ای برای این گزارش نیست.",
             filename_stem="surplus",
             output_name="گزارش_مواد_مازاد.pdf",
             caption=f"گزارش مواد مازاد — {range_label}",
+            log_user=user,
+            log_action="report_surplus",
         )
 
     def _run_ranged_analysis(
@@ -2158,9 +2265,7 @@ class BotApp:
                 "end",
             ]
             if period.empty:
-                self._empty_range_reply(
-                    message, label, title=title, filename_stem="period_consumption"
-                )
+                self._empty_range_reply(message, label)
                 return
             self._send_simple_pdf_report(
                 message,
@@ -2168,10 +2273,12 @@ class BotApp:
                 subtitle=f"مصرف مواد {label} ({days} روز)",
                 columns=cols,
                 rows=self._df_to_row_dicts(period, cols),
-                empty_message="در این بازه مصرفی ثبت نشده است.",
+                empty_message="در این بازه داده‌ای برای این گزارش نیست.",
                 filename_stem="period_consumption",
                 output_name="گزارش_مصرف_بازه‌ای.pdf",
                 caption=f"گزارش مصرف بازه‌ای — {label}",
+                log_user=user,
+                log_action="report_period",
             )
             return
 
@@ -2192,9 +2299,7 @@ class BotApp:
                 "unit",
             ]
             if fc.empty:
-                self._empty_range_reply(
-                    message, label, title=title, filename_stem="forecast"
-                )
+                self._empty_range_reply(message, label)
                 return
             self._send_simple_pdf_report(
                 message,
@@ -2202,10 +2307,12 @@ class BotApp:
                 subtitle=f"پیش‌بینی نیاز برای {days} روز ({label})",
                 columns=cols,
                 rows=self._df_to_row_dicts(fc, cols),
-                empty_message="پیش‌بینی‌ای محاسبه نشد.",
+                empty_message="در این بازه داده‌ای برای این گزارش نیست.",
                 filename_stem="forecast",
                 output_name="پیش‌بینی_نیاز_تاندیش.pdf",
                 caption=f"پیش‌بینی نیاز تاندیش — {label}",
+                log_user=user,
+                log_action="report_forecast",
             )
             return
 
@@ -2221,17 +2328,18 @@ class BotApp:
                 "suggest_qty",
                 "unit",
             ]
-            if sug.empty and use_rates.empty:
-                self._empty_range_reply(
-                    message, label, title=title, filename_stem="suggest"
-                )
-                return
-            # Prefer rows with positive suggest; still show all if none positive
+            # Prefer rows with positive suggest_qty
             shown = sug
             if not sug.empty and "suggest_qty" in sug.columns:
                 positive = sug.loc[sug["suggest_qty"] > 0]
-                if not positive.empty:
-                    shown = positive
+                shown = positive
+            if shown.empty:
+                self._empty_range_reply(
+                    message,
+                    label,
+                    text="پیشنهادی نیست — موجودی برای بازه درخواست کافی به‌نظر می‌رسد.",
+                )
+                return
             self._send_simple_pdf_report(
                 message,
                 title=title,
@@ -2241,10 +2349,12 @@ class BotApp:
                 ),
                 columns=cols,
                 rows=self._df_to_row_dicts(shown, cols),
-                empty_message="پیشنهادی نیست — موجودی برای بازه درخواست کافی به‌نظر می‌رسد.",
+                empty_message="در این بازه داده‌ای برای این گزارش نیست.",
                 filename_stem="suggest",
                 output_name="پیشنهاد_درخواست_مواد.pdf",
                 caption=f"پیشنهاد درخواست مواد — {label}",
+                log_user=user,
+                log_action="report_suggest",
             )
 
     def _run_analytics_pdf(
@@ -2374,22 +2484,13 @@ class BotApp:
                 ),
                 kb.analytics_menu(),
             )
+            log_activity(self.db, user, "report_monthly_summary")
         except ValueError as exc:
-            # Empty filtered set — still send a one-page PDF
-            self._send_simple_pdf_report(
+            # Empty filtered set — text only, no empty PDF
+            self._empty_range_reply(
                 message,
-                title=f"خلاصه مصرفی ماهیانه — {range_label}",
-                subtitle=str(exc),
-                columns=[],
-                rows=[],
-                empty_message=(
-                    f"در بازه انتخاب‌شده ({range_label}) داده‌ای برای خلاصه مصرف یافت نشد. "
-                    f"جزئیات: {exc}"
-                ),
-                filename_stem="monthly_summary_empty",
-                output_name="خلاصه_مصرفی_ماهیانه.pdf",
-                caption=f"خلاصه مصرف ماهیانه — {range_label} (بدون داده)",
-                reply_ok="گزارش ارسال شد (بدون داده در بازه).",
+                range_label,
+                text=f"در این بازه ({range_label}) داده‌ای برای خلاصه مصرف نیست.",
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("monthly summary failed")
@@ -2615,6 +2716,7 @@ class BotApp:
         lines.append("")
         lines.append(f"ثبت‌کننده: {self._format_actor(user)}")
         lines.append("داده‌ها در پایگاه‌داده ذخیره شدند.")
+        log_activity(self.db, user, "site_stock_saved", tundish_group=group)
         self._reply(message, "\n".join(lines), kb.site_stock_menu())
 
     # ---------- تنظیمات اقلام سایت / تخصیص ----------
@@ -3036,6 +3138,7 @@ class BotApp:
         uid = str(user["bale_user_id"])
         old = self.db.get_setting("letterhead_pdf")
         self.db.clear_setting("letterhead_pdf", updated_by=uid)
+        log_activity(self.db, user, "settings_letterhead")
         if old:
             try:
                 Path(old).unlink(missing_ok=True)
@@ -3083,6 +3186,7 @@ class BotApp:
                 except Exception:  # noqa: BLE001
                     pass
             self.db.set_setting("letterhead_pdf", str(saved), updated_by=uid)
+            log_activity(self.db, user, "settings_letterhead")
         except Exception as exc:  # noqa: BLE001
             logger.exception("save letterhead failed")
             self._reply(
@@ -3177,6 +3281,10 @@ class BotApp:
             return
         old = self.db.get_setting(key)
         self.db.clear_setting(key, updated_by=uid)
+        if which == "logo":
+            log_activity(self.db, user, "settings_logo")
+        elif which == "invite":
+            log_activity(self.db, user, "settings_invite")
         if old:
             try:
                 Path(old).unlink(missing_ok=True)
@@ -3203,6 +3311,15 @@ class BotApp:
             except Exception:  # noqa: BLE001
                 pass
         self.db.set_setting(key_map[which], str(saved), updated_by=uid)
+        # Activity: logo / invite image changes
+        try:
+            actor = self.db.get_user(uid) or {"bale_user_id": uid}
+            if which == "logo":
+                log_activity(self.db, actor, "settings_logo")
+            elif which == "invite":
+                log_activity(self.db, actor, "settings_invite")
+        except Exception:  # noqa: BLE001
+            pass
         return Path(saved)
 
     @staticmethod
@@ -3332,6 +3449,7 @@ class BotApp:
         which = pending.get("which")
         if which == "invite":
             self.db.set_setting("invite_text", raw, updated_by=uid)
+            log_activity(self.db, user, "settings_invite")
             self._bot_settings_pending[uid] = {"mode": "menu", "which": "invite"}
             self._reply(message, "✅ متن دعوت‌نامه ذخیره شد.", self._settings_item_menu("invite"))
             return True
@@ -3591,6 +3709,7 @@ class BotApp:
             "days": float(days),
             "lines": lines,
         }
+        log_activity(self.db, user, "material_request_created")
         self._reply(
             message,
             self._format_mr_review(days, lines),
@@ -3629,6 +3748,7 @@ class BotApp:
             self._reply(message, str(exc), kb.material_request_review_menu())
             return
         self._clear_material_req_pending(uid)
+        log_activity(self.db, user, "material_request_confirmed")
         actor = self._format_actor(user)
         out = [
             f"✅ درخواست مواد #{req['id']} ثبت شد.",
@@ -3676,6 +3796,7 @@ class BotApp:
             return
         uid = str(user["bale_user_id"])
         self._clear_material_req_pending(uid)
+        log_activity(self.db, user, "material_request_cancelled")
         self._reply(message, "درخواست مواد لغو شد.", kb.main_menu(user))
 
     def on_material_request_back_review(self, message: dict) -> None:
@@ -3965,6 +4086,7 @@ class BotApp:
             self._reply(message, str(exc), kb.warehouse_return_review_menu())
             return
         self._clear_warehouse_ret_pending(uid)
+        log_activity(self.db, user, "warehouse_return_confirmed")
         actor = self._format_actor(user)
         out = [
             f"✅ برگشت به انبار #{ret['id']} ثبت شد.",
@@ -4414,6 +4536,9 @@ class BotApp:
             return
         if text == kb.BTN_MONTHLY_SUMMARY:
             self.on_monthly_summary(message)
+            return
+        if text == kb.BTN_USER_ACTIVITY:
+            self.on_user_activity_report(message)
             return
         if text == kb.BTN_MY_CURRENT:
             if self.on_month_year_range_choice(message, preset="current"):

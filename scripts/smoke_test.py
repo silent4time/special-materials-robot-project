@@ -391,16 +391,7 @@ def _test_inbound_delta() -> None:
         filename_stem="smoke_inbound",
     )
     assert pdf_in.exists() and pdf_in.stat().st_size > 500
-    # empty inbound still yields a PDF page
-    empty_pdf = ROOT / "reports" / "smoke_inbound_empty.pdf"
-    generate_simple_report_pdf(
-        "گزارش ورودی به انبار",
-        columns=list(inbound.columns),
-        rows=[],
-        empty_message="هیچ قلم ورودی شناسایی نشد.",
-        output_path=empty_pdf,
-    )
-    assert empty_pdf.exists() and empty_pdf.stat().st_size > 400
+    # Empty inbound: handlers now reply with text only (no empty PDF).
     # letterhead stamp
     from reportlab.pdfgen import canvas as _canvas
     from reportlab.lib.pagesizes import A4, landscape as _landscape
@@ -415,9 +406,57 @@ def _test_inbound_delta() -> None:
 
 
 
+
+def _test_user_activity_log() -> None:
+    """Unit/smoke: log_activity + format lines + PDF with rows; empty = no rows."""
+    from bot.activity import format_activity_line, log_activity, ACTION_PHRASES
+    from bot.jalali import format_datetime
+    from pdf.generator import generate_simple_report_pdf
+
+    db_path = ROOT / "data" / "smoke_activity.db"
+    if db_path.exists():
+        db_path.unlink()
+    db = Database(db_path)
+    db.upsert_user("1644670601", role="owner", display_name="نصراله ولی‌زاده")
+    user = db.get_user("1644670601")
+    log_activity(db, user, "report_monthly_summary")
+    log_activity(db, user, "site_stock_saved", tundish_group="slab")
+    log_activity(db, user, "upload_product_inventory")
+    rows = db.list_user_activities(newest_first=True)
+    assert len(rows) == 3
+    line = format_activity_line("نصراله ولی‌زاده", "1644670601", "report_monthly_summary")
+    assert "نصراله" in line and "1644670601" in line and "خلاصه مصرف ماهیانه" in line
+    assert "اسلب" in format_activity_line("x", 1, "site_stock_saved", tundish_group="slab")
+    assert "BTN_USER_ACTIVITY" in dir(kb) or hasattr(kb, "BTN_USER_ACTIVITY")
+    menu = {b["text"] for row in kb.analytics_menu()["keyboard"] for b in row}
+    assert kb.BTN_USER_ACTIVITY in menu
+    pdf_rows = [
+        {"زمان": format_datetime(r["created_at"]), "فعالیت": r["message_fa"]}
+        for r in rows
+    ]
+    out = ROOT / "reports" / "smoke_user_activity.pdf"
+    generate_simple_report_pdf(
+        "گزارش فعالیت کاربران",
+        subtitle="smoke",
+        columns=["زمان", "فعالیت"],
+        rows=pdf_rows,
+        output_path=out,
+    )
+    assert out.exists() and out.stat().st_size > 500
+    # empty list → handlers must not send PDF (unit check: no rows)
+    empty = db.list_user_activities(
+        start_iso="2099-01-01T00:00:00+00:00",
+        end_iso="2099-12-31T23:59:59+00:00",
+    )
+    assert empty == []
+    print("user_activity OK", len(ACTION_PHRASES), "actions", out.name)
+
+
+
 def main() -> int:
     make_samples()
     _test_inbound_delta()
+    _test_user_activity_log()
     _test_first_owner_claim()
     _test_install_help_soft_seed()
     db_path = ROOT / "data" / "smoke.db"

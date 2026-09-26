@@ -84,6 +84,7 @@ BTN_FORECAST = "🔮 پیش‌بینی نیاز تاندیش"
 BTN_ANALYTICS_PDF = "📄 PDF کامل تحلیل"
 BTN_MONTHLY_SUMMARY = "📥 دریافت خلاصه مصرف ماهیانه"
 BTN_INBOUND = "📥 گزارش ورودی به انبار"
+BTN_USER_ACTIVITY = "📋 گزارش فعالیت کاربران"
 BTN_TUNDISH_FILTER = "🔎 فیلتر نوع تاندیش"
 BTN_ALL_TUNDISHES = "همه تاندیش‌ها"
 BTN_TUNDISH_SLAB = TUNDISH_TYPES["slab"]
@@ -278,6 +279,7 @@ def analytics_menu() -> dict:
         [BTN_INBOUND],
         [BTN_FORECAST],
         [BTN_MONTHLY_SUMMARY],
+        [BTN_USER_ACTIVITY],
         [BTN_ANALYTICS_PDF],
         [BTN_TUNDISH_FILTER],
         [BTN_BACK_MAIN],

@@ -699,6 +699,8 @@ def generate_monthly_summary_pdf(
 
 SIMPLE_HEADER_FA = {
     **HEADER_FA,
+    "زمان": "زمان",
+    "فعالیت": "فعالیت",
     "surplus_qty": "مقدار مازاد",
     "surplus_reason": "دلیل مازاد",
     "کد کالا": "کد کالا",

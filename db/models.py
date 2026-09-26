@@ -241,6 +241,20 @@ class Database:
                     ON warehouse_returns(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_warehouse_return_lines_ret
                     ON warehouse_return_lines(return_id);
+
+                CREATE TABLE IF NOT EXISTS user_activity (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bale_user_id TEXT NOT NULL,
+                    display_name TEXT,
+                    action_key TEXT NOT NULL,
+                    message_fa TEXT NOT NULL,
+                    details_json TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_activity_created
+                    ON user_activity(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_user_activity_user
+                    ON user_activity(bale_user_id, created_at DESC);
                 """
             )
             self._migrate_users_role_check(conn)
@@ -1758,4 +1772,80 @@ class Database:
             if val is not None and not str(val).strip():
                 val = None
             out[key] = val
+        return out
+
+    # ---------- user activity log ----------
+    def insert_user_activity(
+        self,
+        *,
+        bale_user_id: str | int,
+        display_name: str | None,
+        action_key: str,
+        message_fa: str,
+        details: dict[str, Any] | None = None,
+        created_at: str | None = None,
+    ) -> int:
+        """Insert one activity row; returns new id."""
+        now = created_at or _utcnow()
+        details_json = json.dumps(details, ensure_ascii=False) if details else None
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO user_activity
+                    (bale_user_id, display_name, action_key, message_fa, details_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(bale_user_id),
+                    (display_name or None),
+                    str(action_key),
+                    str(message_fa),
+                    details_json,
+                    now,
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def list_user_activities(
+        self,
+        *,
+        start_iso: str | None = None,
+        end_iso: str | None = None,
+        newest_first: bool = True,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List activity rows filtered by created_at ISO range (UTC)."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if start_iso:
+            clauses.append("created_at >= ?")
+            params.append(start_iso)
+        if end_iso:
+            clauses.append("created_at <= ?")
+            params.append(end_iso)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        order = "DESC" if newest_first else "ASC"
+        lim = f" LIMIT {int(limit)}" if limit else ""
+        sql = f"""
+            SELECT id, bale_user_id, display_name, action_key, message_fa,
+                   details_json, created_at
+            FROM user_activity
+            {where}
+            ORDER BY created_at {order}, id {order}
+            {lim}
+        """
+        with self.connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            item = dict(r)
+            raw = item.pop("details_json", None)
+            if raw:
+                try:
+                    item["details"] = json.loads(raw)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    item["details"] = None
+            else:
+                item["details"] = None
+            out.append(item)
         return out
