@@ -146,6 +146,13 @@ class Database:
                     active INTEGER NOT NULL DEFAULT 1
                 );
 
+                CREATE TABLE IF NOT EXISTS bot_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_invites_active ON invites(active);
 
                 CREATE INDEX IF NOT EXISTS idx_users_bale ON users(bale_user_id);
@@ -1131,3 +1138,68 @@ class Database:
             for e in entries
         ]
 
+
+    # --- bot settings (invite / welcome / logo) ---
+    BOT_SETTING_KEYS = frozenset({
+        "invite_text",
+        "invite_image_path",
+        "welcome_text",
+        "welcome_image_path",
+        "logo_path",
+    })
+
+    def get_setting(self, key: str) -> Optional[str]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM bot_settings WHERE key = ?", (str(key),)
+            ).fetchone()
+        if not row:
+            return None
+        value = row["value"]
+        if value is None:
+            return None
+        value = str(value)
+        return value if value.strip() else None
+
+    def set_setting(
+        self,
+        key: str,
+        value: str | None,
+        updated_by: str | int | None = None,
+    ) -> None:
+        key = str(key)
+        now = _utcnow()
+        by = str(updated_by) if updated_by is not None else None
+        with self.connect() as conn:
+            # Empty / None clears the key so callers fall back to defaults.
+            if value is None or not str(value).strip():
+                conn.execute("DELETE FROM bot_settings WHERE key = ?", (key,))
+                return
+            conn.execute(
+                """
+                INSERT INTO bot_settings (key, value, updated_at, updated_by)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+                """,
+                (key, str(value), now, by),
+            )
+
+    def clear_setting(self, key: str, updated_by: str | int | None = None) -> None:
+        """Remove a setting key (used for clearing images)."""
+        self.set_setting(key, None, updated_by=updated_by)
+
+    def get_bot_settings(self) -> dict[str, Optional[str]]:
+        """Return known bot setting keys (missing → None)."""
+        with self.connect() as conn:
+            rows = conn.execute("SELECT key, value FROM bot_settings").fetchall()
+        found = {r["key"]: (str(r["value"]) if r["value"] is not None else None) for r in rows}
+        out: dict[str, Optional[str]] = {}
+        for key in self.BOT_SETTING_KEYS:
+            val = found.get(key)
+            if val is not None and not str(val).strip():
+                val = None
+            out[key] = val
+        return out

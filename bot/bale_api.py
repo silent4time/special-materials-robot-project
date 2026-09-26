@@ -7,6 +7,7 @@ matches Bale's documented HTTP API.
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Optional
@@ -98,6 +99,53 @@ class BaleClient:
         with path.open("rb") as fh:
             files = {"document": (path.name, fh, "application/pdf")}
             return self._call("sendDocument", data=data, files=files)
+
+    def send_photo(
+        self,
+        chat_id: int | str,
+        file_path: Path | str,
+        caption: str | None = None,
+        reply_markup: dict | None = None,
+    ) -> dict:
+        """Send a local image via sendPhoto (multipart)."""
+        path = Path(file_path)
+        if not path.is_file():
+            raise BaleAPIError("sendPhoto", f"file not found: {path}")
+        data: dict[str, Any] = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption
+        if reply_markup is not None:
+            data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+        suffix = path.suffix.lower()
+        mime = "image/png" if suffix == ".png" else "image/webp" if suffix == ".webp" else "image/jpeg"
+        with path.open("rb") as fh:
+            files = {"photo": (path.name, fh, mime)}
+            return self._call("sendPhoto", data=data, files=files)
+
+    def try_set_my_photo(self, file_path: Path | str) -> tuple[bool, str]:
+        """Attempt to set the bot profile photo. Bale may not support this.
+
+        Returns (ok, detail). On unsupported API, returns (False, reason) without raising.
+        """
+        path = Path(file_path)
+        if not path.is_file():
+            return False, f"file not found: {path}"
+        suffix = path.suffix.lower()
+        mime = "image/png" if suffix == ".png" else "image/webp" if suffix == ".webp" else "image/jpeg"
+        last_detail = "unsupported"
+        for method in ("setMyPhoto", "setMyProfilePhoto", "setBotPhoto"):
+            try:
+                with path.open("rb") as fh:
+                    files = {"photo": (path.name, fh, mime)}
+                    self._call(method, data={}, files=files)
+                return True, method
+            except BaleAPIError as exc:
+                last_detail = f"{method}: {exc.description}"
+                logger.info("bot profile photo API unavailable via %s: %s", method, exc.description)
+            except Exception as exc:  # noqa: BLE001
+                last_detail = f"{method}: {exc}"
+                logger.info("bot profile photo API error via %s: %s", method, exc)
+        return False, last_detail
 
     def get_file(self, file_id: str) -> dict:
         return self._call("getFile", {"file_id": file_id})

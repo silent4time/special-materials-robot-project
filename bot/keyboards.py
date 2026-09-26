@@ -18,6 +18,17 @@ BTN_USERS_EDIT = "✏️ اصلاح نقش کاربر"
 BTN_USERS_DELETE = "🗑 حذف کاربر"
 BTN_USERS_LIST = "📋 لیست کاربران"
 BTN_BACK_USERS = "⬅️ بازگشت"
+
+# Bot settings (owner/manager)
+BTN_BOT_SETTINGS = "⚙️ تنظیمات ربات"
+BTN_SET_INVITE = "📝 متن دعوت‌نامه کاربران"
+BTN_SET_WELCOME = "👋 پیام خوشامدگویی"
+BTN_SET_LOGO = "🖼 لوگوی ربات"
+BTN_BACK_BOT_SETTINGS = "⬅️ بازگشت به تنظیمات ربات"
+BTN_SETTINGS_VIEW = "👁 مشاهده"
+BTN_SETTINGS_EDIT_TEXT = "✏️ ویرایش متن"
+BTN_SETTINGS_SET_IMAGE = "🖼 تنظیم تصویر"
+BTN_SETTINGS_CLEAR_IMAGE = "🗑 حذف تصویر"
 BTN_CANCEL_PENDING = "✖️ انصراف از آپلود"
 
 # Role pick buttons (Persian labels from config.ROLES)
@@ -138,6 +149,7 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
     ]
     if is_manager:
         rows.append([BTN_USERS])
+        rows.append([BTN_BOT_SETTINGS])
     return BaleClient.reply_keyboard(rows)
 
 
@@ -268,6 +280,34 @@ def date_range_menu() -> dict:
 
 def cancel_pending_menu() -> dict:
     return BaleClient.reply_keyboard([[BTN_CANCEL_PENDING], [BTN_HELP]])
+
+
+
+def bot_settings_menu() -> dict:
+    """Owner/manager submenu for invite / welcome / logo."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_SET_INVITE],
+            [BTN_SET_WELCOME],
+            [BTN_SET_LOGO],
+            [BTN_BACK_MAIN],
+        ]
+    )
+
+
+def bot_settings_item_menu(*, include_text: bool = True) -> dict:
+    """Per-item settings actions (view / edit text / set-clear image)."""
+    rows: list[list[str]] = [[BTN_SETTINGS_VIEW]]
+    if include_text:
+        rows.append([BTN_SETTINGS_EDIT_TEXT])
+    rows.extend(
+        [
+            [BTN_SETTINGS_SET_IMAGE],
+            [BTN_SETTINGS_CLEAR_IMAGE],
+            [BTN_BACK_BOT_SETTINGS],
+        ]
+    )
+    return BaleClient.reply_keyboard(rows)
 
 
 BTN_INVITE_ENTER = "ورود به ربات"

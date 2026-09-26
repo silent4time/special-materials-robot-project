@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
+from pathlib import Path
 
 import pandas as pd
 from typing import Any
@@ -33,7 +34,14 @@ from auth.rbac import (
 )
 from bot import keyboards as kb
 from bot.bale_api import BaleClient
-from config import BOT_USERNAME, CRITICAL_DAYS, FILE_TYPES, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
+from bot.settings_text import (
+    DEFAULT_INVITE_TEXT,
+    PLACEHOLDER_HINT_INVITE,
+    PLACEHOLDER_HINT_WELCOME,
+    format_invite_text,
+    format_welcome_text,
+)
+from config import BOT_ASSETS_DIR, BOT_USERNAME, CRITICAL_DAYS, FILE_TYPES, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
 from db.models import Database
 from excel.processor import (
     ExcelValidationError,
@@ -86,6 +94,12 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
   /adduser <bale_id> <role> [name...]
   /setrole <bale_id> <role>
   /setscope <bale_id> <scope>  (ابزار قدیمی؛ معمولاً لازم نیست)
+
+تنظیمات ربات (مالک/مدیر):
+• متن دعوت‌نامه کاربران (قالب + تصویر اختیاری)
+• پیام خوشامدگویی (قالب + تصویر اختیاری)
+• لوگوی ربات (تصویر برندینگ؛ در خوشامدگویی نمایش داده می‌شود)
+
 /reset — پاک کردن جلسه آپلود و وضعیت ورود جاری
 """.format(
     critical=int(CRITICAL_DAYS) if CRITICAL_DAYS == int(CRITICAL_DAYS) else CRITICAL_DAYS,
@@ -107,6 +121,8 @@ class BotApp:
         self._catalog_assign_pending: dict[str, dict[str, Any]] = {}
         # user-management interactive flows
         self._users_pending: dict[str, dict[str, Any]] = {}
+        # bot settings interactive flows
+        self._bot_settings_pending: dict[str, dict[str, Any]] = {}
         self._bot_username: str | None = None
         ensure_dirs()
 
@@ -177,6 +193,7 @@ class BotApp:
         self._site_stock_pending.pop(uid, None)
         self._catalog_assign_pending.pop(uid, None)
         self._users_pending.pop(uid, None)
+        self._bot_settings_pending.pop(uid, None)
         self._reply(
             message,
             "دسترسی ندارید؛ فقط ورود موجودی روزانه سایت برای نقش تکنسین فعال است.",
@@ -384,23 +401,37 @@ class BotApp:
         return "\n".join(lines)
 
     def _welcome_text(self, user: dict) -> str:
-        scope = (user.get("scope") or "").strip()
-        scope_line = f"حوزه: {scope}\n" if scope else ""
-        return (
-            "سلام! به بازوی «گزارش مواد / تاندیش» خوش آمدید.\n\n"
-            f"نقش شما: {role_label(user['role'])}\n"
-            f"{scope_line}\n"
-            + (
-                "برای نقش تکنسین فقط ورود «موجودی روزانه سایت» فعال است.\n"
-                "از منو یکی از گروه‌های اسلب / بلوم / بیلت را انتخاب و مقادیر را یکی‌یکی بفرستید."
-                if user.get("role") == "technician"
-                else
-                "از منو: موجودی انبار / مصرف ماهیانه / موجودی روزانه سایت را انتخاب کنید.\n"
-                "موجودی روزانه سایت تعاملی است (سه گروه اسلب/بلوم/بیلت).\n"
-                "از «تنظیمات اقلام سایت / تخصیص به گروه» اقلام را به گروه تخصیص دهید.\n"
-                "از «گزارش‌ها / تحلیل تاندیش» برای تحلیل‌ها استفاده کنید."
-            )
-        )
+        template = self.db.get_setting("welcome_text")
+        return format_welcome_text(template, user)
+
+    def _branding_photo_path(self, *, prefer_welcome: bool = False) -> Path | None:
+        """Return an existing branding image path, or None."""
+        keys = ("welcome_image_path", "logo_path") if prefer_welcome else ("logo_path",)
+        for key in keys:
+            raw = self.db.get_setting(key)
+            if raw:
+                path = Path(raw)
+                if path.is_file():
+                    return path
+        return None
+
+    def _send_welcome(self, message: dict, user: dict, prefix: str = "") -> None:
+        """Send welcome: one photo (welcome_image else logo) + caption, or text only."""
+        text = (prefix + self._welcome_text(user)).strip()
+        markup = kb.main_menu(user)
+        photo = self._branding_photo_path(prefer_welcome=True)
+        if photo is not None:
+            try:
+                self.client.send_photo(
+                    self._chat_id(message),
+                    photo,
+                    caption=text,
+                    reply_markup=markup,
+                )
+                return
+            except Exception:  # noqa: BLE001
+                logger.exception("send_photo welcome failed; falling back to text")
+        self._reply(message, text, markup)
 
     def _redeem_invite(self, message: dict, token: str) -> None:
         """Redeem deep-link invite BEFORE any registered-user gate."""
@@ -412,11 +443,7 @@ class BotApp:
             self._reply(message, str(exc))
             return
         self.db.get_or_create_session(user["bale_user_id"])
-        self._reply(
-            message,
-            "✅ دعوت پذیرفته شد.\n\n" + self._welcome_text(user),
-            kb.main_menu(user),
-        )
+        self._send_welcome(message, user, prefix="✅ دعوت پذیرفته شد.\n\n")
 
     # ---------- commands ----------
     def cmd_start(self, message: dict, args: list[str] | None = None) -> None:
@@ -430,7 +457,7 @@ class BotApp:
         if not user:
             return
         self.db.get_or_create_session(user["bale_user_id"])
-        self._reply(message, self._welcome_text(user), kb.main_menu(user))
+        self._send_welcome(message, user)
 
     def cmd_help(self, message: dict) -> None:
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))
@@ -505,27 +532,9 @@ class BotApp:
 
     def _invite_message_text(self, role: str, scope: str | None = None) -> str:
         """Formal Persian invitation body for the invitee (no bot username / raw URL)."""
-        role_fa = role_label(role)
-        lines = [
-            "سلام؛",
-            "",
-            "شما برای استفاده از سامانهٔ مدیریت مواد ویژه تاندیش دعوت شده‌اید.",
-            "",
-            f"نقش تعریف‌شده برای شما: {role_fa}",
-        ]
-        # scope is kept for backward compat on old invites but not shown for new ones
-        _ = scope
-        lines.extend(
-            [
-                "",
-                "لطفاً برای فعال‌سازی حساب و شروع کار، دکمهٔ زیر را بزنید. "
-                "این لینک شخصی است و تا ۷ روز معتبر می‌باشد.",
-                "",
-                "با احترام",
-                "مدیریت سیستم مواد تاندیش",
-            ]
-        )
-        return "\n".join(lines)
+        _ = scope  # kept for backward compat
+        template = self.db.get_setting("invite_text")
+        return format_invite_text(template, role)
 
     def _create_and_send_invite(
         self, message: dict, actor: dict, role: str, scope: str | None
@@ -537,8 +546,26 @@ class BotApp:
             expires_days=7,
         )
         url = self._invite_url(invite["token"])
-        # Forwardable invite: formal body + inline URL button only (no reply keyboard).
-        self._reply(message, self._invite_message_text(role, scope), kb.invite_url_button(url))
+        body = self._invite_message_text(role, scope)
+        markup = kb.invite_url_button(url)
+        img_raw = self.db.get_setting("invite_image_path")
+        sent_photo = False
+        if img_raw:
+            img = Path(img_raw)
+            if img.is_file():
+                try:
+                    self.client.send_photo(
+                        self._chat_id(message),
+                        img,
+                        caption=body,
+                        reply_markup=markup,
+                    )
+                    sent_photo = True
+                except Exception:  # noqa: BLE001
+                    logger.exception("send_photo invite failed; falling back to text")
+        if not sent_photo:
+            # Forwardable invite: formal body + inline URL button only (no reply keyboard).
+            self._reply(message, body, markup)
         scope_note = f" — حوزه: {scope}" if scope else ""
         self._reply(
             message,
@@ -817,6 +844,7 @@ class BotApp:
         self._site_stock_pending.pop(uid, None)
         self._catalog_assign_pending.pop(uid, None)
         self._users_pending.pop(uid, None)
+        self._bot_settings_pending.pop(uid, None)
         self.db.reset_session(user["bale_user_id"])
         self._reply(message, "جلسه آپلود و وضعیت ورود جاری پاک شد. از منو دوباره شروع کنید.", kb.main_menu(user))
 
@@ -1913,13 +1941,387 @@ class BotApp:
         self._reply(message, msg, kb.catalog_settings_menu())
 
 
+    # ---------- bot settings (owner/manager) ----------
+    def _clear_bot_settings_pending(self, uid: str) -> None:
+        self._bot_settings_pending.pop(str(uid), None)
+
+    def _require_bot_settings_user(self, message: dict) -> dict | None:
+        """Owner + manager only (same gate as کاربران)."""
+        user = self._user_or_deny(message)
+        if not user:
+            return None
+        if self._deny_technician(message, user):
+            return None
+        if not require_manager(user):
+            self._reply(
+                message,
+                "فقط مالک یا مدیر به بخش تنظیمات ربات دسترسی دارد.",
+                kb.main_menu(user),
+            )
+            return None
+        return user
+
+    def _settings_item_menu(self, which: str) -> dict:
+        return kb.bot_settings_item_menu(include_text=(which != "logo"))
+
+    def _image_status_line(self, key: str) -> str:
+        raw = self.db.get_setting(key)
+        if raw and Path(raw).is_file():
+            return f"تصویر: ✅ تنظیم شده ({Path(raw).name})"
+        return "تصویر: ❌ تنظیم نشده"
+
+    def on_bot_settings_menu(self, message: dict) -> None:
+        user = self._require_bot_settings_user(message)
+        if not user:
+            return
+        self._clear_bot_settings_pending(str(user["bale_user_id"]))
+        self._reply(
+            message,
+            "تنظیمات ربات — یک بخش را انتخاب کنید:",
+            kb.bot_settings_menu(),
+        )
+
+    def on_bot_settings_section(self, message: dict, which: str) -> None:
+        user = self._require_bot_settings_user(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._bot_settings_pending[uid] = {"mode": "menu", "which": which}
+        titles = {
+            "invite": "متن دعوت‌نامه کاربران",
+            "welcome": "پیام خوشامدگویی",
+            "logo": "لوگوی ربات",
+        }
+        hint = ""
+        if which == "invite":
+            hint = "\n\n" + PLACEHOLDER_HINT_INVITE
+        elif which == "welcome":
+            hint = "\n\n" + PLACEHOLDER_HINT_WELCOME
+        self._reply(
+            message,
+            f"بخش «{titles.get(which, which)}» — یک گزینه را انتخاب کنید:{hint}",
+            self._settings_item_menu(which),
+        )
+
+    def _preview_invite(self, message: dict, user: dict) -> None:
+        sample_role = "technician"
+        text = self._invite_message_text(sample_role)
+        img = self.db.get_setting("invite_image_path")
+        status = self._image_status_line("invite_image_path")
+        header = (
+            "پیش‌نمایش دعوت‌نامه (نمونه نقش تکنسین):\n"
+            f"{status}\n"
+            "────────\n"
+        )
+        markup = self._settings_item_menu("invite")
+        body = header + text
+        if img and Path(img).is_file():
+            try:
+                self.client.send_photo(
+                    self._chat_id(message), Path(img), caption=body, reply_markup=markup
+                )
+                return
+            except Exception:  # noqa: BLE001
+                logger.exception("preview invite photo failed")
+        self._reply(message, body, markup)
+
+    def _preview_welcome(self, message: dict, user: dict) -> None:
+        text = self._welcome_text(user)
+        status_w = self._image_status_line("welcome_image_path")
+        status_l = self._image_status_line("logo_path")
+        header = (
+            "پیش‌نمایش خوشامدگویی (با نقش شما):\n"
+            f"{status_w}\n"
+            f"لوگو: {status_l.split(':', 1)[-1].strip()}\n"
+            "────────\n"
+        )
+        markup = self._settings_item_menu("welcome")
+        body = header + text
+        photo = self._branding_photo_path(prefer_welcome=True)
+        if photo is not None:
+            try:
+                self.client.send_photo(
+                    self._chat_id(message), photo, caption=body, reply_markup=markup
+                )
+                return
+            except Exception:  # noqa: BLE001
+                logger.exception("preview welcome photo failed")
+        self._reply(message, body, markup)
+
+    def _preview_logo(self, message: dict, user: dict) -> None:
+        markup = self._settings_item_menu("logo")
+        raw = self.db.get_setting("logo_path")
+        if raw and Path(raw).is_file():
+            try:
+                self.client.send_photo(
+                    self._chat_id(message),
+                    Path(raw),
+                    caption="لوگوی فعلی ربات:",
+                    reply_markup=markup,
+                )
+                return
+            except Exception:  # noqa: BLE001
+                logger.exception("preview logo failed")
+                self._reply(message, f"لوگو ذخیره شده ولی ارسال نشد:\n{raw}", markup)
+                return
+        self._reply(message, "هنوز لوگو تنظیم نشده.", markup)
+
+    def on_bot_settings_view(self, message: dict) -> None:
+        user = self._require_bot_settings_user(message)
+        if not user:
+            return
+        pending = self._bot_settings_pending.get(str(user["bale_user_id"])) or {}
+        which = pending.get("which")
+        if which == "invite":
+            self._preview_invite(message, user)
+        elif which == "welcome":
+            self._preview_welcome(message, user)
+        elif which == "logo":
+            self._preview_logo(message, user)
+        else:
+            self._reply(message, "ابتدا یک بخش تنظیمات را انتخاب کنید.", kb.bot_settings_menu())
+
+    def on_bot_settings_edit_text_start(self, message: dict) -> None:
+        user = self._require_bot_settings_user(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        pending = self._bot_settings_pending.get(uid) or {}
+        which = pending.get("which")
+        if which not in {"invite", "welcome"}:
+            self._reply(message, "این بخش متن قابل ویرایش ندارد.", kb.bot_settings_menu())
+            return
+        self._bot_settings_pending[uid] = {"mode": "await_text", "which": which}
+        if which == "invite":
+            current = self.db.get_setting("invite_text") or DEFAULT_INVITE_TEXT
+            hint = PLACEHOLDER_HINT_INVITE
+        else:
+            current = self.db.get_setting("welcome_text") or "(پیش‌فرض داخلی نقش‌محور)"
+            hint = PLACEHOLDER_HINT_WELCOME
+        self._reply(
+            message,
+            f"{hint}\n\nمتن فعلی:\n────────\n{current}\n────────\n"
+            "متن جدید را بفرستید (یا برای بازگشت از منو استفاده کنید):",
+            self._settings_item_menu(which),
+        )
+
+    def on_bot_settings_set_image_start(self, message: dict) -> None:
+        user = self._require_bot_settings_user(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        pending = self._bot_settings_pending.get(uid) or {}
+        which = pending.get("which")
+        if which not in {"invite", "welcome", "logo"}:
+            self._reply(message, "ابتدا یک بخش تنظیمات را انتخاب کنید.", kb.bot_settings_menu())
+            return
+        self._bot_settings_pending[uid] = {"mode": "await_image", "which": which}
+        self._reply(
+            message,
+            "لطفاً تصویر را همین حالا به‌صورت Photo ارسال کنید.\n"
+            "(ارسال به‌صورت Document تصویر هم پذیرفته می‌شود.)",
+            self._settings_item_menu(which),
+        )
+
+    def on_bot_settings_clear_image(self, message: dict) -> None:
+        user = self._require_bot_settings_user(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        pending = self._bot_settings_pending.get(uid) or {}
+        which = pending.get("which")
+        key_map = {
+            "invite": "invite_image_path",
+            "welcome": "welcome_image_path",
+            "logo": "logo_path",
+        }
+        key = key_map.get(which or "")
+        if not key:
+            self._reply(message, "ابتدا یک بخش تنظیمات را انتخاب کنید.", kb.bot_settings_menu())
+            return
+        old = self.db.get_setting(key)
+        self.db.clear_setting(key, updated_by=uid)
+        if old:
+            try:
+                Path(old).unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                logger.warning("could not delete old asset %s", old)
+        self._bot_settings_pending[uid] = {"mode": "menu", "which": which}
+        self._reply(message, "✅ تصویر حذف شد.", self._settings_item_menu(which))
+
+    def _save_bot_asset(self, file_id: str, which: str, uid: str) -> Path:
+        BOT_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+        # Prefer jpeg extension; Bale may serve jpeg regardless of original
+        dest = BOT_ASSETS_DIR / f"{which}_{uid}.jpg"
+        # rotate previous path if different
+        key_map = {
+            "invite": "invite_image_path",
+            "welcome": "welcome_image_path",
+            "logo": "logo_path",
+        }
+        old = self.db.get_setting(key_map[which])
+        saved = self.client.download_file(file_id, dest)
+        if old and Path(old).resolve() != Path(saved).resolve():
+            try:
+                Path(old).unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+        self.db.set_setting(key_map[which], str(saved), updated_by=uid)
+        return Path(saved)
+
+    @staticmethod
+    def _extract_image_file_id(message: dict) -> str | None:
+        photos = message.get("photo") or []
+        if isinstance(photos, list) and photos:
+            best = photos[-1] if isinstance(photos[-1], dict) else None
+            if best and best.get("file_id"):
+                return str(best["file_id"])
+        doc = message.get("document") or {}
+        mime = str(doc.get("mime_type") or "")
+        if mime.startswith("image/") and doc.get("file_id"):
+            return str(doc["file_id"])
+        return None
+
+    def on_bot_settings_photo(self, message: dict) -> bool:
+        """Handle inbound photo while awaiting image. Returns True if consumed."""
+        uid = str(self._uid(message))
+        pending = self._bot_settings_pending.get(uid)
+        if not pending or pending.get("mode") != "await_image":
+            return False
+        user = self._require_bot_settings_user(message)
+        if not user:
+            self._clear_bot_settings_pending(uid)
+            return True
+        which = pending.get("which")
+        if which not in {"invite", "welcome", "logo"}:
+            self._clear_bot_settings_pending(uid)
+            return True
+        file_id = self._extract_image_file_id(message)
+        if not file_id:
+            self._reply(
+                message,
+                "تصویر معتبر دریافت نشد. یک Photo بفرستید.",
+                self._settings_item_menu(which),
+            )
+            return True
+        try:
+            path = self._save_bot_asset(file_id, which, uid)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("save bot asset failed")
+            self._reply(
+                message,
+                f"ذخیره تصویر ناموفق بود: {exc}",
+                self._settings_item_menu(which),
+            )
+            return True
+        extra = ""
+        if which == "logo":
+            ok, detail = self.client.try_set_my_photo(path)
+            if ok:
+                extra = "\nعکس پروفایل بازو هم به‌روز شد."
+            else:
+                extra = (
+                    "\n(API عکس پروفایل بازو در بله پشتیبانی نشد؛ "
+                    "لوگو به‌عنوان تصویر برندینگ ذخیره شد و در خوشامدگویی نمایش داده می‌شود.)"
+                )
+                logger.info("set bot profile photo fallback: %s", detail)
+        self._bot_settings_pending[uid] = {"mode": "menu", "which": which}
+        self._reply(
+            message,
+            f"✅ تصویر ذخیره شد: {path.name}{extra}",
+            self._settings_item_menu(which),
+        )
+        return True
+
+    def on_bot_settings_flow_text(self, message: dict, text: str) -> bool:
+        """Handle pending bot-settings text. Returns True if consumed."""
+        uid = str(self._uid(message))
+        pending = self._bot_settings_pending.get(uid)
+        if not pending:
+            return False
+        user = self._require_bot_settings_user(message)
+        if not user:
+            self._clear_bot_settings_pending(uid)
+            return True
+
+        raw = (text or "").strip()
+        nav = {
+            kb.BTN_BOT_SETTINGS,
+            kb.BTN_SET_INVITE,
+            kb.BTN_SET_WELCOME,
+            kb.BTN_SET_LOGO,
+            kb.BTN_SETTINGS_VIEW,
+            kb.BTN_SETTINGS_EDIT_TEXT,
+            kb.BTN_SETTINGS_SET_IMAGE,
+            kb.BTN_SETTINGS_CLEAR_IMAGE,
+            kb.BTN_BACK_BOT_SETTINGS,
+            kb.BTN_BACK_MAIN,
+            kb.BTN_USERS,
+            kb.BTN_HELP,
+        }
+        if raw in nav:
+            # Let dispatcher handle navigation buttons; clear await_text if leaving.
+            if pending.get("mode") == "await_text" and raw not in {
+                kb.BTN_SETTINGS_VIEW,
+                kb.BTN_SETTINGS_EDIT_TEXT,
+                kb.BTN_SETTINGS_SET_IMAGE,
+                kb.BTN_SETTINGS_CLEAR_IMAGE,
+                kb.BTN_BACK_BOT_SETTINGS,
+            }:
+                # keep which for item buttons; clear only on leaving section
+                pass
+            if raw in {
+                kb.BTN_BOT_SETTINGS,
+                kb.BTN_SET_INVITE,
+                kb.BTN_SET_WELCOME,
+                kb.BTN_SET_LOGO,
+                kb.BTN_BACK_BOT_SETTINGS,
+                kb.BTN_BACK_MAIN,
+                kb.BTN_USERS,
+                kb.BTN_HELP,
+            }:
+                # navigation handled by dispatcher; don't consume await for item actions
+                if raw in {kb.BTN_BACK_MAIN, kb.BTN_BOT_SETTINGS, kb.BTN_BACK_BOT_SETTINGS}:
+                    return False
+                return False
+            return False
+
+        if pending.get("mode") != "await_text":
+            return False
+
+        which = pending.get("which")
+        if which == "invite":
+            self.db.set_setting("invite_text", raw, updated_by=uid)
+            self._bot_settings_pending[uid] = {"mode": "menu", "which": "invite"}
+            self._reply(message, "✅ متن دعوت‌نامه ذخیره شد.", self._settings_item_menu("invite"))
+            return True
+        if which == "welcome":
+            self.db.set_setting("welcome_text", raw, updated_by=uid)
+            self._bot_settings_pending[uid] = {"mode": "menu", "which": "welcome"}
+            self._reply(message, "✅ متن خوشامدگویی ذخیره شد.", self._settings_item_menu("welcome"))
+            return True
+
+        self._clear_bot_settings_pending(uid)
+        return False
+
+
     # ---------- dispatcher ----------
     def handle_message(self, message: dict) -> None:
         if not message:
             return
         text = (message.get("text") or "").strip()
+
+        # Bot-settings image wait (photo or image document) — before generic document handler
+        if message.get("photo") or message.get("document"):
+            if self.on_bot_settings_photo(message):
+                return
+
         if message.get("document"):
             self.on_document(message)
+            return
+
+        if message.get("photo"):
+            # Photo outside settings flow — ignore politely if registered
             return
 
         if not text:
@@ -1969,6 +2371,10 @@ class BotApp:
         if self.on_users_flow_text(message, text):
             return
 
+        # bot-settings interactive text (invite/welcome templates)
+        if self.on_bot_settings_flow_text(message, text):
+            return
+
         # keyboard buttons
         if text == kb.BTN_HELP:
             self.cmd_help(message)
@@ -2006,6 +2412,36 @@ class BotApp:
                 self._clear_users_pending(str(user["bale_user_id"]))
                 self._reply(message, "منوی اصلی:", kb.main_menu(user))
             return
+
+        # --- تنظیمات ربات ---
+        if text == kb.BTN_BOT_SETTINGS:
+            self.on_bot_settings_menu(message)
+            return
+        if text == kb.BTN_SET_INVITE:
+            self.on_bot_settings_section(message, "invite")
+            return
+        if text == kb.BTN_SET_WELCOME:
+            self.on_bot_settings_section(message, "welcome")
+            return
+        if text == kb.BTN_SET_LOGO:
+            self.on_bot_settings_section(message, "logo")
+            return
+        if text == kb.BTN_SETTINGS_VIEW:
+            self.on_bot_settings_view(message)
+            return
+        if text == kb.BTN_SETTINGS_EDIT_TEXT:
+            self.on_bot_settings_edit_text_start(message)
+            return
+        if text == kb.BTN_SETTINGS_SET_IMAGE:
+            self.on_bot_settings_set_image_start(message)
+            return
+        if text == kb.BTN_SETTINGS_CLEAR_IMAGE:
+            self.on_bot_settings_clear_image(message)
+            return
+        if text == kb.BTN_BACK_BOT_SETTINGS:
+            self.on_bot_settings_menu(message)
+            return
+
         if text == kb.BTN_ANALYTICS:
             self.on_analytics_menu(message)
             return
@@ -2032,6 +2468,7 @@ class BotApp:
                 self._clear_site_stock_pending(uid)
                 self._clear_catalog_pending(uid)
                 self._clear_users_pending(uid)
+                self._bot_settings_pending.pop(uid, None)
                 self._await_category_code.discard(uid)
                 self._reply(message, "منوی اصلی:", kb.main_menu(user))
             return

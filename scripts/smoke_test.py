@@ -13,6 +13,7 @@ import pandas as pd
 from openpyxl import Workbook
 
 from bot import keyboards as kb
+from bot.settings_text import DEFAULT_INVITE_TEXT, format_invite_text, format_welcome_text
 from analytics.tundish import (
     critical_materials,
     daily_rates,
@@ -93,6 +94,19 @@ def main() -> int:
     assert kb.BTN_USERS in owner_menu and kb.BTN_USERS in manager_menu
     assert kb.BTN_USERS not in tech_menu
     assert kb.BTN_USERS not in officer_menu
+    assert kb.BTN_BOT_SETTINGS in owner_menu and kb.BTN_BOT_SETTINGS in manager_menu
+    assert kb.BTN_BOT_SETTINGS not in tech_menu
+    assert kb.BTN_BOT_SETTINGS not in officer_menu
+    bot_set_menu = menu_texts(kb.bot_settings_menu())
+    assert kb.BTN_SET_INVITE in bot_set_menu
+    assert kb.BTN_SET_WELCOME in bot_set_menu
+    assert kb.BTN_SET_LOGO in bot_set_menu
+    item_menu = menu_texts(kb.bot_settings_item_menu(include_text=True))
+    assert kb.BTN_SETTINGS_VIEW in item_menu
+    assert kb.BTN_SETTINGS_EDIT_TEXT in item_menu
+    assert kb.BTN_SETTINGS_SET_IMAGE in item_menu
+    logo_menu = menu_texts(kb.bot_settings_item_menu(include_text=False))
+    assert kb.BTN_SETTINGS_EDIT_TEXT not in logo_menu
     users_submenu = menu_texts(kb.users_menu())
     assert kb.BTN_USERS_ADD in users_submenu
     assert kb.BTN_USERS_EDIT in users_submenu
@@ -419,6 +433,26 @@ def main() -> int:
     assert "catalog_group_assignments" in tables
     assert "site_stock_entries" in tables
     assert "invites" in tables
+    assert "bot_settings" in tables
+
+    # --- bot settings persistence + template format ---
+    assert db.get_setting("invite_text") is None
+    db.set_setting("invite_text", "دعوت برای نقش {role_fa}", updated_by="998")
+    assert db.get_setting("invite_text") == "دعوت برای نقش {role_fa}"
+    formatted = format_invite_text(db.get_setting("invite_text"), "manager")
+    assert "مدیر" in formatted
+    assert "{role_fa}" not in formatted
+    default_inv = format_invite_text(None, "technician")
+    assert "تکنسین" in default_inv
+    assert "{role_fa}" in DEFAULT_INVITE_TEXT
+    welcome = format_welcome_text(None, db.get_user("1001"))
+    assert "تکنسین" in welcome
+    welcome2 = format_welcome_text("سلام {name} — نقش {role_fa}", db.get_user("999"))
+    assert "مدیر تست" in welcome2 and "مدیر" in welcome2
+    db.set_setting("logo_path", "/tmp/fake_logo.jpg", updated_by="998")
+    assert db.get_setting("logo_path") == "/tmp/fake_logo.jpg"
+    db.clear_setting("logo_path", updated_by="998")
+    assert db.get_setting("logo_path") is None
     # reports.created_by + catalog assigned_by present
     with db.connect() as conn:
         report_cols = {r[1] for r in conn.execute("PRAGMA table_info(reports)").fetchall()}

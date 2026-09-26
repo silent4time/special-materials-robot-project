@@ -14,6 +14,7 @@ ADMIN_BALE_USER_ID = os.getenv("ADMIN_BALE_USER_ID", "").strip()
 BOT_USERNAME = os.getenv("BOT_USERNAME", "nasoz_bot").strip().lstrip("@")
 DATABASE_PATH = Path(os.getenv("DATABASE_PATH", str(BASE_DIR / "data" / "bot.db")))
 UPLOAD_DIR = BASE_DIR / "uploads"
+BOT_ASSETS_DIR = BASE_DIR / "data" / "bot_assets"
 REPORT_DIR = BASE_DIR / "reports"
 FONTS_DIR = BASE_DIR / "fonts"
 POLL_TIMEOUT = int(os.getenv("POLL_TIMEOUT", "25"))
@@ -153,5 +154,6 @@ REQUIRED_COLUMNS = {
 
 def ensure_dirs() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    BOT_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
