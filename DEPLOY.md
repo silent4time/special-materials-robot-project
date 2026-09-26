@@ -117,3 +117,32 @@ pip install -r requirements.txt
 cp .env.example .env && nano .env   # فقط BALE_BOT_TOKEN الزامی است
 python main.py                      # اولین /start → مالک
 ```
+
+## دستیار گزارش‌ها (Ollama محلی)
+
+دستیار فقط از **Ollama (یا سازگار) روی همین سرور** استفاده می‌کند؛ هیچ LLM ابری فراخوانی نمی‌شود. اگر Ollama خاموش باشد، ربات کرش نمی‌کند و پیام فارسی «دستیار محلی در دسترس نیست…» نشان می‌دهد.
+
+### نصب Ollama و مدل پیش‌فرض
+
+```bash
+# نصب (Linux)
+curl -fsSL https://ollama.com/install.sh | sh
+
+# سرویس معمولاً روی http://127.0.0.1:11434 گوش می‌دهد
+ollama serve   # اگر به‌صورت سرویس بالا نباشد
+
+# مدل کوچک مناسب CPU (پیش‌فرض ربات):
+ollama pull qwen2.5:3b
+```
+
+متغیرهای اختیاری در `.env`:
+
+```bash
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5:3b
+OLLAMA_TIMEOUT=60
+```
+
+مدل پیش‌فرض در کد: `qwen2.5:3b`. اگر RAM کم است، `qwen2.5:1.5b` را بکشید و `OLLAMA_MODEL=qwen2.5:1.5b` بگذارید (در باکس توسعه همین مدل برای smoke تأیید شد). سایر گزینه‌ها: `llama3.2:3b`, `phi3:mini`.
+
+در بله: منوی «گزارش‌ها / تحلیل تاندیش» → «دستیار گزارش‌ها» (نقش تکنسین دسترسی ندارد).

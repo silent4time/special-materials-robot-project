@@ -38,6 +38,7 @@ from auth.rbac import (
 )
 from bot import keyboards as kb
 from bot.activity import log_activity
+from bot.report_assistant import build_report_context, chat as report_assistant_chat
 from bot.jalali import (
     format_date,
     format_datetime,
@@ -106,6 +107,7 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • مواد بحرانی — پوشش < CRITICAL_DAYS={critical} روز
 • اگر موجودی روزانه سایت ثبت شده باشد، برای «موجودی و مواد بحرانی» به‌عنوان منبع باقیمانده سایت استفاده می‌شود
 • سربرگ PDF (اختیاری): از «تنظیمات ربات» → «سربرگ PDF» آپلود کنید؛ روی همه صفحات گزارش اعمال می‌شود
+• دستیار گزارش‌ها — گفتگوی محلی با Ollama فقط دربارهٔ گزارش‌ها (غیرتکنسین؛ بدون API ابری)
 
 درخواست مواد (مالک / مدیر / کاردان مسئول):
 • دکمه «🛒 درخواست مواد» در منوی اصلی
@@ -163,6 +165,8 @@ class BotApp:
         # material request interactive flow
         self._material_req_pending: dict[str, dict[str, Any]] = {}
         self._warehouse_ret_pending: dict[str, dict[str, Any]] = {}
+        # report assistant free-text conversation (non-technician)
+        self._report_assistant_pending: set[str] = set()
         self._bot_username: str | None = None
         ensure_dirs()
 
@@ -236,6 +240,7 @@ class BotApp:
         self._bot_settings_pending.pop(uid, None)
         self._material_req_pending.pop(uid, None)
         self._warehouse_ret_pending.pop(uid, None)
+        self._report_assistant_pending.discard(uid)
         self._reply(
             message,
             "دسترسی ندارید؛ فقط ورود موجودی روزانه سایت برای نقش تکنسین فعال است.",
@@ -386,6 +391,9 @@ class BotApp:
 
     def _clear_warehouse_ret_pending(self, uid: str) -> None:
         self._warehouse_ret_pending.pop(str(uid), None)
+
+    def _clear_report_assistant_pending(self, uid: str) -> None:
+        self._report_assistant_pending.discard(str(uid))
 
     def _inventory_with_ledger(self, frame: pd.DataFrame | None) -> pd.DataFrame | None:
         """Apply inventory_ledger deltas onto a warehouse inventory frame."""
@@ -927,6 +935,7 @@ class BotApp:
         self._bot_settings_pending.pop(uid, None)
         self._material_req_pending.pop(uid, None)
         self._warehouse_ret_pending.pop(uid, None)
+        self._clear_report_assistant_pending(uid)
         self.db.reset_session(user["bale_user_id"])
         self._reply(message, "جلسه آپلود و وضعیت ورود جاری پاک شد. از منو دوباره شروع کنید.", kb.main_menu(user))
 
@@ -1430,6 +1439,7 @@ class BotApp:
         if self._deny_technician(message, user):
             return
         self._clear_analysis_pending(user["bale_user_id"])
+        self._clear_report_assistant_pending(str(user["bale_user_id"]))
         session = self.db.get_or_create_session(user["bale_user_id"])
         done = self.db.session_completeness(session)
         lines = [
@@ -4258,6 +4268,92 @@ class BotApp:
 
 
     # ---------- dispatcher ----------
+
+    # ---------- local report assistant ----------
+    def on_report_assistant_start(self, message: dict) -> None:
+        """Enter report-only assistant conversation (all roles except technician)."""
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._report_assistant_pending.add(uid)
+        self._reply(
+            message,
+            "دستیار گزارش‌ها (محلی — Ollama)\n"
+            "فقط دربارهٔ گزارش‌ها و اعداد داخل ربات بپرسید.\n"
+            "برای پایان، «پایان گفتگو» یا بازگشت به تحلیل را بزنید.",
+            kb.report_assistant_menu(),
+        )
+
+    def on_report_assistant_end(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_report_assistant_pending(uid)
+        if self._deny_technician(message, user):
+            return
+        self._reply(message, "گفتگو با دستیار گزارش‌ها پایان یافت.", kb.analytics_menu())
+
+    def on_report_assistant_text(self, message: dict, text: str) -> bool:
+        """Handle free text while in assistant mode. Returns True if consumed."""
+        uid = self._uid(message)
+        if uid not in self._report_assistant_pending:
+            return False
+        user = self._user_or_deny(message)
+        if not user:
+            self._clear_report_assistant_pending(uid)
+            return True
+        if user.get("role") == "technician":
+            self._clear_report_assistant_pending(uid)
+            self._deny_technician(message, user)
+            return True
+        # Exit controls
+        if text in {kb.BTN_END_ASSISTANT, kb.BTN_BACK_ANALYTICS, kb.BTN_BACK_MAIN}:
+            self._clear_report_assistant_pending(uid)
+            if text == kb.BTN_BACK_MAIN:
+                self._reply(message, "منوی اصلی:", kb.main_menu(user))
+            else:
+                self._reply(message, "گفتگو با دستیار گزارش‌ها پایان یافت.", kb.analytics_menu())
+            return True
+        # Let known analytics / main menu buttons leave conversation and fall through
+        leave_buttons = {
+            kb.BTN_ANALYTICS,
+            kb.BTN_DAILY,
+            kb.BTN_SUGGEST,
+            kb.BTN_PERIOD,
+            kb.BTN_REMAINING,
+            kb.BTN_SURPLUS,
+            kb.BTN_INBOUND,
+            kb.BTN_FORECAST,
+            kb.BTN_MONTHLY_SUMMARY,
+            kb.BTN_USER_ACTIVITY,
+            kb.BTN_ANALYTICS_PDF,
+            kb.BTN_TUNDISH_FILTER,
+            kb.BTN_HELP,
+            kb.BTN_RESET,
+            kb.BTN_STATUS,
+            kb.BTN_GENERATE,
+            kb.BTN_REPORT_ASSISTANT,
+        }
+        if text in leave_buttons:
+            self._clear_report_assistant_pending(uid)
+            return False
+        try:
+            context = build_report_context(self.db, user)
+            reply = report_assistant_chat(text, context)
+        except Exception:  # noqa: BLE001
+            logger.exception("report assistant failed")
+            reply = (
+                "دستیار محلی در دسترس نیست؛ Ollama را روی سرور بررسی کنید."
+            )
+        log_activity(self.db, user, "report_assistant_asked")
+        self._reply(message, reply, kb.report_assistant_menu())
+        return True
+
     def handle_message(self, message: dict) -> None:
         if not message:
             return
@@ -4345,6 +4441,10 @@ class BotApp:
         if self.on_material_request_edit_text(message, text):
             return
         if self.on_warehouse_return_edit_text(message, text):
+            return
+
+        # local report assistant free-text mode
+        if self.on_report_assistant_text(message, text):
             return
 
         # keyboard buttons
@@ -4503,6 +4603,7 @@ class BotApp:
                 self._clear_users_pending(uid)
                 self._clear_material_req_pending(uid)
                 self._clear_warehouse_ret_pending(uid)
+                self._clear_report_assistant_pending(uid)
                 self._bot_settings_pending.pop(uid, None)
                 self._await_category_code.discard(uid)
                 self._reply(message, "منوی اصلی:", kb.main_menu(user))
@@ -4539,6 +4640,12 @@ class BotApp:
             return
         if text == kb.BTN_USER_ACTIVITY:
             self.on_user_activity_report(message)
+            return
+        if text == kb.BTN_REPORT_ASSISTANT:
+            self.on_report_assistant_start(message)
+            return
+        if text == kb.BTN_END_ASSISTANT:
+            self.on_report_assistant_end(message)
             return
         if text == kb.BTN_MY_CURRENT:
             if self.on_month_year_range_choice(message, preset="current"):

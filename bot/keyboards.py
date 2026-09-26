@@ -85,6 +85,8 @@ BTN_ANALYTICS_PDF = "📄 PDF کامل تحلیل"
 BTN_MONTHLY_SUMMARY = "📥 دریافت خلاصه مصرف ماهیانه"
 BTN_INBOUND = "📥 گزارش ورودی به انبار"
 BTN_USER_ACTIVITY = "📋 گزارش فعالیت کاربران"
+BTN_REPORT_ASSISTANT = "🤖 دستیار گزارش‌ها"
+BTN_END_ASSISTANT = "پایان گفتگو"
 BTN_TUNDISH_FILTER = "🔎 فیلتر نوع تاندیش"
 BTN_ALL_TUNDISHES = "همه تاندیش‌ها"
 BTN_TUNDISH_SLAB = TUNDISH_TYPES["slab"]
@@ -280,6 +282,7 @@ def analytics_menu() -> dict:
         [BTN_FORECAST],
         [BTN_MONTHLY_SUMMARY],
         [BTN_USER_ACTIVITY],
+        [BTN_REPORT_ASSISTANT],
         [BTN_ANALYTICS_PDF],
         [BTN_TUNDISH_FILTER],
         [BTN_BACK_MAIN],
@@ -383,6 +386,17 @@ def warehouse_return_review_menu() -> dict:
 
 def warehouse_return_edit_menu() -> dict:
     return material_request_edit_menu()
+
+
+
+def report_assistant_menu() -> dict:
+    """Conversation mode for local report-only assistant."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_END_ASSISTANT],
+            [BTN_BACK_ANALYTICS],
+        ]
+    )
 
 
 def cancel_pending_menu() -> dict:

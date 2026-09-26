@@ -20,3 +20,5 @@ data/bot_assets/*
 !data/bot_assets/.gitkeep
 data/bot.pid
 data/bot.log
+data/ollama.pid
+data/ollama.log
