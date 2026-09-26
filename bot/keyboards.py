@@ -99,12 +99,20 @@ BTN_MR_DAYS_7 = "۷ روز"
 BTN_MR_DAYS_14 = "۱۴ روز"
 BTN_MR_DAYS_30 = "۳۰ روز"
 
-# Date-range presets
+# Date-range presets (day-level — advanced for period reports)
 BTN_RANGE_TODAY = "امروز"
 BTN_RANGE_7 = "۷ روز"
 BTN_RANGE_30 = "۳۰ روز"
 BTN_RANGE_CUSTOM = "بازه سفارشی"
 BTN_BACK_ANALYTICS = "⬅️ بازگشت به تحلیل"
+
+# Month/year range presets (primary UX for all time-based reports)
+BTN_MY_CURRENT = "ماه جاری"
+BTN_MY_3 = "۳ ماه اخیر"
+BTN_MY_YTD = "از ابتدای سال"
+BTN_MY_CUSTOM = "بازه سفارشی ماه"
+BTN_MY_DAY_ADV = "بازه روزانه (پیشرفته)"
+BTN_MY_TYPED = "ورود دستی بازه"
 
 # Map site-stock group button label → internal key
 SITE_GROUP_BUTTONS = {
@@ -290,6 +298,39 @@ def date_range_menu() -> dict:
         [BTN_RANGE_CUSTOM],
         [BTN_BACK_ANALYTICS],
     ]
+    return BaleClient.reply_keyboard(rows)
+
+
+def month_year_range_menu(*, include_day_advanced: bool = False) -> dict:
+    """Primary month/year presets for analytics and monthly summary."""
+    rows = [
+        [BTN_MY_CURRENT, BTN_MY_3],
+        [BTN_MY_YTD],
+        [BTN_MY_CUSTOM, BTN_MY_TYPED],
+    ]
+    if include_day_advanced:
+        rows.append([BTN_MY_DAY_ADV])
+    rows.append([BTN_BACK_ANALYTICS])
+    return BaleClient.reply_keyboard(rows)
+
+
+def year_picker_menu(years: list[int]) -> dict:
+    """Reply keyboard listing Jalali years (2 per row)."""
+    labels = [str(y) for y in years]
+    rows: list[list[str]] = []
+    for i in range(0, len(labels), 2):
+        rows.append(labels[i : i + 2])
+    rows.append([BTN_BACK_ANALYTICS])
+    return BaleClient.reply_keyboard(rows)
+
+
+def month_picker_menu() -> dict:
+    """Reply keyboard with 12 Persian month names (3 per row)."""
+    from bot.jalali import PERSIAN_MONTH_NAMES
+
+    names = [PERSIAN_MONTH_NAMES[i] for i in range(1, 13)]
+    rows = [names[i : i + 3] for i in range(0, 12, 3)]
+    rows.append([BTN_BACK_ANALYTICS])
     return BaleClient.reply_keyboard(rows)
 
 

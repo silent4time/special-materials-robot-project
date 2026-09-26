@@ -13,7 +13,16 @@ import pandas as pd
 from openpyxl import Workbook
 
 from bot import keyboards as kb
-from bot.jalali import format_date, format_datetime, parse_user_date, parse_user_date_range
+from bot.jalali import (
+    format_date,
+    format_datetime,
+    format_month_year_range,
+    parse_month_year_range,
+    parse_user_date,
+    parse_user_date_range,
+    resolve_month_year_preset,
+    month_year_to_gregorian_bounds,
+)
 from bot.settings_text import DEFAULT_INVITE_TEXT, format_invite_text, format_welcome_text
 from analytics.tundish import (
     critical_materials,
@@ -35,7 +44,7 @@ from excel.processor import (
     merge_clean_frames,
     process_session_files,
 )
-from excel.monthly_summary import build_monthly_summary, load_monthly_detail, aggregate_monthly_detail
+from excel.monthly_summary import build_monthly_summary, load_monthly_detail, aggregate_monthly_detail, filter_summary_by_month_range
 from excel.work_order import (
     WORK_ORDER_TO_GROUP,
     group_for_work_order,
@@ -220,6 +229,16 @@ def _test_merge_and_monthly_summary() -> None:
         )
         assert pdf_out.exists() and pdf_out.stat().st_size > 1000
         assert kb.BTN_MONTHLY_SUMMARY in str(kb.analytics_menu())
+        assert kb.BTN_MY_CURRENT in str(kb.month_year_range_menu())
+        # Month/year filter: Farvardin–Ordibehesht only
+        filt = filter_summary_by_month_range(data, start=(1405, 1), end=(1405, 2))
+        assert len(filt.month_sections) == 2
+        assert all(s["month"] in (1, 2) for s in filt.month_sections)
+        assert abs(sum(float(s["total_kg"]) for s in filt.month_sections) - float(filt.grand_kg)) < 0.5
+        empty = filter_summary_by_month_range(data, start=(1390, 1), end=(1390, 2))
+        assert empty.items.empty and empty.grand_kg == 0.0
+        data3, written3 = build_monthly_summary(sample, excel_out=excel_out, start=(1405, 1), end=(1405, 2))
+        assert abs(float(data3.grand_kg) - float(filt.grand_kg)) < 0.5
 
 
 def main() -> int:
@@ -656,6 +675,15 @@ def main() -> int:
     assert parse_user_date("2024-09-25") == _date(2024, 9, 25)
     jr = parse_user_date_range("از 1403/07/01 تا 1403/07/04")
     assert jr is not None and jr[0] == _date(2024, 9, 22)
+    myr = parse_month_year_range("از 1405/01 تا 1405/06")
+    assert myr == ((1405, 1), (1405, 6))
+    myr2 = parse_month_year_range("از فروردین 1405 تا شهریور 1405")
+    assert myr2 == ((1405, 1), (1405, 6))
+    assert "فروردین" in format_month_year_range((1405, 1), (1405, 6))
+    cur = resolve_month_year_preset("current")
+    assert cur[0] == cur[1] and 1 <= cur[0][1] <= 12
+    g0, g1 = month_year_to_gregorian_bounds((1405, 1), (1405, 1))
+    assert g0 <= g1
 
     # --- material request: suggest from samples + confirm deducts remaining via ledger ---
     assert "material_requests" in tables

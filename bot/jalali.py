@@ -6,7 +6,7 @@ shown to the user should go through these helpers.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -127,3 +127,198 @@ def parse_user_date_range(text: str) -> Optional[tuple[date, date]]:
 
 def tehran_now() -> datetime:
     return datetime.now(TEHRAN)
+
+
+# --- Month/year range (گزارش‌ها: از ماه/سال تا ماه/سال) ---
+
+PERSIAN_MONTH_NAMES: dict[int, str] = {
+    1: "فروردین",
+    2: "اردیبهشت",
+    3: "خرداد",
+    4: "تیر",
+    5: "مرداد",
+    6: "شهریور",
+    7: "مهر",
+    8: "آبان",
+    9: "آذر",
+    10: "دی",
+    11: "بهمن",
+    12: "اسفند",
+}
+
+PERSIAN_MONTH_NAME_TO_NUM: dict[str, int] = {
+    name: num for num, name in PERSIAN_MONTH_NAMES.items()
+}
+
+_PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+_MONTH_YEAR_TOKEN = re.compile(
+    r"(?:"
+    r"(?P<y1>\d{4})\s*[/-]\s*(?P<m1>\d{1,2})"
+    r"|"
+    r"(?P<name>" + "|".join(PERSIAN_MONTH_NAMES.values()) + r")\s+(?P<y2>\d{4})"
+    r"|"
+    r"(?P<m2>\d{1,2})\s*[/-]\s*(?P<y3>\d{4})"
+    r")",
+    re.UNICODE,
+)
+
+_MONTH_YEAR_RANGE_RE = re.compile(
+    r"از\s*(.+?)\s*تا\s*(.+)$",
+    re.UNICODE,
+)
+
+
+def _latin_digits(text: str) -> str:
+    return (text or "").translate(_PERSIAN_DIGITS)
+
+
+def jalali_today() -> jdatetime.date:
+    return jdatetime.date.fromgregorian(date=tehran_now().date())
+
+
+def ym_key(year: int, month: int) -> int:
+    return int(year) * 12 + int(month)
+
+
+def parse_month_year_token(text: str) -> Optional[tuple[int, int]]:
+    """Parse a single Jalali month/year token.
+
+    Accepts ``1405/01``, ``1405-1``, ``فروردین 1405``, ``01/1405``.
+    """
+    raw = _latin_digits((text or "").strip())
+    if not raw:
+        return None
+    m = _MONTH_YEAR_TOKEN.fullmatch(raw) or _MONTH_YEAR_TOKEN.search(raw)
+    if not m:
+        return None
+    try:
+        if m.group("y1") is not None:
+            year, month = int(m.group("y1")), int(m.group("m1"))
+        elif m.group("name") is not None:
+            year = int(m.group("y2"))
+            month = PERSIAN_MONTH_NAME_TO_NUM[m.group("name")]
+        else:
+            month, year = int(m.group("m2")), int(m.group("y3"))
+    except (TypeError, ValueError, KeyError):
+        return None
+    if not (1200 <= year <= 1500 and 1 <= month <= 12):
+        return None
+    return year, month
+
+
+def parse_month_year_range(text: str) -> Optional[tuple[tuple[int, int], tuple[int, int]]]:
+    """Parse «از ۱۴۰۵/۰۱ تا ۱۴۰۵/۰۶» or «از فروردین 1405 تا شهریور 1405»."""
+    raw = _latin_digits((text or "").strip())
+    m = _MONTH_YEAR_RANGE_RE.search(raw)
+    if not m:
+        # bare "YYYY/MM تا YYYY/MM" without از
+        if "تا" in raw:
+            left, _, right = raw.partition("تا")
+            start = parse_month_year_token(left)
+            end = parse_month_year_token(right)
+            if start and end:
+                if ym_key(*end) < ym_key(*start):
+                    start, end = end, start
+                return start, end
+        return None
+    start = parse_month_year_token(m.group(1))
+    end = parse_month_year_token(m.group(2))
+    if not start or not end:
+        return None
+    if ym_key(*end) < ym_key(*start):
+        start, end = end, start
+    return start, end
+
+
+def format_month_year(year: int, month: int, *, named: bool = True) -> str:
+    """Format as «فروردین ۱۴۰۵» or ``1405/01``."""
+    if named:
+        name = PERSIAN_MONTH_NAMES.get(int(month), str(month))
+        return f"{name} {int(year)}"
+    return f"{int(year):04d}/{int(month):02d}"
+
+
+def format_month_year_range(
+    start: tuple[int, int],
+    end: tuple[int, int],
+    *,
+    named: bool = True,
+) -> str:
+    """Persian caption like «از فروردین 1405 تا شهریور 1405»."""
+    return (
+        f"از {format_month_year(start[0], start[1], named=named)} "
+        f"تا {format_month_year(end[0], end[1], named=named)}"
+    )
+
+
+def month_year_to_gregorian_bounds(
+    start: tuple[int, int],
+    end: tuple[int, int],
+) -> tuple[date, date]:
+    """Inclusive Gregorian date bounds covering Jalali [start_ym .. end_ym]."""
+    sy, sm = int(start[0]), int(start[1])
+    ey, em = int(end[0]), int(end[1])
+    start_g = jdatetime.date(sy, sm, 1).togregorian()
+    if em == 12:
+        next_first = jdatetime.date(ey + 1, 1, 1)
+    else:
+        next_first = jdatetime.date(ey, em + 1, 1)
+    end_g = next_first.togregorian() - timedelta(days=1)
+    if end_g < start_g:
+        start_g, end_g = end_g, start_g
+    return start_g, end_g
+
+
+def resolve_month_year_preset(
+    preset: str,
+    *,
+    today: jdatetime.date | None = None,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """
+    preset: current | 3m | ytd
+
+    Returns inclusive ((start_y, start_m), (end_y, end_m)).
+    """
+    today = today or jalali_today()
+    key = _latin_digits((preset or "").strip()).casefold()
+    end = (today.year, today.month)
+    if key in {"current", "ماه جاری", "this_month", "current_month"}:
+        return end, end
+    if key in {"3m", "3", "۳ ماه اخیر", "3 ماه اخیر", "last_3", "recent_3"}:
+        # inclusive: current month and two prior months
+        y, m = today.year, today.month
+        for _ in range(2):
+            m -= 1
+            if m < 1:
+                m = 12
+                y -= 1
+        return (y, m), end
+    if key in {"ytd", "year", "از ابتدای سال", "year_to_date", "start_of_year"}:
+        return (today.year, 1), end
+    raise ValueError(f"بازه ماه/سال از پیش‌تعریف‌شده نامعتبر: {preset}")
+
+
+def iter_month_years(
+    start: tuple[int, int],
+    end: tuple[int, int],
+) -> list[tuple[int, int]]:
+    """List inclusive (year, month) pairs from start to end."""
+    y, m = int(start[0]), int(start[1])
+    ey, em = int(end[0]), int(end[1])
+    out: list[tuple[int, int]] = []
+    while ym_key(y, m) <= ym_key(ey, em):
+        out.append((y, m))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+        if len(out) > 240:  # safety
+            break
+    return out
+
+
+def year_choices_around(today: jdatetime.date | None = None, before: int = 3, after: int = 1) -> list[int]:
+    """Years for reply-keyboard picker (newest last)."""
+    today = today or jalali_today()
+    return list(range(today.year - before, today.year + after + 1))

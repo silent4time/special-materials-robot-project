@@ -689,15 +689,110 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
     return wb
 
 
+
+
+def filter_summary_by_month_range(
+    data: MonthlySummaryData,
+    start: tuple[int, int] | None = None,
+    end: tuple[int, int] | None = None,
+) -> MonthlySummaryData:
+    """Keep aggregated months in [start_year/start_month .. end] inclusive; recalculate totals.
+
+    Point-in-time empty filter (no start/end) returns ``data`` unchanged.
+    """
+    if start is None and end is None:
+        return data
+    if data.items is None or data.items.empty:
+        return MonthlySummaryData(
+            items=data.items.copy() if data.items is not None else pd.DataFrame(),
+            grand_kg=0.0,
+            group_order=[],
+            month_sections=[],
+            tundish_totals=tundish_kg_totals_from_items(pd.DataFrame()),
+        )
+
+    sy, sm = start if start is not None else (0, 1)
+    ey, em = end if end is not None else (9999, 12)
+    lo, hi = sy * 12 + sm, ey * 12 + em
+
+    items = data.items.copy()
+    years = items["تاریخ"].map(
+        lambda v: int(v) if isinstance(v, int) else (_year_only_latin(v) or 0)
+    )
+    months = pd.to_numeric(items["ماه"], errors="coerce").fillna(0).astype(int)
+    keys = years * 12 + months
+    mask = (keys >= lo) & (keys <= hi) & (years > 0) & (months.between(1, 12))
+    filtered = items.loc[mask].copy()
+    if filtered.empty:
+        return MonthlySummaryData(
+            items=filtered,
+            grand_kg=0.0,
+            group_order=[],
+            month_sections=[],
+            tundish_totals=tundish_kg_totals_from_items(filtered),
+        )
+
+    remaining = set(filtered["شرح"].tolist())
+    group_order = [d for d in data.group_order if d in remaining]
+    # preserve first-appearance among remaining if group_order emptied unexpectedly
+    if not group_order:
+        group_order = list(dict.fromkeys(filtered["شرح"].tolist()))
+
+    filtered["_group_rank"] = filtered["شرح"].map(
+        lambda d: group_order.index(d) if d in group_order else 10**9
+    )
+    sort_cols = ["_group_rank", "ماه"]
+    if "_first_order" in filtered.columns:
+        sort_cols.append("_first_order")
+    filtered = filtered.sort_values(sort_cols).reset_index(drop=True)
+    grand_kg = float(filtered["مصرف_کیلوگرم"].sum())
+
+    month_sections: list[dict[str, Any]] = []
+    filtered["_year"] = filtered["تاریخ"].map(
+        lambda v: int(v) if isinstance(v, int) else (_year_only_latin(v) or 0)
+    )
+    for (year, month), sec in filtered.groupby(["_year", "ماه"], sort=True):
+        sec_sorted = sec.sort_values(["شرح", "کد کالا"]).reset_index(drop=True)
+        month_name = PERSIAN_MONTHS.get(int(month), str(month))
+        title = f"مصرف {month_name} ماه {to_persian_digits(year)}"
+        total_kg = float(sec_sorted["مصرف_کیلوگرم"].sum())
+        month_sections.append(
+            {
+                "year": int(year) if year else None,
+                "month": int(month),
+                "month_name": month_name,
+                "title": title,
+                "total_title": f"جمع کل مصرف {month_name} ماه {to_persian_digits(year)}",
+                "total_kg": total_kg,
+                "rows": sec_sorted,
+            }
+        )
+
+    return MonthlySummaryData(
+        items=filtered,
+        grand_kg=grand_kg,
+        group_order=group_order,
+        month_sections=month_sections,
+        tundish_totals=tundish_kg_totals_from_items(filtered),
+    )
+
+
 def build_monthly_summary(
     source_path: Path | str,
     *,
     excel_out: Path | str | None = None,
+    start: tuple[int, int] | None = None,
+    end: tuple[int, int] | None = None,
 ) -> tuple[MonthlySummaryData, Path]:
-    """Load → aggregate → write Excel. Returns (data, excel_path)."""
+    """Load → aggregate → optional month/year filter → write Excel.
+
+    ``start`` / ``end`` are inclusive Jalali ``(year, month)`` bounds.
+    """
     ensure_dirs()
     detail = load_monthly_detail(source_path)
     data = aggregate_monthly_detail(detail)
+    if start is not None or end is not None:
+        data = filter_summary_by_month_range(data, start=start, end=end)
     if data.items.empty:
         raise ValueError("پس از تجمیع، ردیفی برای خلاصه مصرفی باقی نماند.")
 

@@ -35,7 +35,16 @@ from auth.rbac import (
     role_label,
 )
 from bot import keyboards as kb
-from bot.jalali import format_date, format_datetime
+from bot.jalali import (
+    format_date,
+    format_datetime,
+    format_month_year_range,
+    month_year_to_gregorian_bounds,
+    parse_month_year_range,
+    resolve_month_year_preset,
+    year_choices_around,
+    PERSIAN_MONTH_NAME_TO_NUM,
+)
 from bot.bale_api import BaleClient
 from bot.settings_text import (
     DEFAULT_INVITE_TEXT,
@@ -128,7 +137,7 @@ class BotApp:
     def __init__(self, client: BaleClient, db: Database) -> None:
         self.client = client
         self.db = db
-        # pending analytics interaction per user: {"mode": "period"|"forecast"|"suggest", "await": "range"|"days"}
+        # pending analytics: mode + await month_range|my_*|range (day advanced)
         self._analysis_pending: dict[str, dict[str, Any]] = {}
         self._analysis_tundish_filter: dict[str, str | None] = {}
         # awaiting plain text for category code entry
@@ -357,6 +366,10 @@ class BotApp:
 
     def _clear_analysis_pending(self, uid: str) -> None:
         self._analysis_pending.pop(uid, None)
+        suid = str(uid)
+        self._analysis_pending.pop(suid, None)
+        if suid.isdigit():
+            self._analysis_pending.pop(int(suid), None)
 
     def _clear_material_req_pending(self, uid: str) -> None:
         self._material_req_pending.pop(str(uid), None)
@@ -1372,87 +1385,62 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        loaded = self._require_files(message, user, "daily")
-        if not loaded:
+        if not self._require_files(message, user, "daily"):
             return
-        _, frames, _ = loaded
-        rates = daily_rates(frames.get("tank_consumption"), frames.get("monthly_consumption"))
-        if rates.empty:
-            self._reply(message, "داده‌ای برای محاسبه مصرف روزانه یافت نشد.", kb.analytics_menu())
-            return
-        lines = ["📈 میانگین مصرف روزانه (ماده / تاندیش):", ""]
-        for _, row in rates.head(30).iterrows():
-            tundish_type = row.get("tundish_type")
-            type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
-            tid = row.get("tundish_id")
-            tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
-            unit = row.get("unit") or ""
-            lines.append(
-                f"• {row['material_name']}{type_s}{tid_s}: {float(row['avg_daily']):.2f} {unit}/روز "
-                f"(مجموع {float(row['total_qty']):.1f} در {int(row['days_span'])} روز)"
-            )
-        self._reply(message, "\n".join(lines), kb.analytics_menu())
+        self._ask_month_year_range(message, user, "daily")
 
     def on_remaining_critical(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
-        loaded = self._require_files(message, user, "remaining_critical")
-        if not loaded:
+        if not self._require_files(message, user, "remaining_critical"):
             return
-        _, frames, _ = loaded
-        rates = daily_rates(frames.get("tank_consumption"), frames.get("monthly_consumption"))
-        rem, rem_source = self._resolve_remaining(frames)
-        crit = critical_materials(rates, rem, CRITICAL_DAYS)
-        lines = [f"📦 موجودی باقیمانده ({rem_source}):", ""]
-        if rem.empty:
-            lines.append("موجودی خالی است.")
-        else:
-            for _, row in rem.head(30).iterrows():
-                loc = f" @ {row['location']}" if row.get("location") else ""
-                unit = row.get("unit") or ""
-                lines.append(f"• {row['material_name']}: {float(row['remaining_qty']):.2f} {unit}{loc}")
-        lines.append("")
-        lines.append(f"⚠️ مواد بحرانی (پوشش < {CRITICAL_DAYS} روز):")
-        if crit.empty:
-            lines.append("ماده بحرانی‌ای شناسایی نشد.")
-        else:
-            for _, row in crit.iterrows():
-                cover = row["days_of_cover"]
-                cover_s = "∞" if cover == float("inf") else f"{float(cover):.1f}"
-                unit = row.get("unit") or ""
-                lines.append(
-                    f"• {row['material_name']}: باقیمانده {float(row['remaining_qty']):.2f} {unit} | "
-                    f"مصرف روز {float(row['avg_daily']):.2f} | پوشش ≈ {cover_s} روز"
-                )
-        self._reply(message, "\n".join(lines), kb.analytics_menu())
+        # Snapshot inventory is point-in-time; month range filters consumption rates.
+        self._ask_month_year_range(message, user, "remaining")
 
     def on_surplus_report(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
-        loaded = self._require_files(message, user, "surplus")
-        if not loaded:
+        if not self._require_files(message, user, "surplus"):
             return
-        _, frames, _ = loaded
-        rates = daily_rates(frames.get("tank_consumption"), frames.get("monthly_consumption"))
-        rem = remaining(self._inventory_with_ledger(frames.get("product_inventory")))
-        surplus = surplus_materials(rates, rem)
-        cover_th = max(float(CRITICAL_DAYS) * 3.0, float(SURPLUS_COVER_DAYS))
-        lines = [
-            "📦 گزارش مواد مازاد",
-            f"تعریف: پوشش > {cover_th:g} روز، یا موجودی بیش از نیاز {SURPLUS_FORECAST_DAYS:g} روز؛",
-            "مواد با موجودی ولی بدون مصرف ثبت‌شده = «مازاد/بدون مصرف».",
-            "",
-            format_surplus_list_fa(surplus),
-        ]
-        self._reply(message, "\n".join(lines), kb.analytics_menu())
+        # Inventory snapshot + rates from monthly/tank filtered by selected months.
+        self._ask_month_year_range(message, user, "surplus")
+
+    def _ask_month_year_range(self, message: dict, user: dict, mode: str) -> None:
+        """Central prompt: every time-based report asks Jalali month+year from–to first."""
+        self._analysis_pending[user["bale_user_id"]] = {
+            "mode": mode,
+            "await": "month_range",
+        }
+        hint = (
+            "بازه ماه و سال گزارش را انتخاب کنید (هجری شمسی):\n"
+            f"• {kb.BTN_MY_CURRENT}\n"
+            f"• {kb.BTN_MY_3}\n"
+            f"• {kb.BTN_MY_YTD}\n"
+            f"• {kb.BTN_MY_CUSTOM} — انتخاب سال/ماه با دکمه‌ها\n"
+            f"• {kb.BTN_MY_TYPED} — سپس پیام بفرستید:\n"
+            "  از YYYY/MM تا YYYY/MM\n"
+            "  یا: از فروردین 1405 تا شهریور 1405\n"
+            "مثال: از 1405/01 تا 1405/06"
+        )
+        include_day = mode == "period"
+        if include_day:
+            hint += (
+                f"\n\nبرای گزارش مصرف بازه‌ای می‌توانید «{kb.BTN_MY_DAY_ADV}» "
+                "را برای بازه روزانه بزنید."
+            )
+        self._reply(
+            message,
+            hint,
+            kb.month_year_range_menu(include_day_advanced=include_day),
+        )
 
     def _ask_date_range(self, message: dict, user: dict, mode: str) -> None:
-
+        """Day-level range (advanced option for period reports)."""
         self._analysis_pending[user["bale_user_id"]] = {"mode": mode, "await": "range"}
         hint = (
-            "بازه زمانی را انتخاب کنید:\n"
+            "بازه روزانه را انتخاب کنید:\n"
             f"• {kb.BTN_RANGE_TODAY}\n"
             f"• {kb.BTN_RANGE_7}\n"
             f"• {kb.BTN_RANGE_30}\n"
@@ -1468,7 +1456,7 @@ class BotApp:
             return
         if not self._require_files(message, user, "period"):
             return
-        self._ask_date_range(message, user, "period")
+        self._ask_month_year_range(message, user, "period")
 
     def on_forecast_prompt(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -1476,7 +1464,7 @@ class BotApp:
             return
         if not self._require_files(message, user, "forecast"):
             return
-        self._ask_date_range(message, user, "forecast")
+        self._ask_month_year_range(message, user, "forecast")
 
     def on_suggest_prompt(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -1484,10 +1472,197 @@ class BotApp:
             return
         if not self._require_files(message, user, "suggest"):
             return
-        self._ask_date_range(message, user, "suggest")
+        self._ask_month_year_range(message, user, "suggest")
+
+    def on_analytics_pdf(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        if not self._require_files(message, user, "full"):
+            return
+        self._ask_month_year_range(message, user, "analytics_pdf")
+
+    def on_monthly_summary(self, message: dict) -> None:
+        """Prompt for month/year range, then build خلاصه مصرفی ماهیانه."""
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        source, _source_label = self._resolve_monthly_source(user)
+        if source is None:
+            self._reply(
+                message,
+                "فایل مصرف ماهیانه مواد یافت نشد.\n"
+                "ابتدا از منوی اصلی «مصرف ماهیانه مواد» را آپلود کنید.",
+                kb.analytics_menu(),
+            )
+            return
+        self._ask_month_year_range(message, user, "monthly_summary")
+
+    def on_month_year_range_choice(
+        self,
+        message: dict,
+        *,
+        preset: str | None = None,
+        custom_text: str | None = None,
+        picked: str | None = None,
+    ) -> bool:
+        """Handle month/year presets, typed range, or interactive year/month picks.
+
+        Returns True if the message was consumed by a pending month-range flow.
+        """
+        # Peek pending before deny so unrelated messages are not swallowed.
+        uid_msg = self._uid(message)
+        pending = (
+            self._analysis_pending.get(uid_msg)
+            or self._analysis_pending.get(int(uid_msg) if uid_msg.isdigit() else uid_msg)
+        )
+        if not pending:
+            return False
+        await_kind = pending.get("await")
+        if await_kind not in {
+            "month_range",
+            "my_start_year",
+            "my_start_month",
+            "my_end_year",
+            "my_end_month",
+            "my_typed",
+        }:
+            return False
+
+        user = self._user_or_deny(message)
+        if not user:
+            return True
+        if self._deny_technician(message, user):
+            return True
+        uid = user["bale_user_id"]
+        pending = self._analysis_pending.get(uid) or pending
+        await_kind = pending.get("await")
+        mode = pending.get("mode")
+        if not mode:
+            return False
+
+        # --- typed «از … تا …» while in any month-range step ---
+        if custom_text:
+            parsed = parse_month_year_range(custom_text)
+            if not parsed:
+                return False
+            if await_kind not in {
+                "month_range",
+                "my_start_year",
+                "my_start_month",
+                "my_end_year",
+                "my_end_month",
+                "my_typed",
+            }:
+                return False
+            start_ym, end_ym = parsed
+            self._clear_analysis_pending(uid)
+            self._run_month_ranged_report(message, user, mode, start_ym, end_ym)
+            return True
+
+        # --- presets on primary month_range await ---
+        if await_kind == "month_range":
+            if preset == "day_advanced":
+                self._ask_date_range(message, user, mode)
+                return True
+            if preset == "typed":
+                pending["await"] = "my_typed"
+                self._analysis_pending[uid] = pending
+                self._reply(
+                    message,
+                    "بازه را با این فرمت بفرستید:\n"
+                    "از YYYY/MM تا YYYY/MM\n"
+                    "یا: از فروردین 1405 تا شهریور 1405",
+                    kb.month_year_range_menu(include_day_advanced=(mode == "period")),
+                )
+                return True
+            if preset == "custom":
+                years = year_choices_around()
+                pending["await"] = "my_start_year"
+                self._analysis_pending[uid] = pending
+                self._reply(
+                    message,
+                    "سال شروع بازه را انتخاب کنید:",
+                    kb.year_picker_menu(years),
+                )
+                return True
+            if preset in {"current", "3m", "ytd"}:
+                try:
+                    start_ym, end_ym = resolve_month_year_preset(preset)
+                except ValueError:
+                    return False
+                self._clear_analysis_pending(uid)
+                self._run_month_ranged_report(message, user, mode, start_ym, end_ym)
+                return True
+            return False
+
+        if await_kind == "my_typed":
+            # Invalid typed text while waiting for month/year typed range
+            self._reply(
+                message,
+                "فرمت بازه نامعتبر است. نمونه صحیح:\n"
+                "از 1405/01 تا 1405/06\n"
+                "یا: از فروردین 1405 تا شهریور 1405",
+                kb.month_year_range_menu(include_day_advanced=(mode == "period")),
+            )
+            return True
+
+        # --- interactive year/month picker ---
+        if await_kind == "my_start_year":
+            if not picked or not str(picked).isdigit():
+                return False
+            year = int(picked)
+            if not (1200 <= year <= 1500):
+                return False
+            pending["start_year"] = year
+            pending["await"] = "my_start_month"
+            self._analysis_pending[uid] = pending
+            self._reply(message, "ماه شروع را انتخاب کنید:", kb.month_picker_menu())
+            return True
+
+        if await_kind == "my_start_month":
+            month = PERSIAN_MONTH_NAME_TO_NUM.get((picked or "").strip())
+            if not month:
+                return False
+            pending["start_month"] = month
+            pending["await"] = "my_end_year"
+            self._analysis_pending[uid] = pending
+            years = year_choices_around()
+            self._reply(message, "سال پایان بازه را انتخاب کنید:", kb.year_picker_menu(years))
+            return True
+
+        if await_kind == "my_end_year":
+            if not picked or not str(picked).isdigit():
+                return False
+            year = int(picked)
+            if not (1200 <= year <= 1500):
+                return False
+            pending["end_year"] = year
+            pending["await"] = "my_end_month"
+            self._analysis_pending[uid] = pending
+            self._reply(message, "ماه پایان را انتخاب کنید:", kb.month_picker_menu())
+            return True
+
+        if await_kind == "my_end_month":
+            month = PERSIAN_MONTH_NAME_TO_NUM.get((picked or "").strip())
+            if not month:
+                return False
+            start_ym = (int(pending["start_year"]), int(pending["start_month"]))
+            end_ym = (int(pending["end_year"]), month)
+            if end_ym[0] * 12 + end_ym[1] < start_ym[0] * 12 + start_ym[1]:
+                start_ym, end_ym = end_ym, start_ym
+            self._clear_analysis_pending(uid)
+            self._run_month_ranged_report(message, user, mode, start_ym, end_ym)
+            return True
+
+        return False
 
     def on_date_range_choice(self, message: dict, preset: str | None, custom_text: str | None = None) -> bool:
-        """Handle date-range keyboard or custom message. Returns True if consumed."""
+        """Handle day-level date-range keyboard or custom message. Returns True if consumed."""
         user = self._user_or_deny(message)
         if not user:
             return True
@@ -1525,8 +1700,178 @@ class BotApp:
         self._run_ranged_analysis(message, user, mode, start, end)
         return True
 
+    def _empty_range_reply(self, message: dict, range_label: str) -> None:
+        self._reply(
+            message,
+            f"در بازه انتخاب‌شده ({range_label}) داده‌ای یافت نشد.\n"
+            "بازه دیگری را امتحان کنید یا ابتدا فایل‌ها را بررسی کنید.",
+            kb.analytics_menu(),
+        )
+
+    def _run_month_ranged_report(
+        self,
+        message: dict,
+        user: dict,
+        mode: str,
+        start_ym: tuple[int, int],
+        end_ym: tuple[int, int],
+    ) -> None:
+        """Dispatch report generation for an inclusive Jalali month/year range."""
+        range_label = format_month_year_range(start_ym, end_ym)
+        start_g, end_g = month_year_to_gregorian_bounds(start_ym, end_ym)
+
+        if mode == "monthly_summary":
+            self._run_monthly_summary(message, user, start_ym, end_ym, range_label)
+            return
+
+        if mode == "analytics_pdf":
+            self._run_analytics_pdf(message, user, start_g, end_g, range_label)
+            return
+
+        if mode in {"period", "forecast", "suggest"}:
+            self._run_ranged_analysis(
+                message, user, mode, start_g, end_g, range_label=range_label
+            )
+            return
+
+        if mode == "daily":
+            self._run_daily_report(message, user, start_g, end_g, range_label)
+            return
+        if mode == "remaining":
+            self._run_remaining_critical(message, user, start_g, end_g, range_label)
+            return
+        if mode == "surplus":
+            self._run_surplus_report(message, user, start_g, end_g, range_label)
+            return
+
+        self._reply(message, "حالت گزارش ناشناخته است.", kb.analytics_menu())
+
+    def _run_daily_report(
+        self,
+        message: dict,
+        user: dict,
+        start: date,
+        end: date,
+        range_label: str,
+    ) -> None:
+        loaded = self._require_files(message, user, "daily")
+        if not loaded:
+            return
+        _, frames, _ = loaded
+        rates = daily_rates(
+            frames.get("tank_consumption"),
+            frames.get("monthly_consumption"),
+            start=start,
+            end=end,
+        )
+        if rates.empty:
+            self._empty_range_reply(message, range_label)
+            return
+        lines = [
+            f"📈 میانگین مصرف روزانه (ماده / تاندیش) — {range_label}:",
+            "",
+        ]
+        for _, row in rates.head(30).iterrows():
+            tundish_type = row.get("tundish_type")
+            type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
+            tid = row.get("tundish_id")
+            tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
+            unit = row.get("unit") or ""
+            lines.append(
+                f"• {row['material_name']}{type_s}{tid_s}: {float(row['avg_daily']):.2f} {unit}/روز "
+                f"(مجموع {float(row['total_qty']):.1f} در {int(row['days_span'])} روز)"
+            )
+        self._reply(message, "\n".join(lines), kb.analytics_menu())
+
+    def _run_remaining_critical(
+        self,
+        message: dict,
+        user: dict,
+        start: date,
+        end: date,
+        range_label: str,
+    ) -> None:
+        loaded = self._require_files(message, user, "remaining_critical")
+        if not loaded:
+            return
+        _, frames, _ = loaded
+        # Rates from selected months; remaining stock is still a live snapshot.
+        rates = daily_rates(
+            frames.get("tank_consumption"),
+            frames.get("monthly_consumption"),
+            start=start,
+            end=end,
+        )
+        rem, rem_source = self._resolve_remaining(frames)
+        crit = critical_materials(rates, rem, CRITICAL_DAYS)
+        lines = [
+            f"📦 موجودی باقیمانده ({rem_source}) — نرخ مصرف بر اساس {range_label}:",
+            "",
+        ]
+        if rem.empty:
+            lines.append("موجودی خالی است.")
+        else:
+            for _, row in rem.head(30).iterrows():
+                loc = f" @ {row['location']}" if row.get("location") else ""
+                unit = row.get("unit") or ""
+                lines.append(f"• {row['material_name']}: {float(row['remaining_qty']):.2f} {unit}{loc}")
+        lines.append("")
+        lines.append(f"⚠️ مواد بحرانی (پوشش < {CRITICAL_DAYS} روز) — نرخ از {range_label}:")
+        if crit.empty:
+            lines.append("ماده بحرانی‌ای شناسایی نشد.")
+        else:
+            for _, row in crit.iterrows():
+                cover = row["days_of_cover"]
+                cover_s = "∞" if cover == float("inf") else f"{float(cover):.1f}"
+                unit = row.get("unit") or ""
+                lines.append(
+                    f"• {row['material_name']}: باقیمانده {float(row['remaining_qty']):.2f} {unit} | "
+                    f"مصرف روز {float(row['avg_daily']):.2f} | پوشش ≈ {cover_s} روز"
+                )
+        self._reply(message, "\n".join(lines), kb.analytics_menu())
+
+    def _run_surplus_report(
+        self,
+        message: dict,
+        user: dict,
+        start: date,
+        end: date,
+        range_label: str,
+    ) -> None:
+        loaded = self._require_files(message, user, "surplus")
+        if not loaded:
+            return
+        _, frames, _ = loaded
+        rates = daily_rates(
+            frames.get("tank_consumption"),
+            frames.get("monthly_consumption"),
+            start=start,
+            end=end,
+        )
+        rem = remaining(self._inventory_with_ledger(frames.get("product_inventory")))
+        surplus = surplus_materials(rates, rem)
+        cover_th = max(float(CRITICAL_DAYS) * 3.0, float(SURPLUS_COVER_DAYS))
+        lines = [
+            f"📦 گزارش مواد مازاد — نرخ مصرف بر اساس {range_label}",
+            f"تعریف: پوشش > {cover_th:g} روز، یا موجودی بیش از نیاز {SURPLUS_FORECAST_DAYS:g} روز؛",
+            "مواد با موجودی ولی بدون مصرف ثبت‌شده = «مازاد/بدون مصرف».",
+            "",
+            format_surplus_list_fa(surplus) if not surplus.empty else "ماده مازادی شناسایی نشد.",
+        ]
+        if surplus.empty and rates.empty:
+            self._empty_range_reply(message, range_label)
+            return
+        self._reply(message, "\n".join(lines), kb.analytics_menu())
+
     def _run_ranged_analysis(
-        self, message: dict, user: dict, mode: str, start: date, end: date
+        self,
+        message: dict,
+        user: dict,
+        mode: str,
+        start: date,
+        end: date,
+        *,
+        range_label: str | None = None,
     ) -> None:
         goal = {"period": "period", "forecast": "forecast", "suggest": "suggest"}.get(mode, "period")
         loaded = self._require_files(message, user, goal)
@@ -1537,25 +1882,26 @@ class BotApp:
         tank = frames.get("tank_consumption")
         monthly = frames.get("monthly_consumption")
         inv = frames.get("product_inventory")
+        label = range_label or f"از {format_date(start)} تا {format_date(end)}"
 
         if mode == "period":
             period = period_consumption(tank, start, end)
             lines = [
-                f"📅 مصرف مواد از {format_date(start)} تا {format_date(end)} ({days} روز):",
+                f"📅 مصرف مواد {label} ({days} روز):",
                 "",
             ]
             if period.empty:
-                lines.append("در این بازه مصرفی ثبت نشده است.")
-            else:
-                for _, row in period.head(40).iterrows():
-                    tundish_type = row.get("tundish_type")
-                    type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
-                    tid = row.get("tundish_id")
-                    tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
-                    unit = row.get("unit") or ""
-                    lines.append(
-                        f"• {row['material_name']}{type_s}{tid_s}: {float(row['quantity']):.2f} {unit}"
-                    )
+                self._empty_range_reply(message, label)
+                return
+            for _, row in period.head(40).iterrows():
+                tundish_type = row.get("tundish_type")
+                type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
+                tid = row.get("tundish_id")
+                tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
+                unit = row.get("unit") or ""
+                lines.append(
+                    f"• {row['material_name']}{type_s}{tid_s}: {float(row['quantity']):.2f} {unit}"
+                )
             self._reply(message, "\n".join(lines), kb.analytics_menu())
             return
 
@@ -1566,32 +1912,33 @@ class BotApp:
         if mode == "forecast":
             fc = forecast(use_rates, days)
             lines = [
-                f"🔮 پیش‌بینی نیاز تاندیش برای {days} روز "
-                f"({format_date(start)} تا {format_date(end)}):",
+                f"🔮 پیش‌بینی نیاز تاندیش برای {days} روز ({label}):",
                 "",
             ]
             if fc.empty:
-                lines.append("داده‌ای برای پیش‌بینی نیست.")
-            else:
-                for _, row in fc.head(40).iterrows():
-                    tundish_type = row.get("tundish_type")
-                    type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
-                    tid = row.get("tundish_id")
-                    tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
-                    unit = row.get("unit") or ""
-                    lines.append(
-                        f"• {row['material_name']}{type_s}{tid_s}: "
-                        f"{float(row['forecast_need']):.2f} {unit} "
-                        f"(روزانه {float(row['avg_daily']):.2f} × {days})"
-                    )
+                self._empty_range_reply(message, label)
+                return
+            for _, row in fc.head(40).iterrows():
+                tundish_type = row.get("tundish_type")
+                type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
+                tid = row.get("tundish_id")
+                tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
+                unit = row.get("unit") or ""
+                lines.append(
+                    f"• {row['material_name']}{type_s}{tid_s}: "
+                    f"{float(row['forecast_need']):.2f} {unit} "
+                    f"(روزانه {float(row['avg_daily']):.2f} × {days})"
+                )
             self._reply(message, "\n".join(lines), kb.analytics_menu())
             return
 
         if mode == "suggest":
             sug = suggest_requests(use_rates, remaining(self._inventory_with_ledger(inv)), days)
+            if sug.empty and use_rates.empty:
+                self._empty_range_reply(message, label)
+                return
             lines = [
-                f"🛒 پیشنهاد درخواست مواد برای {days} روز "
-                f"({format_date(start)} تا {format_date(end)}):",
+                f"🛒 پیشنهاد درخواست مواد برای {days} روز ({label}):",
                 "",
                 format_suggest_list_fa(sug),
                 "",
@@ -1599,21 +1946,20 @@ class BotApp:
             ]
             self._reply(message, "\n".join(lines), kb.analytics_menu())
 
-    def on_analytics_pdf(self, message: dict) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_technician(message, user):
-            return
+    def _run_analytics_pdf(
+        self,
+        message: dict,
+        user: dict,
+        start: date,
+        end: date,
+        range_label: str,
+    ) -> None:
         loaded = self._require_files(message, user, "full")
         if not loaded:
             return
         session, frames, metas = loaded
-        # monthly optional — still include if present
-        self._reply(message, "در حال ساخت PDF تحلیل تاندیش…")
+        self._reply(message, f"در حال ساخت PDF تحلیل تاندیش ({range_label})…")
         try:
-            end = date.today()
-            start = end - timedelta(days=29)
             analytics = self._build_analytics_bundle(frames, start=start, end=end)
             pdf_path = generate_report(frames, metas, user, analytics=analytics)
             self.db.save_report(
@@ -1625,14 +1971,12 @@ class BotApp:
             self.client.send_document(
                 self._chat_id(message),
                 pdf_path,
-                caption="گزارش تحلیل تاندیش",
+                caption=f"گزارش تحلیل تاندیش — {range_label}",
             )
             self._reply(message, "PDF تحلیل ارسال شد.", kb.analytics_menu())
         except Exception as exc:  # noqa: BLE001
             logger.exception("analytics pdf failed")
             self._reply(message, f"خطا در تولید PDF: {exc}", kb.analytics_menu())
-
-
 
     def _resolve_monthly_source(self, user: dict) -> tuple[Path | None, str | None]:
         """Prefer raw monthly upload (plant detail); else cleaned session/latest."""
@@ -1659,13 +2003,15 @@ class BotApp:
                 return path_obj, label
         return None, None
 
-    def on_monthly_summary(self, message: dict) -> None:
-        """Build خلاصه مصرفی ماهیانه as PDF (+ Excel) and send document."""
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_technician(message, user):
-            return
+    def _run_monthly_summary(
+        self,
+        message: dict,
+        user: dict,
+        start_ym: tuple[int, int],
+        end_ym: tuple[int, int],
+        range_label: str,
+    ) -> None:
+        """Build خلاصه مصرفی ماهیانه filtered to [start_ym .. end_ym]."""
         source, source_label = self._resolve_monthly_source(user)
         if source is None:
             self._reply(
@@ -1675,23 +2021,30 @@ class BotApp:
                 kb.analytics_menu(),
             )
             return
-        self._reply(message, "در حال ساخت خلاصه مصرف ماهیانه (PDF)…")
+        self._reply(message, f"در حال ساخت خلاصه مصرف ماهیانه ({range_label})…")
         try:
             from config import REPORT_DIR
 
             out_dir = REPORT_DIR
             excel_path = out_dir / SUMMARY_FILE_NAME
-            data, excel_path = build_monthly_summary(source, excel_out=excel_path)
+            data, excel_path = build_monthly_summary(
+                source,
+                excel_out=excel_path,
+                start=start_ym,
+                end=end_ym,
+            )
             sections = summary_sections_for_pdf(data)
+            pdf_title = f"خلاصه مصرفی ماهیانه — {range_label}"
             pdf_path = out_dir / "خلاصه مصرفی ماهیانه.pdf"
             generate_monthly_summary_pdf(
                 sections,
                 grand_kg=data.grand_kg,
                 output_path=pdf_path,
+                title=pdf_title,
             )
             month_sum = sum(float(s.get("total_kg") or 0) for s in data.month_sections)
             caption = (
-                f"خلاصه مصرفی ماهیانه\n"
+                f"{pdf_title}\n"
                 f"منبع: {source_label}\n"
                 f"جمع کل مصرفی: {data.grand_kg:g} کیلوگرم"
             )
@@ -1700,22 +2053,29 @@ class BotApp:
                 pdf_path,
                 caption=caption,
             )
-            # Also send Excel companion when available
             try:
                 self.client.send_document(
                     self._chat_id(message),
                     excel_path,
-                    caption="فایل اکسل «خلاصه مصرفی ماهیانه»",
+                    caption=f"فایل اکسل «خلاصه مصرفی ماهیانه» — {range_label}",
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("monthly summary excel send failed: %s", exc)
             self._reply(
                 message,
                 (
-                    f"✅ خلاصه مصرف ماهیانه ارسال شد.\n"
+                    f"✅ خلاصه مصرف ماهیانه ارسال شد ({range_label}).\n"
                     f"ردیف‌های تجمیعی: {len(data.items)} | "
                     f"جمع ماه‌ها: {month_sum:g} | جمع کل: {data.grand_kg:g} کیلوگرم"
                 ),
+                kb.analytics_menu(),
+            )
+        except ValueError as exc:
+            # Empty filtered set or validation — friendly Persian, no crash
+            self._reply(
+                message,
+                f"در بازه انتخاب‌شده ({range_label}) داده‌ای برای خلاصه مصرف یافت نشد.\n"
+                f"جزئیات: {exc}",
                 kb.analytics_menu(),
             )
         except Exception as exc:  # noqa: BLE001
@@ -1725,6 +2085,7 @@ class BotApp:
                 f"خطا در تولید خلاصه مصرف ماهیانه: {exc}",
                 kb.analytics_menu(),
             )
+
 
     def _resolve_remaining(self, frames: dict) -> tuple[Any, str]:
         """Prefer today's (or latest) site_stock_entries; else warehouse inventory."""
@@ -3373,10 +3734,19 @@ class BotApp:
                 self._reply(message, "دستور ناشناخته. /help را ببینید.")
             return
 
-        # custom date range while awaiting
+        # month/year range typed while awaiting (از YYYY/MM تا YYYY/MM)
+        if parse_month_year_range(text):
+            if self.on_month_year_range_choice(message, custom_text=text):
+                return
+
+        # custom day-level date range while awaiting
         if parse_custom_range_message(text):
             if self.on_date_range_choice(message, preset=None, custom_text=text):
                 return
+
+        # interactive year / month picks while awaiting month-range wizard
+        if self.on_month_year_range_choice(message, picked=text):
+            return
 
         # category code entry (plain 4-digit text while awaiting)
         if self.on_category_code_text(message, text):
@@ -3582,6 +3952,24 @@ class BotApp:
         if text == kb.BTN_MONTHLY_SUMMARY:
             self.on_monthly_summary(message)
             return
+        if text == kb.BTN_MY_CURRENT:
+            if self.on_month_year_range_choice(message, preset="current"):
+                return
+        if text == kb.BTN_MY_3:
+            if self.on_month_year_range_choice(message, preset="3m"):
+                return
+        if text == kb.BTN_MY_YTD:
+            if self.on_month_year_range_choice(message, preset="ytd"):
+                return
+        if text == kb.BTN_MY_CUSTOM:
+            if self.on_month_year_range_choice(message, preset="custom"):
+                return
+        if text == kb.BTN_MY_TYPED:
+            if self.on_month_year_range_choice(message, preset="typed"):
+                return
+        if text == kb.BTN_MY_DAY_ADV:
+            if self.on_month_year_range_choice(message, preset="day_advanced"):
+                return
         if text == kb.BTN_RANGE_TODAY:
             if self.on_date_range_choice(message, "today"):
                 return

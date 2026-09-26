@@ -118,6 +118,81 @@ def filter_by_date_range(
     return work.reset_index(drop=True)
 
 
+
+def _jalali_ym_from_row(date_val: object, month_val: object) -> tuple[int, int] | None:
+    """Best-effort Jalali (year, month) from plant monthly date/month cells."""
+    month_i = None
+    if month_val is not None and str(month_val).strip() not in {"", "nan", "None"}:
+        try:
+            month_i = int(float(str(month_val).strip()))
+        except (TypeError, ValueError):
+            month_i = None
+    year_i = None
+    if date_val is not None and str(date_val).strip() not in {"", "nan", "None"}:
+        digits = "".join(ch for ch in str(date_val) if ch.isdigit())
+        if len(digits) >= 4:
+            try:
+                year_i = int(digits[:4])
+            except ValueError:
+                year_i = None
+        # YYYYMMDD plant stamp → also recover month when missing
+        if month_i is None and len(digits) >= 6:
+            try:
+                month_i = int(digits[4:6])
+            except ValueError:
+                month_i = None
+    if year_i is None or month_i is None:
+        return None
+    if not (1200 <= year_i <= 1500 and 1 <= month_i <= 12):
+        return None
+    return year_i, month_i
+
+
+def filter_monthly_by_gregorian_range(
+    df: pd.DataFrame,
+    start: date | None,
+    end: date | None,
+) -> pd.DataFrame:
+    """Filter monthly rows to months overlapping [start, end] (Gregorian inclusive).
+
+    Prefer Jalali year+month from plant ``date``/``month`` columns; fall back to
+    ``filter_by_date_range`` when dates look Gregorian.
+    """
+    if df is None or df.empty or (start is None and end is None):
+        return df.copy() if df is not None else pd.DataFrame()
+    work = df.copy()
+    # Try Jalali month filtering when month or plant-style date present
+    has_month = "month" in work.columns
+    has_date = "date" in work.columns
+    if has_month or has_date:
+        try:
+            import jdatetime
+        except Exception:  # noqa: BLE001
+            jdatetime = None  # type: ignore[assignment]
+        if jdatetime is not None:
+            def _to_j(d: date | None) -> tuple[int, int] | None:
+                if d is None:
+                    return None
+                j = jdatetime.date.fromgregorian(date=d)
+                return j.year, j.month
+
+            start_ym = _to_j(start) or (0, 1)
+            end_ym = _to_j(end) or (9999, 12)
+            lo = start_ym[0] * 12 + start_ym[1]
+            hi = end_ym[0] * 12 + end_ym[1]
+            mask = []
+            for _, row in work.iterrows():
+                ym = _jalali_ym_from_row(row.get("date") if has_date else None, row.get("month") if has_month else None)
+                if ym is None:
+                    mask.append(False)
+                else:
+                    mask.append(lo <= (ym[0] * 12 + ym[1]) <= hi)
+            filtered = work.loc[mask]
+            if not filtered.empty or has_month:
+                return filtered.reset_index(drop=True)
+    return filter_by_date_range(work, start, end)
+
+
 def daily_rates(
     tank_df: pd.DataFrame | None,
     monthly_df: pd.DataFrame | None = None,
@@ -173,6 +248,8 @@ def daily_rates(
 
     if monthly_df is not None and not monthly_df.empty and "quantity" in monthly_df.columns:
         work = monthly_df.copy()
+        if start is not None or end is not None:
+            work = filter_monthly_by_gregorian_range(work, start, end)
         if "material_name" not in work.columns:
             pass
         else:
