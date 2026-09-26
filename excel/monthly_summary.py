@@ -21,6 +21,7 @@ from excel.work_order import (
     UNKNOWN_GROUP,
     UNKNOWN_LABEL_FA,
     dominant_work_order,
+    group_for_work_order,
     tundish_kg_totals_from_items,
 )
 
@@ -76,6 +77,28 @@ SECTION_FILL = PatternFill("solid", fgColor="7030A0")
 SECTION_FONT = Font(bold=True, color="FFFFFF")
 MONTH_TITLE_FILL = PatternFill("solid", fgColor="2E75B6")
 MONTH_TITLE_FONT = Font(bold=True, color="FFFFFF")
+
+# Row colors by سفارش کار — distinguishable in grayscale / B&W print
+# اسلب: خاکستری روشن | بلوم: هاشور نقطه‌ای روشن | بیلت: خاکستری تیره | سایر نواحی: هاشور متراکم
+SLAB_FILL = PatternFill(fill_type="solid", fgColor="EDEDED")
+BLOOM_FILL = PatternFill(fill_type="lightGray", fgColor="000000", bgColor="FFFFFF")
+BILLET_FILL = PatternFill(fill_type="solid", fgColor="9A9A9A")
+OTHER_AREA_FILL = PatternFill(fill_type="darkGray", fgColor="000000", bgColor="FFFFFF")
+GROUP_FILLS = {
+    "slab": SLAB_FILL,
+    "bloom": BLOOM_FILL,
+    "billet": BILLET_FILL,
+    UNKNOWN_GROUP: OTHER_AREA_FILL,
+}
+
+
+def fill_for_work_order(work_order: object) -> PatternFill:
+    group = group_for_work_order(work_order) or UNKNOWN_GROUP
+    return GROUP_FILLS[group]
+
+
+def fill_for_group_key(key: str) -> PatternFill:
+    return GROUP_FILLS.get(key, OTHER_AREA_FILL)
 CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True, readingOrder=2)
 THIN = Border(
     left=Side(style="thin", color="B0B0B0"),
@@ -465,7 +488,7 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
                 ]
                 for col_idx, val in enumerate(values, start=1):
                     ws.cell(row=row_idx, column=col_idx, value=val)
-                _style_row(ws, row_idx)
+                _style_row(ws, row_idx, fill=fill_for_work_order(item.get("سفارش کار")))
                 ws.row_dimensions[row_idx].height = 32
                 row_idx += 1
             # yellow subtotal
@@ -531,7 +554,7 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
             ]
             for col_idx, val in enumerate(values, start=1):
                 ws.cell(row=row_idx, column=col_idx, value=val)
-            _style_row(ws, row_idx)
+            _style_row(ws, row_idx, fill=fill_for_work_order(item.get("سفارش کار")))
             ws.row_dimensions[row_idx].height = 32
             row_idx += 1
 
@@ -558,7 +581,7 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
                 column=9,
                 value=f"{CONSUMPTION_LABELS_FA[key]} ({to_persian_digits(count)} قلم)",
             )
-            _style_row(ws, row_idx, fill=YELLOW_FILL, bold=True)
+            _style_row(ws, row_idx, fill=fill_for_group_key(key), bold=True)
             ws.row_dimensions[row_idx].height = 32
             row_idx += 1
         unk = month_totals.get(UNKNOWN_GROUP) or {"kg": 0.0, "count": 0}
@@ -572,7 +595,7 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
                 column=9,
                 value=f"{UNKNOWN_LABEL_FA} ({to_persian_digits(unk_count)} قلم)",
             )
-            _style_row(ws, row_idx, fill=YELLOW_FILL, bold=True)
+            _style_row(ws, row_idx, fill=fill_for_group_key(UNKNOWN_GROUP), bold=True)
             ws.row_dimensions[row_idx].height = 32
             row_idx += 1
         row_idx += 1  # blank before next month
@@ -609,7 +632,7 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
             column=9,
             value=f"{label} ({to_persian_digits(count)} قلم)",
         )
-        _style_row(ws, row_idx, fill=YELLOW_FILL, bold=True)
+        _style_row(ws, row_idx, fill=fill_for_group_key(key), bold=True)
         ws.row_dimensions[row_idx].height = 32
         row_idx += 1
 
@@ -624,7 +647,7 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
             column=9,
             value=f"{UNKNOWN_LABEL_FA} ({to_persian_digits(unk_count)} قلم)",
         )
-        _style_row(ws, row_idx, fill=YELLOW_FILL, bold=True)
+        _style_row(ws, row_idx, fill=fill_for_group_key(UNKNOWN_GROUP), bold=True)
         ws.row_dimensions[row_idx].height = 32
         row_idx += 1
 
