@@ -9,15 +9,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import arabic_reshaper
-from bidi.algorithm import get_display
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     ListFlowable,
     ListItem,
@@ -31,32 +27,8 @@ from reportlab.platypus import (
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from config import FONTS_DIR  # noqa: E402
-
-FONT_NAME = "DejaVuSans"
-FONT_BOLD = "DejaVuSans-Bold"
-
-
-def _register_fonts() -> None:
-    regular = FONTS_DIR / "DejaVuSans.ttf"
-    bold = FONTS_DIR / "DejaVuSans-Bold.ttf"
-    if not regular.exists():
-        raise FileNotFoundError(f"فونت فارسی یافت نشد: {regular}")
-    pdfmetrics.registerFont(TTFont(FONT_NAME, str(regular)))
-    if bold.exists():
-        pdfmetrics.registerFont(TTFont(FONT_BOLD, str(bold)))
-    else:
-        pdfmetrics.registerFont(TTFont(FONT_BOLD, str(regular)))
-
-
-def rtl(text: object) -> str:
-    s = "" if text is None else str(text)
-    if not s.strip():
-        return ""
-    try:
-        return get_display(arabic_reshaper.reshape(s))
-    except Exception:  # noqa: BLE001
-        return s
+from pdf import generator as pdfgen  # noqa: E402
+from pdf.generator import _register_fonts, rtl  # noqa: E402
 
 
 def _styles() -> dict[str, ParagraphStyle]:
@@ -65,7 +37,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "title": ParagraphStyle(
             "GuideTitle",
             parent=base["Title"],
-            fontName=FONT_BOLD,
+            fontName=pdfgen.FONT_BOLD,
             fontSize=18,
             alignment=TA_CENTER,
             leading=28,
@@ -75,7 +47,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "subtitle": ParagraphStyle(
             "GuideSub",
             parent=base["Normal"],
-            fontName=FONT_NAME,
+            fontName=pdfgen.FONT_NAME,
             fontSize=10,
             alignment=TA_CENTER,
             leading=16,
@@ -85,7 +57,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "heading": ParagraphStyle(
             "GuideH",
             parent=base["Heading2"],
-            fontName=FONT_BOLD,
+            fontName=pdfgen.FONT_BOLD,
             fontSize=13,
             alignment=TA_RIGHT,
             leading=20,
@@ -96,7 +68,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "body": ParagraphStyle(
             "GuideBody",
             parent=base["Normal"],
-            fontName=FONT_NAME,
+            fontName=pdfgen.FONT_NAME,
             fontSize=10,
             alignment=TA_RIGHT,
             leading=17,
@@ -105,7 +77,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "bullet": ParagraphStyle(
             "GuideBullet",
             parent=base["Normal"],
-            fontName=FONT_NAME,
+            fontName=pdfgen.FONT_NAME,
             fontSize=10,
             alignment=TA_RIGHT,
             leading=16,
@@ -114,7 +86,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "code": ParagraphStyle(
             "GuideCode",
             parent=base["Normal"],
-            fontName=FONT_NAME,
+            fontName=pdfgen.FONT_NAME,
             fontSize=8.5,
             alignment=TA_RIGHT,
             leading=13,
@@ -126,7 +98,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "cell": ParagraphStyle(
             "GuideCell",
             parent=base["Normal"],
-            fontName=FONT_NAME,
+            fontName=pdfgen.FONT_NAME,
             fontSize=8.5,
             alignment=TA_RIGHT,
             leading=13,
@@ -134,7 +106,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "cell_h": ParagraphStyle(
             "GuideCellH",
             parent=base["Normal"],
-            fontName=FONT_BOLD,
+            fontName=pdfgen.FONT_BOLD,
             fontSize=9,
             alignment=TA_CENTER,
             leading=13,
@@ -143,7 +115,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "footer": ParagraphStyle(
             "GuideFooter",
             parent=base["Normal"],
-            fontName=FONT_NAME,
+            fontName=pdfgen.FONT_NAME,
             fontSize=8,
             alignment=TA_CENTER,
             leading=12,

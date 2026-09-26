@@ -27,27 +27,94 @@ from reportlab.platypus import (
 
 from config import CRITICAL_DAYS, FILE_TYPES, FONTS_DIR, REPORT_DIR, ensure_dirs
 
+# PDF body fonts (Persian/RTL). Registration order:
+#   1) Vazirmatn (bundled under fonts/) — preferred
+#   2) Tahoma (system) — fallback if Vazirmatn missing/unusable
+#   3) DejaVuSans (bundled) — last resort
 _FONT_REGISTERED = False
-FONT_NAME = "DejaVuSans"
-FONT_BOLD = "DejaVuSans-Bold"
+FONT_NAME = "Vazirmatn"
+FONT_BOLD = "Vazirmatn-Bold"
+
+_TAHOMA_REGULAR_CANDIDATES = (
+    Path("/usr/share/fonts/truetype/msttcorefonts/tahoma.ttf"),
+    Path("/usr/share/fonts/truetype/msttcorefonts/Tahoma.ttf"),
+    Path("/usr/share/fonts/truetype/tahoma/tahoma.ttf"),
+    Path("/Windows/Fonts/tahoma.ttf"),
+    Path("/mnt/c/Windows/Fonts/tahoma.ttf"),
+)
+_TAHOMA_BOLD_CANDIDATES = (
+    Path("/usr/share/fonts/truetype/msttcorefonts/tahomabd.ttf"),
+    Path("/usr/share/fonts/truetype/msttcorefonts/TahomaBd.ttf"),
+    Path("/usr/share/fonts/truetype/tahoma/tahomabd.ttf"),
+    Path("/Windows/Fonts/tahomabd.ttf"),
+    Path("/mnt/c/Windows/Fonts/tahomabd.ttf"),
+)
+
+
+def _try_register_font(name: str, path: Path) -> bool:
+    """Register a TTF/OTF if the file exists; return False on missing/failure."""
+    try:
+        if not path.is_file():
+            return False
+        pdfmetrics.registerFont(TTFont(name, str(path)))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _register_pair(family: str, bold_name: str, regular: Path, bold: Path | None) -> bool:
+    """Register regular (+ bold or reuse regular). Sets FONT_NAME / FONT_BOLD on success."""
+    global FONT_NAME, FONT_BOLD
+    if not _try_register_font(family, regular):
+        return False
+    if bold is None or not _try_register_font(bold_name, bold):
+        # Bold file missing or failed — reuse regular under bold name
+        if not _try_register_font(bold_name, regular):
+            return False
+    FONT_NAME = family
+    FONT_BOLD = bold_name
+    return True
 
 
 def _register_fonts() -> None:
+    """Register PDF fonts once. Prefer Vazirmatn, then Tahoma, then DejaVuSans."""
     global _FONT_REGISTERED
     if _FONT_REGISTERED:
         return
-    regular = FONTS_DIR / "DejaVuSans.ttf"
-    bold = FONTS_DIR / "DejaVuSans-Bold.ttf"
-    if not regular.exists():
-        raise FileNotFoundError(
-            f"فونت فارسی یافت نشد: {regular}. پوشه fonts را بررسی کنید."
-        )
-    pdfmetrics.registerFont(TTFont(FONT_NAME, str(regular)))
-    if bold.exists():
-        pdfmetrics.registerFont(TTFont(FONT_BOLD, str(bold)))
-    else:
-        pdfmetrics.registerFont(TTFont(FONT_BOLD, str(regular)))
-    _FONT_REGISTERED = True
+
+    # 1) Bundled Vazirmatn (OFL) — preferred for all PDF reports
+    if _register_pair(
+        "Vazirmatn",
+        "Vazirmatn-Bold",
+        FONTS_DIR / "Vazirmatn-Regular.ttf",
+        FONTS_DIR / "Vazirmatn-Bold.ttf",
+    ):
+        _FONT_REGISTERED = True
+        return
+
+    # 2) System Tahoma fallback
+    tahoma_reg = next((p for p in _TAHOMA_REGULAR_CANDIDATES if p.is_file()), None)
+    if tahoma_reg is not None:
+        tahoma_bold = next((p for p in _TAHOMA_BOLD_CANDIDATES if p.is_file()), None)
+        if _register_pair("Tahoma", "Tahoma-Bold", tahoma_reg, tahoma_bold):
+            _FONT_REGISTERED = True
+            return
+
+    # 3) Bundled DejaVuSans — last resort (already shipped historically)
+    if _register_pair(
+        "DejaVuSans",
+        "DejaVuSans-Bold",
+        FONTS_DIR / "DejaVuSans.ttf",
+        FONTS_DIR / "DejaVuSans-Bold.ttf",
+    ):
+        _FONT_REGISTERED = True
+        return
+
+    raise FileNotFoundError(
+        "هیچ فونت فارسی قابل ثبت نبود. "
+        f"حداقل یکی از این‌ها لازم است: {FONTS_DIR / 'Vazirmatn-Regular.ttf'} "
+        "(ترجیحی)، Tahoma سیستم، یا DejaVuSans در fonts/."
+    )
 
 
 def rtl(text: Any) -> str:
