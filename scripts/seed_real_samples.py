@@ -82,6 +82,11 @@ def _convert_monthly_sample(source: Path, destination: Path, uid: str, allowlist
         if "درخواستی-برگشتی" in filtered.columns
         else pd.Series("درخواستی", index=filtered.index)
     )
+    # Preserve plant تاریخ (YYYYMMDD) so month-range filters keep real years.
+    if "تاریخ" in filtered.columns:
+        date_series = filtered["تاریخ"]
+    else:
+        date_series = pd.Series([None] * len(filtered), index=filtered.index)
     converted = pd.DataFrame(
         {
             "domain": filtered["_category_code"].astype(str),
@@ -122,6 +127,7 @@ def _convert_monthly_sample(source: Path, destination: Path, uid: str, allowlist
             "description": filtered["شرح"].astype(str),
             "category_code": filtered["_category_code"].astype(str),
             "request_return": status,
+            "date": date_series,
         }
     )
     if converted.empty:

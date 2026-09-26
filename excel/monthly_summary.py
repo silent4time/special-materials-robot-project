@@ -691,6 +691,43 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
 
 
 
+
+def _row_year(value: object) -> int:
+    """Extract a positive Jalali year from تاریخ, else 0."""
+    if isinstance(value, int) and value > 0:
+        # Already year-only (e.g. 1405) or YYYYMMDD int — take leading 4 if long
+        if value >= 10000:
+            return int(str(value)[:4])
+        return value
+    parsed = _year_only_latin(value)
+    if isinstance(parsed, int) and parsed > 0:
+        return parsed
+    try:
+        num = int(parsed)  # type: ignore[arg-type]
+        return num if num > 0 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _iter_year_months(
+    start: tuple[int, int],
+    end: tuple[int, int],
+) -> list[tuple[int, int]]:
+    """Inclusive (year, month) pairs from start through end."""
+    y, m = int(start[0]), int(start[1])
+    ey, em = int(end[0]), int(end[1])
+    out: list[tuple[int, int]] = []
+    while y * 12 + m <= ey * 12 + em:
+        out.append((y, m))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+        if len(out) > 240:
+            break
+    return out
+
+
 def filter_summary_by_month_range(
     data: MonthlySummaryData,
     start: tuple[int, int] | None = None,
@@ -699,6 +736,12 @@ def filter_summary_by_month_range(
     """Keep aggregated months in [start_year/start_month .. end] inclusive; recalculate totals.
 
     Point-in-time empty filter (no start/end) returns ``data`` unchanged.
+
+    When ``تاریخ`` / year is missing or 0 on aggregated rows, do **not** drop the
+    whole file: fall back to matching by ``ماه`` against months that overlap the
+    requested range. Display/section year then uses the year from the range
+    (single-year span, else end year / last matching pair). Real years are
+    preserved when present.
     """
     if start is None and end is None:
         return data
@@ -714,14 +757,25 @@ def filter_summary_by_month_range(
     sy, sm = start if start is not None else (0, 1)
     ey, em = end if end is not None else (9999, 12)
     lo, hi = sy * 12 + sm, ey * 12 + em
+    range_pairs = _iter_year_months((sy, sm), (ey, em))
+    allowed_months = {m for _, m in range_pairs}
+    # Later pairs overwrite → prefer end-of-range year when a month repeats
+    month_to_year = {m: y for y, m in range_pairs}
 
     items = data.items.copy()
-    years = items["تاریخ"].map(
-        lambda v: int(v) if isinstance(v, int) else (_year_only_latin(v) or 0)
-    )
+    years = items["تاریخ"].map(_row_year)
     months = pd.to_numeric(items["ماه"], errors="coerce").fillna(0).astype(int)
-    keys = years * 12 + months
-    mask = (keys >= lo) & (keys <= hi) & (years > 0) & (months.between(1, 12))
+
+    if bool((years > 0).any()):
+        keys = years * 12 + months
+        mask = (keys >= lo) & (keys <= hi) & (years > 0) & months.between(1, 12)
+        # Rows without year still match by month overlap so partial data is kept
+        missing = (years <= 0) & months.isin(list(allowed_months)) & months.between(1, 12)
+        mask = mask | missing
+    else:
+        # All years missing/0 — match by ماه against overlapping months only
+        mask = months.isin(list(allowed_months)) & months.between(1, 12)
+
     filtered = items.loc[mask].copy()
     if filtered.empty:
         return MonthlySummaryData(
@@ -731,6 +785,19 @@ def filter_summary_by_month_range(
             month_sections=[],
             tundish_totals=tundish_kg_totals_from_items(filtered),
         )
+
+    # Patch missing years for display/sections; prefer real years when present
+    patched = filtered["تاریخ"].map(_row_year)
+    need = patched <= 0
+    if bool(need.any()):
+        default_year = sy if sy == ey and sy > 0 else (ey if ey < 9999 else sy)
+        fallback = [
+            month_to_year.get(int(m), default_year if default_year > 0 else 0)
+            for m in filtered.loc[need, "ماه"].tolist()
+        ]
+        patched = patched.copy()
+        patched.loc[need] = fallback
+    filtered["تاریخ"] = patched
 
     remaining = set(filtered["شرح"].tolist())
     group_order = [d for d in data.group_order if d in remaining]
@@ -748,21 +815,20 @@ def filter_summary_by_month_range(
     grand_kg = float(filtered["مصرف_کیلوگرم"].sum())
 
     month_sections: list[dict[str, Any]] = []
-    filtered["_year"] = filtered["تاریخ"].map(
-        lambda v: int(v) if isinstance(v, int) else (_year_only_latin(v) or 0)
-    )
+    filtered["_year"] = filtered["تاریخ"].map(_row_year)
     for (year, month), sec in filtered.groupby(["_year", "ماه"], sort=True):
         sec_sorted = sec.sort_values(["شرح", "کد کالا"]).reset_index(drop=True)
         month_name = PERSIAN_MONTHS.get(int(month), str(month))
-        title = f"مصرف {month_name} ماه {to_persian_digits(year)}"
+        year_disp = int(year) if year else (sy if sy == ey else ey)
+        title = f"مصرف {month_name} ماه {to_persian_digits(year_disp)}"
         total_kg = float(sec_sorted["مصرف_کیلوگرم"].sum())
         month_sections.append(
             {
-                "year": int(year) if year else None,
+                "year": int(year_disp) if year_disp else None,
                 "month": int(month),
                 "month_name": month_name,
                 "title": title,
-                "total_title": f"جمع کل مصرف {month_name} ماه {to_persian_digits(year)}",
+                "total_title": f"جمع کل مصرف {month_name} ماه {to_persian_digits(year_disp)}",
                 "total_kg": total_kg,
                 "rows": sec_sorted,
             }

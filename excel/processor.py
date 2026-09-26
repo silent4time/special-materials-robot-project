@@ -40,7 +40,7 @@ COLUMN_ALIASES = {
         "stock",
     ],
     "unit": ["unit", "واحد"],
-    "date": ["date", "تاریخ"],
+    "date": ["date", "تاریخ", "تاريخ"],  # Arabic yeh variant (normalized too)
     "month": ["month", "ماه"],
     "location": ["location", "محل", "انبار", "مکان"],
     "status": ["status", "وضعیت"],
