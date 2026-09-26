@@ -11,6 +11,7 @@ load_dotenv(BASE_DIR / ".env")
 
 BALE_BOT_TOKEN = os.getenv("BALE_BOT_TOKEN", "").strip()
 ADMIN_BALE_USER_ID = os.getenv("ADMIN_BALE_USER_ID", "").strip()
+BOT_USERNAME = os.getenv("BOT_USERNAME", "nasoz_bot").strip().lstrip("@")
 DATABASE_PATH = Path(os.getenv("DATABASE_PATH", str(BASE_DIR / "data" / "bot.db")))
 UPLOAD_DIR = BASE_DIR / "uploads"
 REPORT_DIR = BASE_DIR / "reports"

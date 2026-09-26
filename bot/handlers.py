@@ -33,7 +33,7 @@ from auth.rbac import (
 )
 from bot import keyboards as kb
 from bot.bale_api import BaleClient
-from config import CRITICAL_DAYS, FILE_TYPES, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
+from config import BOT_USERNAME, CRITICAL_DAYS, FILE_TYPES, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
 from db.models import Database
 from excel.processor import (
     ExcelValidationError,
@@ -76,11 +76,13 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • کاردان مسئول — فیلتر حوزه + تنظیمات اقلام سایت
 • تکنسین — فقط ورود موجودی روزانه سایت (سه گروه)؛ بدون تنظیمات/گزارش
 
-دستورات مدیر:
-/users
-/adduser <bale_id> <role> [scope] [name...]
-/setrole <bale_id> <role>
-/setscope <bale_id> <scope>
+مدیریت کاربران (مالک/مدیر):
+• از منوی «کاربران»: اضافه / اصلاح نقش / حذف / لیست + لینک دعوت
+• دستورات اختیاری:
+  /users
+  /adduser <bale_id> <role> [scope] [name...]
+  /setrole <bale_id> <role>
+  /setscope <bale_id> <scope>
 /reset — پاک کردن جلسه آپلود و وضعیت ورود جاری
 """.format(
     critical=int(CRITICAL_DAYS) if CRITICAL_DAYS == int(CRITICAL_DAYS) else CRITICAL_DAYS,
@@ -100,6 +102,9 @@ class BotApp:
         self._site_stock_pending: dict[str, dict[str, Any]] = {}
         # catalog assignment: uid -> {item_id} while choosing group
         self._catalog_assign_pending: dict[str, dict[str, Any]] = {}
+        # user-management interactive flows
+        self._users_pending: dict[str, dict[str, Any]] = {}
+        self._bot_username: str | None = None
         ensure_dirs()
 
     # ---------- helpers ----------
@@ -123,7 +128,8 @@ class BotApp:
         if not user:
             self._reply(
                 message,
-                "شما در سیستم ثبت نشده‌اید. با مدیر تماس بگیرید تا با /adduser شما را اضافه کند.",
+                "شما در سیستم ثبت نشده‌اید.\n"
+                "از مدیر بخواهید از منوی «کاربران → اضافه کردن کاربر» لینک دعوت برایتان بفرستد.",
             )
             return None
         return user
@@ -137,6 +143,7 @@ class BotApp:
         self._await_category_code.discard(uid)
         self._site_stock_pending.pop(uid, None)
         self._catalog_assign_pending.pop(uid, None)
+        self._users_pending.pop(uid, None)
         self._reply(
             message,
             "دسترسی ندارید؛ فقط ورود موجودی روزانه سایت برای نقش تکنسین فعال است.",
@@ -309,19 +316,49 @@ class BotApp:
         return session, frames, metas
 
     # ---------- commands ----------
-    def cmd_start(self, message: dict) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        self.db.get_or_create_session(user["bale_user_id"])
-        text = (
+    # ---------- bot username / invite links ----------
+    def _bot_username_cached(self) -> str:
+        if self._bot_username:
+            return self._bot_username
+        try:
+            me = self.client.get_me()
+            uname = (me.get("username") or "").strip().lstrip("@")
+            if uname:
+                self._bot_username = uname
+                return uname
+        except Exception:  # noqa: BLE001
+            logger.warning("getMe for username failed; using BOT_USERNAME=%s", BOT_USERNAME)
+        self._bot_username = BOT_USERNAME or "nasoz_bot"
+        return self._bot_username
+
+    def _invite_url(self, token: str) -> str:
+        return f"https://ble.ir/{self._bot_username_cached()}?start={token}"
+
+    def _clear_users_pending(self, uid: str) -> None:
+        self._users_pending.pop(str(uid), None)
+
+    def _format_users_list(self, active_only: bool = True) -> str:
+        rows = self.db.list_users(active_only=active_only)
+        if not rows:
+            return "هیچ کاربری ثبت نشده."
+        lines = ["لیست کاربران:"]
+        for i, r in enumerate(rows, 1):
+            flag = "🟢" if r["active"] else "🔴"
+            lines.append(
+                f"{i}) {flag} شناسه={r['bale_user_id']} | {r.get('display_name')} | "
+                f"{role_label(r['role'])} | حوزه={r.get('scope') or '—'}"
+            )
+        return "\n".join(lines)
+
+    def _welcome_text(self, user: dict) -> str:
+        return (
             "سلام! به بازوی «گزارش مواد / تاندیش» خوش آمدید.\n\n"
             f"نقش شما: {role_label(user['role'])}\n"
             f"حوزه: {user.get('scope') or '—'}\n\n"
             + (
                 "برای نقش تکنسین فقط ورود «موجودی روزانه سایت» فعال است.\n"
                 "از منو یکی از گروه‌های اسلب / بلوم / بیلت را انتخاب و مقادیر را یکی‌یکی بفرستید."
-                if user.get('role') == 'technician'
+                if user.get("role") == "technician"
                 else
                 "از منو: موجودی انبار / مصرف ماهیانه / موجودی روزانه سایت را انتخاب کنید.\n"
                 "موجودی روزانه سایت تعاملی است (سه گروه اسلب/بلوم/بیلت).\n"
@@ -329,7 +366,36 @@ class BotApp:
                 "از «گزارش‌ها / تحلیل تاندیش» برای تحلیل‌ها استفاده کنید."
             )
         )
-        self._reply(message, text, kb.main_menu(user))
+
+    def _redeem_invite(self, message: dict, token: str) -> None:
+        """Redeem deep-link invite BEFORE any registered-user gate."""
+        uid = self._uid(message)
+        name = self._display_name(message)
+        try:
+            user = self.db.consume_invite(token, uid, name)
+        except ValueError as exc:
+            self._reply(message, str(exc))
+            return
+        self.db.get_or_create_session(user["bale_user_id"])
+        self._reply(
+            message,
+            "✅ دعوت پذیرفته شد.\n\n" + self._welcome_text(user),
+            kb.main_menu(user),
+        )
+
+    # ---------- commands ----------
+    def cmd_start(self, message: dict, args: list[str] | None = None) -> None:
+        args = args or []
+        token = (args[0] if args else "").strip()
+        # Invite redeem must work for users not yet in DB — no _user_or_deny first.
+        if token:
+            self._redeem_invite(message, token)
+            return
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        self.db.get_or_create_session(user["bale_user_id"])
+        self._reply(message, self._welcome_text(user), kb.main_menu(user))
 
     def cmd_help(self, message: dict) -> None:
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))
@@ -339,26 +405,262 @@ class BotApp:
             kb.main_menu(user) if user else None,
         )
 
-    def cmd_users(self, message: dict) -> None:
+    def _require_manager_user(self, message: dict) -> dict | None:
         user = self._user_or_deny(message)
         if not user:
+            return None
+        if self._deny_technician(message, user):
+            return None
+        if not require_manager(user):
+            self._reply(message, "فقط مالک یا مدیر به بخش کاربران دسترسی دارد.", kb.main_menu(user))
+            return None
+        return user
+
+    def on_users_menu(self, message: dict) -> None:
+        user = self._require_manager_user(message)
+        if not user:
             return
-        if self._deny_technician(message, user) or not require_manager(user):
-            if not require_manager(user) and user.get("role") != "technician":
-                self._reply(message, "فقط مدیر می‌تواند لیست کاربران را ببیند.")
+        self._clear_users_pending(str(user["bale_user_id"]))
+        self._reply(message, "مدیریت کاربران — یک گزینه را انتخاب کنید:", kb.users_menu())
+
+    def cmd_users(self, message: dict) -> None:
+        """List users (also used from submenu «لیست کاربران»)."""
+        user = self._require_manager_user(message)
+        if not user:
             return
-        rows = self.db.list_users()
-        if not rows:
-            self._reply(message, "هیچ کاربری ثبت نشده.", kb.main_menu(user))
+        self._reply(message, self._format_users_list(active_only=False), kb.users_menu())
+
+    def on_users_add_start(self, message: dict) -> None:
+        user = self._require_manager_user(message)
+        if not user:
             return
-        lines = ["لیست کاربران:"]
-        for r in rows:
-            flag = "🟢" if r["active"] else "🔴"
-            lines.append(
-                f"{flag} {r['bale_user_id']} | {r.get('display_name')} | "
-                f"{role_label(r['role'])} | حوزه={r.get('scope') or '—'}"
+        uid = str(user["bale_user_id"])
+        self._users_pending[uid] = {"mode": "add_role"}
+        self._reply(
+            message,
+            "نقش کاربر جدید را انتخاب کنید:",
+            kb.role_menu(include_owner=require_owner(user)),
+        )
+
+    def on_users_edit_start(self, message: dict) -> None:
+        user = self._require_manager_user(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._users_pending[uid] = {"mode": "edit_pick_user"}
+        self._reply(
+            message,
+            self._format_users_list(active_only=True)
+            + "\n\nشناسه کاربر را بفرستید:",
+            kb.users_menu(),
+        )
+
+    def on_users_delete_start(self, message: dict) -> None:
+        user = self._require_manager_user(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._users_pending[uid] = {"mode": "delete_pick_user"}
+        self._reply(
+            message,
+            self._format_users_list(active_only=True)
+            + "\n\nشناسه کاربری که باید حذف (غیرفعال) شود را بفرستید:",
+            kb.users_menu(),
+        )
+
+    def _create_and_send_invite(
+        self, message: dict, actor: dict, role: str, scope: str | None
+    ) -> None:
+        invite = self.db.create_invite(
+            role=role,
+            scope=scope,
+            created_by=str(actor["bale_user_id"]),
+            expires_days=7,
+        )
+        url = self._invite_url(invite["token"])
+        scope_line = f"\nحوزه: {scope}" if scope else ""
+        self._reply(
+            message,
+            "✅ لینک دعوت ساخته شد.\n"
+            f"نقش: {role_label(role)}{scope_line}\n"
+            f"اعتبار تقریبی: ۷ روز\n\n"
+            f"این لینک را برای فرد بفرستید تا با باز کردن آن و زدن Start به‌صورت خودکار ثبت شود:\n"
+            f"{url}",
+            kb.users_menu(),
+        )
+
+    def on_users_flow_text(self, message: dict, text: str) -> bool:
+        """Handle pending user-management text/role picks. Returns True if consumed."""
+        uid = str(self._uid(message))
+        pending = self._users_pending.get(uid)
+        if not pending:
+            return False
+        user = self._require_manager_user(message)
+        if not user:
+            self._clear_users_pending(uid)
+            return True
+
+        mode = pending.get("mode")
+        raw = (text or "").strip()
+
+        # Let top-level users menu buttons re-start their own handlers
+        nav_buttons = {
+            kb.BTN_USERS,
+            kb.BTN_USERS_ADD,
+            kb.BTN_USERS_EDIT,
+            kb.BTN_USERS_DELETE,
+            kb.BTN_USERS_LIST,
+        }
+        if raw in nav_buttons:
+            self._clear_users_pending(uid)
+            return False
+
+        if raw in (kb.BTN_BACK_USERS, kb.BTN_BACK_MAIN, kb.BTN_CANCEL_PENDING):
+            self._clear_users_pending(uid)
+            if raw == kb.BTN_BACK_MAIN or raw == kb.BTN_BACK_USERS:
+                self._reply(message, "منوی اصلی:", kb.main_menu(user))
+            else:
+                self._reply(message, "مدیریت کاربران:", kb.users_menu())
+            return True
+
+        # --- add: pick role ---
+        if mode == "add_role":
+            role = kb.ROLE_BUTTON_TO_KEY.get(raw)
+            if not role:
+                self._reply(
+                    message,
+                    "لطفاً نقش را از دکمه‌ها انتخاب کنید.",
+                    kb.role_menu(include_owner=require_owner(user)),
+                )
+                return True
+            if role == "owner" and not require_owner(user):
+                self._reply(message, "فقط مالک می‌تواند نقش مالک بدهد.", kb.users_menu())
+                self._clear_users_pending(uid)
+                return True
+            if role == "responsible_officer":
+                self._users_pending[uid] = {"mode": "add_scope", "role": role}
+                self._reply(
+                    message,
+                    "حوزه (scope) کاردان مسئول را به‌صورت متن بفرستید (مثال: خط-A):",
+                    kb.users_menu(),
+                )
+                return True
+            self._clear_users_pending(uid)
+            self._create_and_send_invite(message, user, role, None)
+            return True
+
+        # --- add: scope text ---
+        if mode == "add_scope":
+            role = pending.get("role") or "responsible_officer"
+            scope = raw
+            if not scope:
+                self._reply(message, "حوزه خالی است. دوباره بفرستید:", kb.users_menu())
+                return True
+            self._clear_users_pending(uid)
+            self._create_and_send_invite(message, user, role, scope)
+            return True
+
+        # --- edit: pick user id ---
+        if mode == "edit_pick_user":
+            target = self.db.get_user(raw)
+            if not target or not target.get("active"):
+                self._reply(
+                    message,
+                    "کاربر فعال با این شناسه یافت نشد. شناسه را دوباره بفرستید:",
+                    kb.users_menu(),
+                )
+                return True
+            if target["role"] == "owner" and not require_owner(user):
+                self._reply(
+                    message,
+                    "فقط مالک می‌تواند نقش مالک را تغییر دهد.",
+                    kb.users_menu(),
+                )
+                self._clear_users_pending(uid)
+                return True
+            self._users_pending[uid] = {
+                "mode": "edit_pick_role",
+                "target_id": str(target["bale_user_id"]),
+            }
+            self._reply(
+                message,
+                f"نقش جدید برای {target.get('display_name')} ({target['bale_user_id']}) را انتخاب کنید:",
+                kb.role_menu(include_owner=require_owner(user)),
             )
-        self._reply(message, "\n".join(lines), kb.main_menu(user))
+            return True
+
+        # --- edit: pick role ---
+        if mode == "edit_pick_role":
+            role = kb.ROLE_BUTTON_TO_KEY.get(raw)
+            if not role:
+                self._reply(
+                    message,
+                    "لطفاً نقش را از دکمه‌ها انتخاب کنید.",
+                    kb.role_menu(include_owner=require_owner(user)),
+                )
+                return True
+            if role == "owner" and not require_owner(user):
+                self._reply(message, "فقط مالک می‌تواند نقش مالک بدهد.", kb.users_menu())
+                self._clear_users_pending(uid)
+                return True
+            target_id = pending.get("target_id")
+            target = self.db.get_user(target_id) if target_id else None
+            if not target:
+                self._clear_users_pending(uid)
+                self._reply(message, "کاربر یافت نشد.", kb.users_menu())
+                return True
+            if (
+                target["role"] == "owner"
+                and role != "owner"
+                and self.db.count_active_owners() <= 1
+            ):
+                self._clear_users_pending(uid)
+                self._reply(message, "نمی‌توان نقش آخرین مالک را تغییر داد.", kb.users_menu())
+                return True
+            updated = self.db.set_role(target_id, role)
+            self._clear_users_pending(uid)
+            self._reply(
+                message,
+                f"✅ نقش به‌روز شد: {updated['bale_user_id']} → {role_label(updated['role'])}",
+                kb.users_menu(),
+            )
+            return True
+
+        # --- delete: pick user id ---
+        if mode == "delete_pick_user":
+            target_id = raw
+            ok, err = self._can_deactivate_user(user, target_id)
+            if not ok:
+                self._reply(message, err, kb.users_menu())
+                # stay in mode so they can retry unless fatal self/last-owner
+                if "خودتان" in err or "آخرین مالک" in err:
+                    self._clear_users_pending(uid)
+                return True
+            self.db.deactivate_user(target_id)
+            self._clear_users_pending(uid)
+            self._reply(
+                message,
+                f"✅ کاربر {target_id} غیرفعال شد.",
+                kb.users_menu(),
+            )
+            return True
+
+        self._clear_users_pending(uid)
+        return False
+
+    def _can_deactivate_user(self, actor: dict, target_id: str) -> tuple[bool, str]:
+        tid = str(target_id).strip()
+        if tid == str(actor["bale_user_id"]):
+            return False, "نمی‌توانید خودتان را حذف کنید."
+        target = self.db.get_user(tid)
+        if not target or not target.get("active"):
+            return False, "کاربر فعال با این شناسه یافت نشد."
+        if target["role"] == "owner":
+            if not require_owner(actor):
+                return False, "فقط مالک می‌تواند مالک دیگر را حذف کند."
+            if self.db.count_active_owners() <= 1:
+                return False, "نمی‌توان آخرین مالک را حذف کرد."
+        return True, ""
 
     def cmd_adduser(self, message: dict, args: list[str]) -> None:
         user = self._user_or_deny(message)
@@ -420,6 +722,20 @@ class BotApp:
         if args[1] == "owner" and not require_owner(user):
             self._reply(message, "فقط مالک می‌تواند نقش مالک بدهد.")
             return
+        target = self.db.get_user(args[0])
+        if not target:
+            self._reply(message, "کاربر یافت نشد. اول /adduser استفاده کنید یا از لینک دعوت استفاده شود.")
+            return
+        if target["role"] == "owner" and not require_owner(user):
+            self._reply(message, "فقط مالک می‌تواند نقش مالک را تغییر دهد.")
+            return
+        if (
+            target["role"] == "owner"
+            and args[1] != "owner"
+            and self.db.count_active_owners() <= 1
+        ):
+            self._reply(message, "نمی‌توان نقش آخرین مالک را تغییر داد.")
+            return
         try:
             updated = self.db.set_role(args[0], args[1])
         except KeyError:
@@ -463,6 +779,7 @@ class BotApp:
         self._await_category_code.discard(uid)
         self._site_stock_pending.pop(uid, None)
         self._catalog_assign_pending.pop(uid, None)
+        self._users_pending.pop(uid, None)
         self.db.reset_session(user["bale_user_id"])
         self._reply(message, "جلسه آپلود و وضعیت ورود جاری پاک شد. از منو دوباره شروع کنید.", kb.main_menu(user))
 
@@ -1558,7 +1875,7 @@ class BotApp:
             cmd = parts[0].split("@")[0].lower()
             args = parts[1:]
             mapping = {
-                "/start": lambda: self.cmd_start(message),
+                "/start": lambda: self.cmd_start(message, args),
                 "/help": lambda: self.cmd_help(message),
                 "/users": lambda: self.cmd_users(message),
                 "/adduser": lambda: self.cmd_adduser(message, args),
@@ -1593,6 +1910,10 @@ class BotApp:
         if self.on_catalog_pick_text(message, text):
             return
 
+        # user-management interactive flow (role/id text)
+        if self.on_users_flow_text(message, text):
+            return
+
         # keyboard buttons
         if text == kb.BTN_HELP:
             self.cmd_help(message)
@@ -1610,7 +1931,25 @@ class BotApp:
             self.on_cancel_pending(message)
             return
         if text == kb.BTN_USERS:
+            self.on_users_menu(message)
+            return
+        if text == kb.BTN_USERS_ADD:
+            self.on_users_add_start(message)
+            return
+        if text == kb.BTN_USERS_EDIT:
+            self.on_users_edit_start(message)
+            return
+        if text == kb.BTN_USERS_DELETE:
+            self.on_users_delete_start(message)
+            return
+        if text == kb.BTN_USERS_LIST:
             self.cmd_users(message)
+            return
+        if text == kb.BTN_BACK_USERS:
+            user = self._require_manager_user(message)
+            if user:
+                self._clear_users_pending(str(user["bale_user_id"]))
+                self._reply(message, "منوی اصلی:", kb.main_menu(user))
             return
         if text == kb.BTN_ANALYTICS:
             self.on_analytics_menu(message)
@@ -1637,6 +1976,7 @@ class BotApp:
                 self._clear_analysis_pending(uid)
                 self._clear_site_stock_pending(uid)
                 self._clear_catalog_pending(uid)
+                self._clear_users_pending(uid)
                 self._await_category_code.discard(uid)
                 self._reply(message, "منوی اصلی:", kb.main_menu(user))
             return

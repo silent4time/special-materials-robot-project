@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Generator, Iterable, Optional
 
@@ -129,6 +130,21 @@ class Database:
                     FOREIGN KEY(item_id) REFERENCES catalog_items(id),
                     FOREIGN KEY(session_id) REFERENCES upload_sessions(id)
                 );
+
+
+                CREATE TABLE IF NOT EXISTS invites (
+                    token TEXT PRIMARY KEY,
+                    role TEXT NOT NULL,
+                    scope TEXT,
+                    created_by TEXT,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    used_by TEXT,
+                    used_at TEXT,
+                    active INTEGER NOT NULL DEFAULT 1
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_invites_active ON invites(active);
 
                 CREATE INDEX IF NOT EXISTS idx_users_bale ON users(bale_user_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_user ON upload_sessions(bale_user_id);
@@ -291,6 +307,98 @@ class Database:
                 "UPDATE users SET active = 0, updated_at = ? WHERE bale_user_id = ?",
                 (_utcnow(), str(bale_user_id)),
             )
+
+    def count_active_owners(self) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM users WHERE active = 1 AND role = 'owner'"
+            ).fetchone()
+            return int(row["c"] if row else 0)
+
+    # --- invites (deep-link onboarding) ---
+    def create_invite(
+        self,
+        role: str,
+        scope: str | None = None,
+        created_by: str | None = None,
+        expires_days: int | None = 7,
+    ) -> dict[str, Any]:
+        if role not in ROLES:
+            raise ValueError(f"نقش نامعتبر: {role}")
+        token = secrets.token_urlsafe(16)
+        now = _utcnow()
+        expires_at = None
+        if expires_days is not None and expires_days > 0:
+            expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_days)).isoformat()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO invites
+                    (token, role, scope, created_by, created_at, expires_at, used_by, used_at, active)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 1)
+                """,
+                (token, role, scope, str(created_by) if created_by else None, now, expires_at),
+            )
+        return self.get_invite(token)  # type: ignore[return-value]
+
+    def get_invite(self, token: str) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM invites WHERE token = ?", (str(token),)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def consume_invite(
+        self,
+        token: str,
+        bale_user_id: str | int,
+        display_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate invite, upsert user with invite role/scope, mark used. Raises ValueError."""
+        invite = self.get_invite(token)
+        if not invite or not invite.get("active"):
+            raise ValueError("لینک دعوت نامعتبر یا منقضی شده است. از مدیر لینک جدید بگیرید.")
+        if invite.get("used_by"):
+            raise ValueError("این لینک دعوت قبلاً استفاده شده است. از مدیر لینک جدید بگیرید.")
+        expires_at = invite.get("expires_at")
+        if expires_at:
+            try:
+                exp = datetime.fromisoformat(expires_at)
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > exp:
+                    raise ValueError("لینک دعوت منقضی شده است. از مدیر لینک جدید بگیرید.")
+            except ValueError as exc:
+                if "منقضی" in str(exc) or "نامعتبر" in str(exc):
+                    raise
+                # bad date format → treat as expired for safety
+                raise ValueError("لینک دعوت نامعتبر یا منقضی شده است. از مدیر لینک جدید بگیرید.") from exc
+
+        role = invite["role"]
+        scope = invite.get("scope")
+        user = self.upsert_user(
+            bale_user_id,
+            role=role,
+            display_name=display_name,
+            scope=scope,
+            active=True,
+        )
+        now = _utcnow()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE invites
+                SET used_by = ?, used_at = ?, active = 0
+                WHERE token = ? AND used_by IS NULL AND active = 1
+                """,
+                (str(bale_user_id), now, str(token)),
+            )
+        # Re-check race: if another redeem won, ensure we still return consistent user
+        refreshed = self.get_invite(token)
+        if refreshed and refreshed.get("used_by") and str(refreshed["used_by"]) != str(bale_user_id):
+            raise ValueError("این لینک دعوت قبلاً استفاده شده است. از مدیر لینک جدید بگیرید.")
+        return user
+
 
     # --- upload sessions ---
     def get_or_create_session(self, bale_user_id: str | int) -> dict[str, Any]:

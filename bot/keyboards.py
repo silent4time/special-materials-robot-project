@@ -12,8 +12,26 @@ BTN_STATUS = "📋 وضعیت فایل‌ها"
 BTN_GENERATE = "✅ تولید گزارش PDF"
 BTN_RESET = "🔄 شروع مجدد"
 BTN_HELP = "❓ راهنما"
-BTN_USERS = "👥 لیست کاربران"
+BTN_USERS = "👥 کاربران"
+BTN_USERS_ADD = "➕ اضافه کردن کاربر"
+BTN_USERS_EDIT = "✏️ اصلاح نقش کاربر"
+BTN_USERS_DELETE = "🗑 حذف کاربر"
+BTN_USERS_LIST = "📋 لیست کاربران"
+BTN_BACK_USERS = "⬅️ بازگشت"
 BTN_CANCEL_PENDING = "✖️ انصراف از آپلود"
+
+# Role pick buttons (Persian labels from config.ROLES)
+BTN_ROLE_OWNER = "مالک"
+BTN_ROLE_MANAGER = "مدیر"
+BTN_ROLE_OFFICER = "کاردان مسئول"
+BTN_ROLE_TECH = "تکنسین"
+
+ROLE_BUTTON_TO_KEY = {
+    BTN_ROLE_OWNER: "owner",
+    BTN_ROLE_MANAGER: "manager",
+    BTN_ROLE_OFFICER: "responsible_officer",
+    BTN_ROLE_TECH: "technician",
+}
 
 # موجودی انبار submenu
 BTN_INV_MENU = "📦 موجودی انبار"
@@ -120,6 +138,36 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
     ]
     if is_manager:
         rows.append([BTN_USERS])
+    return BaleClient.reply_keyboard(rows)
+
+
+
+def users_menu() -> dict:
+    """Manager/owner submenu for interactive user management."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_USERS_ADD],
+            [BTN_USERS_EDIT],
+            [BTN_USERS_DELETE],
+            [BTN_USERS_LIST],
+            [BTN_BACK_USERS],
+        ]
+    )
+
+
+def role_menu(include_owner: bool = False) -> dict:
+    """Keyboard to pick a role when adding/editing a user."""
+    rows: list[list[str]] = []
+    if include_owner:
+        rows.append([BTN_ROLE_OWNER])
+    rows.extend(
+        [
+            [BTN_ROLE_MANAGER],
+            [BTN_ROLE_OFFICER],
+            [BTN_ROLE_TECH],
+            [BTN_BACK_USERS],
+        ]
+    )
     return BaleClient.reply_keyboard(rows)
 
 

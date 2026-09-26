@@ -89,6 +89,41 @@ def main() -> int:
     for full_menu in (owner_menu, manager_menu, officer_menu):
         assert {kb.BTN_INV_MENU, kb.BTN_ANALYTICS, kb.BTN_MONTHLY, kb.BTN_SITE_STOCK}.issubset(full_menu)
         assert kb.BTN_CATALOG_SETTINGS in full_menu
+    assert kb.BTN_USERS in owner_menu and kb.BTN_USERS in manager_menu
+    assert kb.BTN_USERS not in tech_menu
+    assert kb.BTN_USERS not in officer_menu
+    users_submenu = menu_texts(kb.users_menu())
+    assert kb.BTN_USERS_ADD in users_submenu
+    assert kb.BTN_USERS_EDIT in users_submenu
+    assert kb.BTN_USERS_DELETE in users_submenu
+    assert kb.BTN_USERS_LIST in users_submenu
+
+    # --- invites: create + consume as new technician ---
+    inv = db.create_invite(role="technician", created_by="998", expires_days=7)
+    assert inv and inv["token"] and inv["active"] == 1
+    assert db.get_invite(inv["token"])["role"] == "technician"
+    new_user = db.consume_invite(inv["token"], "555001", display_name="دعوت‌شده")
+    assert new_user["role"] == "technician"
+    assert new_user["bale_user_id"] == "555001"
+    assert new_user["active"] == 1
+    used = db.get_invite(inv["token"])
+    assert used["used_by"] == "555001"
+    assert used["active"] == 0
+    try:
+        db.consume_invite(inv["token"], "555002", display_name="دوباره")
+        raise AssertionError("reuse should fail")
+    except ValueError:
+        pass
+    # edit role + soft delete
+    db.set_role("555001", "responsible_officer")
+    assert db.get_user("555001")["role"] == "responsible_officer"
+    db.deactivate_user("555001")
+    assert db.get_user("555001")["active"] == 0
+    # re-invite applies role even if user exists (admin intent)
+    inv2 = db.create_invite(role="technician", created_by="998")
+    revived = db.consume_invite(inv2["token"], "555001", display_name="دوباره فعال")
+    assert revived["role"] == "technician" and revived["active"] == 1
+
 
     # site stock submenu labels
     site_menu = menu_texts(kb.site_stock_menu())
@@ -349,6 +384,7 @@ def main() -> int:
     assert "catalog_items" in tables
     assert "catalog_group_assignments" in tables
     assert "site_stock_entries" in tables
+    assert "invites" in tables
 
     print("SMOKE OK CRITICAL_DAYS=", CRITICAL_DAYS, "site_stock_date=", day)
     return 0

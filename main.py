@@ -56,6 +56,9 @@ def main() -> int:
     app = BotApp(client, db)
     try:
         me = client.get_me()
+        uname = (me.get("username") or "").strip().lstrip("@")
+        if uname:
+            app._bot_username = uname
         logger.info("Bot online: %s (@%s)", me.get("first_name"), me.get("username"))
         try:
             client.delete_webhook()
