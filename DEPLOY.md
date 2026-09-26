@@ -42,6 +42,10 @@ bash install.sh
 | `--systemd` | نصب unit از `scripts/nasoz-bot.service.in` |
 | `--start` | شروع سرویس systemd یا اجرای foreground |
 | `--update` | `git pull` + pip + restart systemd |
+| `--with-assistant` | نصب **دستیار هوشمند**: Ollama + `ollama pull` مدل + نوشتن `OLLAMA_*` در `.env` (بدون پرسش) |
+| `--no-assistant` | رد نصب دستیار هوشمند (بدون پرسش) |
+
+در حالت تعاملی (TTY) اگر هیچ‌کدام از دو پرچم بالا نباشد، اسکریپت می‌پرسد: **«دستیار هوشمند را هم نصب کنم؟ (Y/n)»** (پیش‌فرض بله).
 
 مثال استقرار کامل (بعد از ویزارد، یا با پاسخ y به سوال systemd):
 
@@ -118,11 +122,28 @@ cp .env.example .env && nano .env   # فقط BALE_BOT_TOKEN الزامی است
 python main.py                      # اولین /start → مالک
 ```
 
-## دستیار گزارش‌ها (Ollama محلی)
+## دستیار هوشمند (Ollama محلی)
 
 دستیار فقط از **Ollama (یا سازگار) روی همین سرور** استفاده می‌کند؛ هیچ LLM ابری فراخوانی نمی‌شود. اگر Ollama خاموش باشد، ربات کرش نمی‌کند و پیام فارسی «دستیار محلی در دسترس نیست…» نشان می‌دهد.
 
-### نصب Ollama و مدل پیش‌فرض
+**پیش‌نیاز پیشنهادی:** حدود ۴ گیگابایت RAM برای `qwen2.5:3b` (با ۸ گیگابایت راحت‌تر)؛ CPU چند‌هسته‌ای کافی است؛ GPU اختیاری.
+
+راهنمای کامل PDF (فارسی RTL): [`docs/راهنمای_نصب_دستیار_هوشمند.pdf`](docs/راهنمای_نصب_دستیار_هوشمند.pdf) — منبع Markdown: [`docs/دستیار-هوشمند.md`](docs/دستیار-هوشمند.md).
+
+### نصب همراه `install.sh`
+
+```bash
+# تعاملی: پرسش «دستیار هوشمند را هم نصب کنم؟ (Y/n)» — پیش‌فرض بله
+bash install.sh
+
+# غیرتعاملی
+bash install.sh --with-assistant
+bash install.sh --no-assistant
+```
+
+با `--with-assistant` (یا پاسخ Y): نصب Ollama در صورت نبود، `ollama pull` مدل، و نوشتن `OLLAMA_*` در `.env`.
+
+### نصب دستی Ollama و مدل پیش‌فرض
 
 ```bash
 # نصب (Linux)
@@ -135,7 +156,7 @@ ollama serve   # اگر به‌صورت سرویس بالا نباشد
 ollama pull qwen2.5:3b
 ```
 
-متغیرهای اختیاری در `.env`:
+### متغیرهای `.env`
 
 ```bash
 OLLAMA_BASE_URL=http://127.0.0.1:11434
@@ -143,6 +164,27 @@ OLLAMA_MODEL=qwen2.5:3b
 OLLAMA_TIMEOUT=60
 ```
 
-مدل پیش‌فرض در کد: `qwen2.5:3b`. اگر RAM کم است، `qwen2.5:1.5b` را بکشید و `OLLAMA_MODEL=qwen2.5:1.5b` بگذارید (در باکس توسعه همین مدل برای smoke تأیید شد). سایر گزینه‌ها: `llama3.2:3b`, `phi3:mini`.
+مدل پیش‌فرض در کد: `qwen2.5:3b`. اگر RAM کم است، `qwen2.5:1.5b` را بکشید و `OLLAMA_MODEL=qwen2.5:1.5b` بگذارید. سایر گزینه‌ها: `llama3.2:3b`, `phi3:mini`.
 
-در بله: منوی «گزارش‌ها / تحلیل تاندیش» → «دستیار گزارش‌ها» (نقش تکنسین دسترسی ندارد).
+### تأیید و تست
+
+```bash
+ollama list
+curl -s http://127.0.0.1:11434/api/tags
+```
+
+سپس ربات را روشن کنید (`python main.py` یا `bash install.sh --systemd --start`).
+
+### استفاده در بله
+
+منوی «گزارش‌ها / تحلیل تاندیش» → «🤖 دستیار هوشمند» (نقش **تکنسین** دسترسی ندارد). دامنه فقط گزارش‌ها است.
+
+### رفع اشکال و به‌روزرسانی مدل
+
+| مشکل | کار |
+|------|-----|
+| پیام «دستیار محلی در دسترس نیست…» | `ollama serve` / سرویس ollama؛ پورت `11434`؛ `OLLAMA_BASE_URL` |
+| مدل نیست | `ollama pull` مطابق `OLLAMA_MODEL` |
+| کندی | مدل کوچک‌تر یا افزایش `OLLAMA_TIMEOUT` |
+
+به‌روزرسانی مدل: `ollama pull …` سپس در صورت نیاز تغییر `OLLAMA_MODEL` و restart ربات (`bash install.sh --update` یا `systemctl restart nasoz-bot`).

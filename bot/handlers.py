@@ -107,7 +107,7 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • مواد بحرانی — پوشش < CRITICAL_DAYS={critical} روز
 • اگر موجودی روزانه سایت ثبت شده باشد، برای «موجودی و مواد بحرانی» به‌عنوان منبع باقیمانده سایت استفاده می‌شود
 • سربرگ PDF (اختیاری): از «تنظیمات ربات» → «سربرگ PDF» آپلود کنید؛ روی همه صفحات گزارش اعمال می‌شود
-• دستیار گزارش‌ها — گفتگوی محلی با Ollama فقط دربارهٔ گزارش‌ها (غیرتکنسین؛ بدون API ابری)
+• دستیار هوشمند — گفتگوی محلی با Ollama فقط دربارهٔ گزارش‌ها (غیرتکنسین؛ بدون API ابری)
 
 درخواست مواد (مالک / مدیر / کاردان مسئول):
 • دکمه «🛒 درخواست مواد» در منوی اصلی
@@ -4282,7 +4282,7 @@ class BotApp:
         self._report_assistant_pending.add(uid)
         self._reply(
             message,
-            "دستیار گزارش‌ها (محلی — Ollama)\n"
+            "دستیار هوشمند (محلی — Ollama)\n"
             "فقط دربارهٔ گزارش‌ها و اعداد داخل ربات بپرسید.\n"
             "برای پایان، «پایان گفتگو» یا بازگشت به تحلیل را بزنید.",
             kb.report_assistant_menu(),
@@ -4296,7 +4296,7 @@ class BotApp:
         self._clear_report_assistant_pending(uid)
         if self._deny_technician(message, user):
             return
-        self._reply(message, "گفتگو با دستیار گزارش‌ها پایان یافت.", kb.analytics_menu())
+        self._reply(message, "گفتگو با دستیار هوشمند پایان یافت.", kb.analytics_menu())
 
     def on_report_assistant_text(self, message: dict, text: str) -> bool:
         """Handle free text while in assistant mode. Returns True if consumed."""
@@ -4317,7 +4317,7 @@ class BotApp:
             if text == kb.BTN_BACK_MAIN:
                 self._reply(message, "منوی اصلی:", kb.main_menu(user))
             else:
-                self._reply(message, "گفتگو با دستیار گزارش‌ها پایان یافت.", kb.analytics_menu())
+                self._reply(message, "گفتگو با دستیار هوشمند پایان یافت.", kb.analytics_menu())
             return True
         # Let known analytics / main menu buttons leave conversation and fall through
         leave_buttons = {

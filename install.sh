@@ -2,7 +2,7 @@
 # Thin wrapper / curl|bash bootstrap → scripts/install.sh
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash
-#   bash install.sh [--seed-admin|--systemd|--start|--update]
+#   bash install.sh [--seed-admin|--systemd|--start|--update|--with-assistant|--no-assistant]
 #   --seed-admin اختیاری؛ مالک با اولین /start ساخته می‌شود
 set -euo pipefail
 

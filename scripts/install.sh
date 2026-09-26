@@ -6,9 +6,12 @@
 #   bash install.sh --systemd       # + نصب unit systemd
 #   bash install.sh --start         # اجرا (foreground یا systemd)
 #   bash install.sh --update        # git pull + pip + restart
+#   bash install.sh --with-assistant  # نصب Ollama + مدل + نوشتن OLLAMA_* در .env
+#   bash install.sh --no-assistant    # رد نصب دستیار هوشمند
 # Env:
 #   INSTALL_DIR=/path/to/dir        # مسیر کلون/نصب (اختیاری)
 #   BALE_BOT_TOKEN=...              # در حالت غیرتعاملی، از env هم پذیرفته می‌شود
+#   OLLAMA_MODEL=qwen2.5:3b         # مدل پیش‌فرض دستیار (اختیاری)
 set -euo pipefail
 
 REPO_URL="https://github.com/silent4time/special-materials-robot-project.git"
@@ -21,6 +24,8 @@ DO_SEED=0
 DO_SYSTEMD=0
 DO_START=0
 DO_UPDATE=0
+# 0=ask (TTY) / skip (non-TTY), 1=force install, 2=skip
+DO_ASSISTANT=0
 
 for arg in "$@"; do
   case "$arg" in
@@ -28,20 +33,25 @@ for arg in "$@"; do
     --systemd)    DO_SYSTEMD=1 ;;
     --start)      DO_START=1 ;;
     --update)     DO_UPDATE=1 ;;
+    --with-assistant) DO_ASSISTANT=1 ;;
+    --no-assistant)   DO_ASSISTANT=2 ;;
     -h|--help)
       cat <<'HELP'
 Usage: bash install.sh [options]
 
-  (default)     ساخت venv، نصب وابستگی‌ها، ویزارد تعاملی .env (در ترمینال واقعی)
-  --seed-admin  اختیاری؛ مالک با اولین /start ساخته می‌شود (scripts/seed_admin.py)
-  --systemd     نصب سرویس systemd از scripts/nasoz-bot.service.in
-  --start       اجرای ربات (اگر systemd نصب باشد: systemctl start؛ وگرنه foreground)
-  --update      git pull + pip install -r requirements.txt + restart systemd
-  -h, --help    این راهنما
+  (default)          ساخت venv، نصب وابستگی‌ها، ویزارد تعاملی .env (در ترمینال واقعی)
+  --seed-admin       اختیاری؛ مالک با اولین /start ساخته می‌شود (scripts/seed_admin.py)
+  --systemd          نصب سرویس systemd از scripts/nasoz-bot.service.in
+  --start            اجرای ربات (اگر systemd نصب باشد: systemctl start؛ وگرنه foreground)
+  --update           git pull + pip install -r requirements.txt + restart systemd
+  --with-assistant   نصب دستیار هوشمند: Ollama + pull مدل + نوشتن OLLAMA_* در .env
+  --no-assistant     رد نصب دستیار هوشمند (بدون پرسش)
+  -h, --help         این راهنما
 
 متغیر محیطی:
   INSTALL_DIR      مسیر نصب / کلون (پیش‌فرض: cwd اگر داخل ریپو باشد، وگرنه ./special-materials-robot-project)
   BALE_BOT_TOKEN   در نصب غیرتعاملی (piped)، اگر ست باشد در .env نوشته می‌شود
+  OLLAMA_MODEL     مدل پیش‌فرض دستیار (پیش‌فرض: qwen2.5:3b)
 HELP
       exit 0
       ;;
@@ -471,6 +481,147 @@ do_update() {
   log "✓ به‌روزرسانی تمام شد"
 }
 
+
+# --- دستیار هوشمند (Ollama محلی) ---
+DEFAULT_OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:3b}"
+DEFAULT_OLLAMA_URL="http://127.0.0.1:11434"
+DEFAULT_OLLAMA_TIMEOUT="60"
+
+upsert_env_var() {
+  # usage: upsert_env_var ROOT KEY VALUE
+  local root="$1" key="$2" value="$3" tmp
+  cd "$root"
+  if [[ ! -f .env ]]; then
+    if [[ -f .env.example ]]; then
+      cp .env.example .env
+    else
+      touch .env
+    fi
+    chmod 600 .env 2>/dev/null || true
+  fi
+  tmp="$(mktemp)"
+  if grep -qE "^${key}=" .env 2>/dev/null; then
+    # replace existing assignment (keep other lines)
+    awk -v k="$key" -v v="$value" '
+      BEGIN { done=0 }
+      $0 ~ "^"k"=" {
+        if (!done) { print k"="v; done=1; next }
+      }
+      { print }
+      END { if (!done) print k"="v }
+    ' .env > "$tmp"
+  else
+    cat .env > "$tmp"
+    printf '\n%s=%s\n' "$key" "$value" >> "$tmp"
+  fi
+  mv "$tmp" .env
+  chmod 600 .env 2>/dev/null || true
+}
+
+write_ollama_env() {
+  local root="$1"
+  local model="${2:-$DEFAULT_OLLAMA_MODEL}"
+  upsert_env_var "$root" "OLLAMA_BASE_URL" "$DEFAULT_OLLAMA_URL"
+  upsert_env_var "$root" "OLLAMA_MODEL" "$model"
+  upsert_env_var "$root" "OLLAMA_TIMEOUT" "$DEFAULT_OLLAMA_TIMEOUT"
+  log "✓ متغیرهای OLLAMA_* در .env نوشته شد (مدل: $model)"
+}
+
+install_ollama_binary() {
+  if need_cmd ollama; then
+    log "✓ Ollama از قبل نصب است: $(command -v ollama)"
+    return 0
+  fi
+  log "نصب Ollama ..."
+  if ! need_cmd curl; then
+    if need_cmd apt-get; then
+      maybe_sudo apt-get update -y
+      maybe_sudo apt-get install -y curl
+    else
+      die "curl برای نصب Ollama لازم است."
+    fi
+  fi
+  curl -fsSL https://ollama.com/install.sh | sh
+  need_cmd ollama || die "نصب Ollama ناموفق بود (دستور ollama پیدا نشد)."
+  log "✓ Ollama نصب شد"
+}
+
+ensure_ollama_running() {
+  # Best-effort: if API answers, ok; else try serve in background
+  if curl -fsS --max-time 3 "$DEFAULT_OLLAMA_URL/api/tags" >/dev/null 2>&1; then
+    log "✓ سرویس Ollama پاسخ می‌دهد ($DEFAULT_OLLAMA_URL)"
+    return 0
+  fi
+  if need_cmd systemctl && systemctl is-active --quiet ollama 2>/dev/null; then
+    sleep 2
+    if curl -fsS --max-time 3 "$DEFAULT_OLLAMA_URL/api/tags" >/dev/null 2>&1; then
+      log "✓ سرویس systemd ollama فعال است"
+      return 0
+    fi
+  fi
+  warn "Ollama روی $DEFAULT_OLLAMA_URL پاسخ نداد — تلاش برای ollama serve در پس‌زمینه..."
+  nohup ollama serve >/tmp/ollama-serve-install.log 2>&1 &
+  sleep 3
+  if curl -fsS --max-time 5 "$DEFAULT_OLLAMA_URL/api/tags" >/dev/null 2>&1; then
+    log "✓ ollama serve شروع شد"
+    return 0
+  fi
+  warn "سرویس Ollama هنوز آماده نیست؛ بعداً «ollama serve» یا systemctl را بررسی کنید."
+  return 1
+}
+
+pull_ollama_model() {
+  local model="${1:-$DEFAULT_OLLAMA_MODEL}"
+  log "کشیدن مدل Ollama: $model ..."
+  if ollama pull "$model"; then
+    log "✓ مدل $model آماده است"
+    ollama list || true
+    return 0
+  fi
+  warn "کشیدن مدل $model ناموفق بود — دستی: ollama pull $model"
+  return 1
+}
+
+setup_assistant() {
+  local root="$1"
+  local model="${OLLAMA_MODEL:-$DEFAULT_OLLAMA_MODEL}"
+  log "━━━━━━━━ نصب دستیار هوشمند (Ollama محلی) ━━━━━━━━"
+  install_ollama_binary
+  ensure_ollama_running || true
+  pull_ollama_model "$model" || true
+  write_ollama_env "$root" "$model"
+  log "راهنما: docs/راهنمای_نصب_دستیار_هوشمند.pdf"
+}
+
+maybe_setup_assistant() {
+  local root="$1" reply
+  case "$DO_ASSISTANT" in
+    1)
+      setup_assistant "$root"
+      return 0
+      ;;
+    2)
+      log "دستیار هوشمند رد شد (--no-assistant)."
+      return 0
+      ;;
+  esac
+  if [[ -t 0 ]]; then
+    read -r -p "دستیار هوشمند را هم نصب کنم؟ (Y/n): " reply || true
+    case "${reply:-Y}" in
+      n|N|no|NO|خ|خیر)
+        log "دستیار هوشمند رد شد."
+        return 0
+        ;;
+      *)
+        setup_assistant "$root"
+        return 0
+        ;;
+    esac
+  fi
+  # Non-interactive without flag: skip (document --with-assistant)
+  log "نصب غیرتعاملی: دستیار هوشمند رد شد (برای نصب: --with-assistant)."
+}
+
 print_next_steps() {
   local root="$1"
   cat <<PERSIAN
@@ -490,6 +641,10 @@ print_next_steps() {
 
   3) اجرای دائمی:
        bash install.sh --systemd --start
+
+  4) دستیار هوشمند (اختیاری — Ollama محلی، بدون ابر):
+       bash install.sh --with-assistant
+     راهنما: docs/راهنمای_نصب_دستیار_هوشمند.pdf
 
 هشدار: فقط یک نمونه از بازو با همان توکن باید long-poll کند.
 قبل از سرور تولید، ربات موقت روی ماشین توسعه را خاموش کنید.
@@ -511,6 +666,7 @@ fi
 
 setup_venv "$WORKDIR"
 ensure_env "$WORKDIR"
+maybe_setup_assistant "$WORKDIR"
 
 if (( DO_SEED )); then
   run_seed_admin "$WORKDIR" || true
