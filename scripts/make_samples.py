@@ -32,7 +32,7 @@ def main() -> None:
             "domain",
             "assignee_id",
             "assignee_name",
-            "tank_id",
+            "tundish_id",
             "material_name",
             "quantity",
             "unit",

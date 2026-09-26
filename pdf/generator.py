@@ -109,7 +109,7 @@ SECTION_ORDER = (
 DISPLAY_COLUMNS = {
     "tank_consumption": [
         "domain",
-        "tank_id",
+        "tundish_id",
         "material_name",
         "quantity",
         "unit",
@@ -143,7 +143,7 @@ HEADER_FA = {
     "domain": "حوزه",
     "assignee_id": "شناسه",
     "assignee_name": "مسئول",
-    "tank_id": "تانک",
+    "tundish_id": "تانک",
     "material_name": "ماده",
     "product_name": "محصول",
     "quantity": "مقدار",
@@ -201,7 +201,7 @@ def generate_report(
     output_path: Path | str | None = None,
 ) -> Path:
     """
-    Build PDF with title «گزارش مواد / خلاصه داده‌های آپلود‌شده»,
+    Build PDF with title «گزارش تاندیش / خلاصه داده‌های آپلود‌شده»,
     one section per source file, plus a summary.
     """
     _register_fonts()
@@ -221,11 +221,11 @@ def generate_report(
         leftMargin=1.2 * cm,
         topMargin=1.2 * cm,
         bottomMargin=1.2 * cm,
-        title="گزارش مواد",
+        title="گزارش تاندیش",
     )
 
     story: list = []
-    story.append(Paragraph(rtl("گزارش مواد / خلاصه داده‌های آپلود‌شده"), styles["title"]))
+    story.append(Paragraph(rtl("گزارش تاندیش / خلاصه داده‌های آپلود‌شده"), styles["title"]))
     role_fa = {"owner": "مالک", "manager": "مدیر", "responsible_officer": "کاردان مسئول", "technician": "تکنسین"}.get(
         user.get("role"), user.get("role")
     )

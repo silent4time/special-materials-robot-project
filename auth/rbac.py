@@ -95,7 +95,7 @@ def can_generate_report(user: dict, session: dict, completeness: dict[str, bool]
     if not all(completeness.values()):
         missing = [k for k, v in completeness.items() if not v]
         labels = {
-            "tank_consumption": "مقدار مصرفی هر تانک",
+            "tank_consumption": "مقدار مصرفی هر تاندیش",
             "product_inventory": "موجودی محصولات",
             "monthly_consumption": "مصرف ماهانه مواد",
         }

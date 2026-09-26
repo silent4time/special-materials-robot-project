@@ -22,8 +22,8 @@ BALE_API_BASE = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}" if BALE_BOT_TOKEN el
 FILE_TYPES = {
     "tank_consumption": {
         "key": "tank_consumption",
-        "label_fa": "مقدار مصرفی هر تانک",
-        "button": "📥 مقدار مصرفی هر تانک",
+        "label_fa": "مقدار مصرفی هر تاندیش",
+        "button": "📥 مقدار مصرفی هر تاندیش",
         "filename_hint": "tank_consumption",
     },
     "product_inventory": {
@@ -57,7 +57,7 @@ REQUIRED_COLUMNS = {
         "domain",
         "assignee_id",
         "assignee_name",
-        "tank_id",
+        "tundish_id",
         "material_name",
         "quantity",
         "unit",

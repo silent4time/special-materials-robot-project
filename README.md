@@ -1,4 +1,4 @@
-# بازوی گزارش مواد (بله)
+# بازوی گزارش تاندیش (بله)
 
 ربات پیام‌رسان **بله** برای دریافت **سه فایل Excel مشخص**، اعمال کنترل دسترسی نقش‌محور (RBAC)، و تولید **یک گزارش PDF ترکیبی**.
 
@@ -57,7 +57,7 @@ python main.py
 ```text
 منوی اصلی
    │
-   ├─► انتخاب «مقدار مصرفی هر تانک» ──► ارسال فایل .xlsx ──► ذخیره اسلات
+   ├─► انتخاب «مقدار مصرفی هر تاندیش» ──► ارسال فایل .xlsx ──► ذخیره اسلات
    ├─► انتخاب «موجودی محصولات»     ──► ارسال فایل .xlsx ──► ذخیره اسلات
    ├─► انتخاب «مصرف ماهانه مواد»   ──► ارسال فایل .xlsx ──► ذخیره اسلات
    ├─► «وضعیت فایل‌ها»
@@ -103,7 +103,7 @@ python main.py
 
 | فایل نمونه | نوع | عنوان فارسی |
 |------------|-----|-------------|
-| `01_tank_consumption.xlsx` | `tank_consumption` | مقدار مصرفی هر تانک |
+| `01_tank_consumption.xlsx` | `tank_consumption` | مقدار مصرفی هر تاندیش |
 | `02_product_inventory.xlsx` | `product_inventory` | موجودی محصولات |
 | `03_monthly_consumption.xlsx` | `monthly_consumption` | مصرف ماهانه مواد |
 
@@ -113,11 +113,11 @@ python main.py
 python scripts/make_samples.py
 ```
 
-### ۱) مقدار مصرفی هر تانک
+### ۱) مقدار مصرفی هر تاندیش
 
 ستون‌های توصیه‌شده:
 
-`domain`, `assignee_id`, `assignee_name`, `tank_id`, `material_name`, `quantity`, `unit`, `date`, `notes`
+`domain`, `assignee_id`, `assignee_name`, `tundish_id`, `material_name`, `quantity`, `unit`, `date`, `notes`
 
 ### ۲) موجودی محصولات
 
@@ -132,7 +132,7 @@ python scripts/make_samples.py
 
 ## خروجی PDF
 
-- عنوان: **گزارش مواد / خلاصه داده‌های آپلود‌شده**
+- عنوان: **گزارش تاندیش / خلاصه داده‌های آپلود‌شده**
 - بخش خلاصه (تعداد ردیف کل و پس از فیلتر نقش)
 - سه بخش جداگانه برای هر منبع
 - فونت بسته‌شده: `fonts/DejaVuSans.ttf` (+ Bold) با `arabic_reshaper` و `python-bidi` برای نمایش بهتر فارسی

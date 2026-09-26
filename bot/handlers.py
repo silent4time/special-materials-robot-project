@@ -22,7 +22,7 @@ from pdf.generator import generate_report
 logger = logging.getLogger(__name__)
 
 
-HELP_TEXT = """راهنمای بازوی گزارش مواد
+HELP_TEXT = """راهنمای بازوی گزارش تاندیش
 
 این بازو به‌صورت درخواست‌محور کار می‌کند:
 ۱) از منو نوع فایل را انتخاب کنید
@@ -31,7 +31,7 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد
 ۴) دکمه «تولید گزارش PDF» را بزنید
 
 انواع فایل:
-• مقدار مصرفی هر تانک
+• مقدار مصرفی هر تاندیش
 • موجودی محصولات
 • مصرف ماهانه مواد
 
@@ -103,7 +103,7 @@ class BotApp:
             return
         self.db.get_or_create_session(user["bale_user_id"])
         text = (
-            "سلام! به بازوی «گزارش مواد» خوش آمدید.\n\n"
+            "سلام! به بازوی «گزارش تاندیش» خوش آمدید.\n\n"
             f"نقش شما: {role_label(user['role'])}\n"
             f"حوزه: {user.get('scope') or '—'}\n\n"
             "از منو نوع فایل Excel را انتخاب کنید، سپس همان فایل را ارسال کنید.\n"
@@ -361,7 +361,7 @@ class BotApp:
             self.client.send_document(
                 self._chat_id(message),
                 pdf_path,
-                caption="گزارش مواد / خلاصه داده‌های آپلود‌شده",
+                caption="گزارش تاندیش / خلاصه داده‌های آپلود‌شده",
             )
             self._reply(
                 message,

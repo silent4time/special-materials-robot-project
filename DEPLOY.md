@@ -55,7 +55,7 @@ sudo nano /etc/systemd/system/nasoz-bot.service
 
 ```ini
 [Unit]
-Description=Bale materials report bot (nasoz_bot)
+Description=Bale tundish materials report bot (nasoz_bot)
 After=network.target
 
 [Service]

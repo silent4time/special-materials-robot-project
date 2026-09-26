@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-بازوی بله — گزارش مواد (سه فایل Excel → یک PDF)
+بازوی بله — گزارش تاندیش (سه فایل Excel → یک PDF)
 
 API: فراخوانی مستقیم HTTPS به https://tapi.bale.ai/bot<TOKEN>/<METHOD>
 (کتابخانه python-bale-bot به‌خاطر وابستگی aiohttp روی بعضی محیط‌ها سخت نصب می‌شود؛
