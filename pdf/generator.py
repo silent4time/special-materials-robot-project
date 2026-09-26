@@ -66,6 +66,57 @@ def rtl(text: Any) -> str:
         return s
 
 
+
+def apply_letterhead(
+    content_pdf: Path | str,
+    letterhead_pdf: Path | str | None,
+    *,
+    output_path: Path | str | None = None,
+) -> Path:
+    """Stamp letterhead as background on every content page. No-op if missing."""
+    content_path = Path(content_pdf)
+    if not letterhead_pdf:
+        return content_path
+    lh_path = Path(letterhead_pdf)
+    if not lh_path.is_file():
+        return content_path
+    try:
+        from pypdf import PdfReader, PdfWriter, Transformation, PageObject
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("pypdf required for letterhead merge") from exc
+
+    content = PdfReader(str(content_path))
+    letter = PdfReader(str(lh_path))
+    if not content.pages or not letter.pages:
+        return content_path
+
+    out = Path(output_path) if output_path else content_path
+    out.parent.mkdir(parents=True, exist_ok=True)
+    # Write to temp then replace if overwriting same path
+    tmp = out.with_suffix(out.suffix + ".lh.tmp")
+    writer = PdfWriter()
+    lh0 = letter.pages[0]
+    lw = float(lh0.mediabox.width) or 1.0
+    lh_h = float(lh0.mediabox.height) or 1.0
+    for page in content.pages:
+        cw = float(page.mediabox.width) or lw
+        ch = float(page.mediabox.height) or lh_h
+        blank = PageObject.create_blank_page(width=cw, height=ch)
+        scale = Transformation().scale(cw / lw, ch / lh_h)
+        try:
+            blank.merge_transformed_page(lh0, scale)
+        except Exception:  # noqa: BLE001
+            # Older fallback: merge without scale if sizes already match
+            blank.merge_page(lh0)
+        blank.merge_page(page)
+        writer.add_page(blank)
+    with tmp.open("wb") as fh:
+        writer.write(fh)
+    tmp.replace(out)
+    return out
+
+
+
 def _styles() -> dict[str, ParagraphStyle]:
     base = getSampleStyleSheet()
     return {
@@ -352,6 +403,7 @@ def generate_report(
     user: dict[str, Any],
     output_path: Path | str | None = None,
     analytics: dict[str, Any] | None = None,
+    letterhead_path: Path | str | None = None,
 ) -> Path:
     """
     Build PDF with title «گزارش تاندیش / خلاصه داده‌های آپلود‌شده»,
@@ -447,7 +499,7 @@ def generate_report(
         story.append(Spacer(1, 0.4 * cm))
 
     doc.build(story)
-    return output_path
+    return apply_letterhead(output_path, letterhead_path)
 
 
 # --- Monthly consumption summary PDF ---
@@ -473,6 +525,7 @@ def generate_monthly_summary_pdf(
     grand_kg: float,
     output_path: Path | str | None = None,
     title: str = "خلاصه مصرفی ماهیانه",
+    letterhead_path: Path | str | None = None,
 ) -> Path:
     """Landscape RTL PDF for the monthly consumption summary report."""
     _register_fonts()
@@ -639,4 +692,198 @@ def generate_monthly_summary_pdf(
         story.append(Spacer(1, 0.45 * cm))
 
     doc.build(story)
-    return output_path
+    return apply_letterhead(output_path, letterhead_path)
+
+
+# --- Simple reusable RTL report PDF (analytics menu) ---
+
+SIMPLE_HEADER_FA = {
+    **HEADER_FA,
+    "surplus_qty": "مقدار مازاد",
+    "surplus_reason": "دلیل مازاد",
+    "کد کالا": "کد کالا",
+    "شرح": "شرح",
+    "کد دسته": "کد دسته",
+    "مقدار قبلی": "قبلی",
+    "مقدار جدید": "جدید",
+    "مقدار ورودی": "ورودی",
+    "وضعیت": "وضعیت",
+}
+
+
+def _format_simple_cell(val: Any, col: str | None = None) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, float):
+        if val != val:  # NaN
+            return ""
+        if val == float("inf"):
+            return "∞"
+        return f"{val:g}" if abs(val) >= 0.01 or val == 0 else f"{val:.4f}"
+    if col in {"date", "start", "end", "entry_date"} and val not in ("", None):
+        try:
+            return format_date(val)
+        except Exception:  # noqa: BLE001
+            return str(val)
+    if col == "created_at" and val not in ("", None):
+        try:
+            return format_datetime(val)
+        except Exception:  # noqa: BLE001
+            return str(val)
+    return str(val)
+
+
+def _rows_table(
+    columns: list[str],
+    rows: list[dict[str, Any]],
+    styles: dict,
+    *,
+    header_map: dict[str, str] | None = None,
+    header_bg: str = "#1f4e79",
+    max_rows: int = 500,
+) -> Table | Paragraph:
+    labels = header_map or SIMPLE_HEADER_FA
+    if not columns:
+        return Paragraph(rtl("هیچ ستونی تعریف نشده."), styles["body"])
+    header = [Paragraph(rtl(labels.get(c, c)), styles["cell"]) for c in columns]
+    data = [list(reversed(header))]
+    for row in rows[:max_rows]:
+        cells = [
+            Paragraph(rtl(_format_simple_cell(row.get(c, ""), c)), styles["cell"])
+            for c in columns
+        ]
+        data.append(list(reversed(cells)))
+    table = Table(data, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(header_bg)),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [colors.whitesmoke, colors.Color(0.93, 0.95, 1)],
+                ),
+            ]
+        )
+    )
+    return table
+
+
+def generate_simple_report_pdf(
+    title: str,
+    *,
+    subtitle: str | None = None,
+    sections: list[dict[str, Any]] | None = None,
+    columns: list[str] | None = None,
+    rows: list[dict[str, Any]] | None = None,
+    empty_message: str = "داده‌ای یافت نشد.",
+    output_path: Path | str | None = None,
+    header_map: dict[str, str] | None = None,
+    filename_stem: str = "simple_report",
+    letterhead_path: Path | str | None = None,
+) -> Path:
+    """Reusable landscape RTL PDF for analytics menu reports.
+
+    Pass either ``sections`` (list of dicts with title/columns/rows) or a single
+    ``columns`` + ``rows`` table. Empty data still produces a one-page PDF with
+    ``empty_message``.
+    """
+    _register_fonts()
+    ensure_dirs()
+    styles = _styles()
+
+    if output_path is None:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = REPORT_DIR / f"{filename_stem}_{stamp}.pdf"
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    doc = SimpleDocTemplate(
+        str(output_path),
+        pagesize=landscape(A4),
+        rightMargin=1.0 * cm,
+        leftMargin=1.0 * cm,
+        topMargin=1.0 * cm,
+        bottomMargin=1.0 * cm,
+        title=title,
+    )
+    story: list = []
+    story.append(Paragraph(rtl(title), styles["title"]))
+    if subtitle:
+        story.append(Paragraph(rtl(subtitle), styles["body"]))
+        story.append(Spacer(1, 0.25 * cm))
+
+    built_sections: list[dict[str, Any]] = []
+    if sections:
+        built_sections = list(sections)
+    elif columns is not None:
+        built_sections = [
+            {
+                "title": None,
+                "columns": list(columns),
+                "rows": list(rows or []),
+                "empty_message": empty_message,
+            }
+        ]
+    else:
+        built_sections = [
+            {
+                "title": None,
+                "columns": [],
+                "rows": [],
+                "empty_message": empty_message,
+            }
+        ]
+
+    any_table = False
+    for section in built_sections:
+        sec_title = section.get("title")
+        if sec_title:
+            story.append(Paragraph(rtl(str(sec_title)), styles["heading"]))
+        cols = list(section.get("columns") or [])
+        sec_rows = list(section.get("rows") or [])
+        sec_empty = section.get("empty_message") or empty_message
+        header_bg = section.get("header_bg") or "#1f4e79"
+        if not cols or not sec_rows:
+            story.append(Paragraph(rtl(str(sec_empty)), styles["body"]))
+            story.append(Spacer(1, 0.3 * cm))
+            continue
+        any_table = True
+        story.append(
+            _rows_table(
+                cols,
+                sec_rows,
+                styles,
+                header_map=header_map or SIMPLE_HEADER_FA,
+                header_bg=str(header_bg),
+            )
+        )
+        story.append(Spacer(1, 0.4 * cm))
+
+    if not any_table and not any(s.get("title") for s in built_sections):
+        # Ensure at least empty_message is visible when no sections rendered body
+        if not built_sections or (
+            not built_sections[0].get("columns") and not built_sections[0].get("rows")
+        ):
+            # already appended empty for the lone section; if somehow skipped:
+            pass
+
+    story.append(
+        Paragraph(
+            rtl(f"تاریخ تولید: {format_datetime(tehran_now())}"),
+            styles["body"],
+        )
+    )
+    doc.build(story)
+    return apply_letterhead(output_path, letterhead_path)

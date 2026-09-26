@@ -74,7 +74,7 @@ from excel.monthly_summary import (
     build_monthly_summary,
     summary_sections_for_pdf,
 )
-from pdf.generator import generate_monthly_summary_pdf, generate_report
+from pdf.generator import generate_monthly_summary_pdf, generate_report, generate_simple_report_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -99,9 +99,11 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • مصرف ماهیانه مواد
 
 تحلیل:
-• مصرف روزانه / بازه‌ای / پیشنهاد / بحرانی / مازاد / پیش‌بینی
+• همه گزارش‌های منوی تحلیل به‌صورت PDF ارسال می‌شوند (کپشن کوتاه در چت)
+• مصرف روزانه / بازه‌ای / پیشنهاد / بحرانی / مازاد / پیش‌بینی / ورودی انبار
 • مواد بحرانی — پوشش < CRITICAL_DAYS={critical} روز
 • اگر موجودی روزانه سایت ثبت شده باشد، برای «موجودی و مواد بحرانی» به‌عنوان منبع باقیمانده سایت استفاده می‌شود
+• سربرگ PDF (اختیاری): از «تنظیمات ربات» → «سربرگ PDF» آپلود کنید؛ روی همه صفحات گزارش اعمال می‌شود
 
 درخواست مواد (مالک / مدیر / کاردان مسئول):
 • دکمه «🛒 درخواست مواد» در منوی اصلی
@@ -1221,7 +1223,7 @@ class BotApp:
         try:
             frames, metas = process_session_files(paths, user)
             analytics = self._build_analytics_bundle(frames)
-            pdf_path = generate_report(frames, metas, user, analytics=analytics)
+            pdf_path = generate_report(frames, metas, user, analytics=analytics, letterhead_path=self._letterhead_path())
             counts = {k: int(metas[k]["visible_rows"]) for k in metas}
             self.db.save_report(user["bale_user_id"], session["id"], str(pdf_path), counts)
             # keep paths available for further analytics: copy into fresh collecting session
@@ -1460,7 +1462,7 @@ class BotApp:
         self._ask_month_year_range(message, user, "surplus")
 
     def on_inbound_report(self, message: dict) -> None:
-        """Snapshot-diff inbound report — no month/year range prompt."""
+        """Snapshot-diff inbound report — no month/year range prompt; always PDF."""
         user = self._user_or_deny(message)
         if not user:
             return
@@ -1512,15 +1514,32 @@ class BotApp:
             prev_df, curr_df, category_allowlist=allowlist
         )
         n = int(len(inbound))
-        title = (
-            f"📥 گزارش ورودی به انبار\n"
-            f"{n} قلم (جدید یا افزایش) در دسته‌های مجاز\n"
-            f"(فقط کدهای دسته‌بندی تعریف‌شده در ربات)\n"
+        cols = [
+            "کد کالا",
+            "شرح",
+            "کد دسته",
+            "مقدار قبلی",
+            "مقدار جدید",
+            "مقدار ورودی",
+            "وضعیت",
+        ]
+        title = "گزارش ورودی به انبار"
+        subtitle = (
+            f"{n} قلم (جدید یا افزایش) در دسته‌های مجاز "
+            "(فقط کدهای دسته‌بندی تعریف‌شده در ربات)"
         )
-        chunks = format_inbound_list_fa(inbound)
-        self._reply(message, title + "\n" + chunks[0], kb.analytics_menu())
-        for extra in chunks[1:]:
-            self._reply(message, extra, kb.analytics_menu())
+        self._send_simple_pdf_report(
+            message,
+            title=title,
+            subtitle=subtitle,
+            columns=cols,
+            rows=self._df_to_row_dicts(inbound, cols),
+            empty_message="هیچ قلم ورودی (جدید یا افزایش موجودی) در دسته‌های مجاز شناسایی نشد.",
+            filename_stem="inbound",
+            output_name="گزارش_ورودی_به_انبار.pdf",
+            caption=f"گزارش ورودی به انبار — {n} قلم",
+            reply_ok="گزارش ارسال شد.",
+        )
         if n > 0:
             try:
                 excel_path = REPORT_DIR / "گزارش_ورودی_به_انبار.xlsx"
@@ -1826,13 +1845,94 @@ class BotApp:
         self._run_ranged_analysis(message, user, mode, start, end)
         return True
 
-    def _empty_range_reply(self, message: dict, range_label: str) -> None:
-        self._reply(
-            message,
-            f"در بازه انتخاب‌شده ({range_label}) داده‌ای یافت نشد.\n"
-            "بازه دیگری را امتحان کنید یا ابتدا فایل‌ها را بررسی کنید.",
-            kb.analytics_menu(),
+    @staticmethod
+    def _df_to_row_dicts(df: pd.DataFrame | None, columns: list[str] | None = None) -> list[dict[str, Any]]:
+        """Convert a DataFrame to list-of-dicts for PDF tables (safe for empty)."""
+        if df is None or getattr(df, "empty", True):
+            return []
+        cols = list(columns) if columns else list(df.columns)
+        rows: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            item: dict[str, Any] = {}
+            for c in cols:
+                val = row.get(c, "") if hasattr(row, "get") else (row[c] if c in df.columns else "")
+                if val is None or (isinstance(val, float) and pd.isna(val)):
+                    val = ""
+                item[c] = val
+            rows.append(item)
+        return rows
+
+    def _send_simple_pdf_report(
+        self,
+        message: dict,
+        *,
+        title: str,
+        subtitle: str | None = None,
+        sections: list[dict[str, Any]] | None = None,
+        columns: list[str] | None = None,
+        rows: list[dict[str, Any]] | None = None,
+        empty_message: str = "داده‌ای یافت نشد.",
+        filename_stem: str = "report",
+        output_name: str | None = None,
+        caption: str | None = None,
+        reply_ok: str | None = None,
+    ) -> Path | None:
+        """Build a simple RTL PDF under REPORT_DIR and sendDocument to the user."""
+        try:
+            out = REPORT_DIR / (output_name or f"{filename_stem}.pdf")
+            pdf_path = generate_simple_report_pdf(
+                title,
+                subtitle=subtitle,
+                sections=sections,
+                columns=columns,
+                rows=rows,
+                empty_message=empty_message,
+                output_path=out,
+                filename_stem=filename_stem,
+                letterhead_path=self._letterhead_path(),
+            )
+            self.client.send_document(
+                self._chat_id(message),
+                pdf_path,
+                caption=caption or title,
+            )
+            self._reply(
+                message,
+                reply_ok or "گزارش ارسال شد.",
+                kb.analytics_menu(),
+            )
+            return pdf_path
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("simple pdf report failed: %s", title)
+            self._reply(message, f"خطا در تولید PDF گزارش: {exc}", kb.analytics_menu())
+            return None
+
+    def _empty_range_reply(
+        self,
+        message: dict,
+        range_label: str,
+        *,
+        title: str | None = None,
+        filename_stem: str = "empty_range",
+    ) -> None:
+        empty_msg = (
+            f"در بازه انتخاب‌شده ({range_label}) داده‌ای یافت نشد. "
+            "بازه دیگری را امتحان کنید یا ابتدا فایل‌ها را بررسی کنید."
         )
+        report_title = title or f"گزارش — {range_label}"
+        self._send_simple_pdf_report(
+            message,
+            title=report_title,
+            subtitle=f"بازه: {range_label}",
+            columns=[],
+            rows=[],
+            empty_message=empty_msg,
+            filename_stem=filename_stem,
+            output_name=f"{filename_stem}.pdf",
+            caption=f"{report_title} — بدون داده",
+            reply_ok="گزارش ارسال شد (بدون داده در بازه).",
+        )
+
 
     def _run_month_ranged_report(
         self,
@@ -1890,24 +1990,33 @@ class BotApp:
             start=start,
             end=end,
         )
-        if rates.empty:
-            self._empty_range_reply(message, range_label)
-            return
-        lines = [
-            f"📈 میانگین مصرف روزانه (ماده / تاندیش) — {range_label}:",
-            "",
+        title = f"مصرف روزانه مواد — {range_label}"
+        cols = [
+            "material_name",
+            "tundish_type",
+            "tundish_id",
+            "avg_daily",
+            "total_qty",
+            "days_span",
+            "unit",
+            "source",
         ]
-        for _, row in rates.head(30).iterrows():
-            tundish_type = row.get("tundish_type")
-            type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
-            tid = row.get("tundish_id")
-            tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
-            unit = row.get("unit") or ""
-            lines.append(
-                f"• {row['material_name']}{type_s}{tid_s}: {float(row['avg_daily']):.2f} {unit}/روز "
-                f"(مجموع {float(row['total_qty']):.1f} در {int(row['days_span'])} روز)"
+        if rates.empty:
+            self._empty_range_reply(
+                message, range_label, title=title, filename_stem="daily_rates"
             )
-        self._reply(message, "\n".join(lines), kb.analytics_menu())
+            return
+        self._send_simple_pdf_report(
+            message,
+            title=title,
+            subtitle=f"میانگین مصرف روزانه (ماده / تاندیش) — {range_label}",
+            columns=cols,
+            rows=self._df_to_row_dicts(rates, cols),
+            empty_message="داده‌ای برای مصرف روزانه یافت نشد.",
+            filename_stem="daily_rates",
+            output_name="مصرف_روزانه_مواد.pdf",
+            caption=f"گزارش مصرف روزانه مواد — {range_label}",
+        )
 
     def _run_remaining_critical(
         self,
@@ -1921,7 +2030,6 @@ class BotApp:
         if not loaded:
             return
         _, frames, _ = loaded
-        # Rates from selected months; remaining stock is still a live snapshot.
         rates = daily_rates(
             frames.get("tank_consumption"),
             frames.get("monthly_consumption"),
@@ -1930,31 +2038,38 @@ class BotApp:
         )
         rem, rem_source = self._resolve_remaining(frames)
         crit = critical_materials(rates, rem, CRITICAL_DAYS)
-        lines = [
-            f"📦 موجودی باقیمانده ({rem_source}) — نرخ مصرف بر اساس {range_label}:",
-            "",
-        ]
-        if rem.empty:
-            lines.append("موجودی خالی است.")
-        else:
-            for _, row in rem.head(30).iterrows():
-                loc = f" @ {row['location']}" if row.get("location") else ""
-                unit = row.get("unit") or ""
-                lines.append(f"• {row['material_name']}: {float(row['remaining_qty']):.2f} {unit}{loc}")
-        lines.append("")
-        lines.append(f"⚠️ مواد بحرانی (پوشش < {CRITICAL_DAYS} روز) — نرخ از {range_label}:")
-        if crit.empty:
-            lines.append("ماده بحرانی‌ای شناسایی نشد.")
-        else:
-            for _, row in crit.iterrows():
-                cover = row["days_of_cover"]
-                cover_s = "∞" if cover == float("inf") else f"{float(cover):.1f}"
-                unit = row.get("unit") or ""
-                lines.append(
-                    f"• {row['material_name']}: باقیمانده {float(row['remaining_qty']):.2f} {unit} | "
-                    f"مصرف روز {float(row['avg_daily']):.2f} | پوشش ≈ {cover_s} روز"
-                )
-        self._reply(message, "\n".join(lines), kb.analytics_menu())
+        rem_cols = ["material_name", "remaining_qty", "unit", "location"]
+        crit_cols = ["material_name", "remaining_qty", "avg_daily", "days_of_cover", "unit"]
+        title = f"موجودی و مواد بحرانی — {range_label}"
+        rem_empty = "موجودی خالی است." if rem.empty else "موجودی خالی است."
+        crit_empty = "ماده بحرانی‌ای شناسایی نشد."
+        self._send_simple_pdf_report(
+            message,
+            title=title,
+            subtitle=(
+                f"منبع موجودی: {rem_source} | نرخ مصرف بر اساس {range_label} | "
+                f"آستانه بحرانی: پوشش < {CRITICAL_DAYS} روز"
+            ),
+            sections=[
+                {
+                    "title": f"موجودی باقیمانده ({rem_source})",
+                    "columns": rem_cols,
+                    "rows": self._df_to_row_dicts(rem, rem_cols),
+                    "empty_message": rem_empty,
+                    "header_bg": "#2e7d32",
+                },
+                {
+                    "title": f"مواد بحرانی (پوشش < {CRITICAL_DAYS} روز)",
+                    "columns": crit_cols,
+                    "rows": self._df_to_row_dicts(crit, crit_cols),
+                    "empty_message": crit_empty,
+                    "header_bg": "#c62828",
+                },
+            ],
+            filename_stem="remaining_critical",
+            output_name="موجودی_و_مواد_بحرانی.pdf",
+            caption=f"گزارش موجودی و مواد بحرانی — {range_label}",
+        )
 
     def _run_surplus_report(
         self,
@@ -1977,17 +2092,37 @@ class BotApp:
         rem = remaining(self._inventory_with_ledger(frames.get("product_inventory")))
         surplus = surplus_materials(rates, rem)
         cover_th = max(float(CRITICAL_DAYS) * 3.0, float(SURPLUS_COVER_DAYS))
-        lines = [
-            f"📦 گزارش مواد مازاد — نرخ مصرف بر اساس {range_label}",
-            f"تعریف: پوشش > {cover_th:g} روز، یا موجودی بیش از نیاز {SURPLUS_FORECAST_DAYS:g} روز؛",
-            "مواد با موجودی ولی بدون مصرف ثبت‌شده = «مازاد/بدون مصرف».",
-            "",
-            format_surplus_list_fa(surplus) if not surplus.empty else "ماده مازادی شناسایی نشد.",
-        ]
+        title = f"گزارش مواد مازاد — {range_label}"
         if surplus.empty and rates.empty:
-            self._empty_range_reply(message, range_label)
+            self._empty_range_reply(
+                message, range_label, title=title, filename_stem="surplus"
+            )
             return
-        self._reply(message, "\n".join(lines), kb.analytics_menu())
+        cols = [
+            "material_name",
+            "remaining_qty",
+            "surplus_qty",
+            "avg_daily",
+            "days_of_cover",
+            "forecast_need",
+            "unit",
+            "surplus_reason",
+        ]
+        self._send_simple_pdf_report(
+            message,
+            title=title,
+            subtitle=(
+                f"نرخ مصرف بر اساس {range_label} | "
+                f"تعریف: پوشش > {cover_th:g} روز، یا موجودی بیش از نیاز "
+                f"{SURPLUS_FORECAST_DAYS:g} روز؛ مواد با موجودی ولی بدون مصرف = مازاد/بدون مصرف"
+            ),
+            columns=cols,
+            rows=self._df_to_row_dicts(surplus, cols),
+            empty_message="ماده مازادی شناسایی نشد.",
+            filename_stem="surplus",
+            output_name="گزارش_مواد_مازاد.pdf",
+            caption=f"گزارش مواد مازاد — {range_label}",
+        )
 
     def _run_ranged_analysis(
         self,
@@ -2012,23 +2147,32 @@ class BotApp:
 
         if mode == "period":
             period = period_consumption(tank, start, end)
-            lines = [
-                f"📅 مصرف مواد {label} ({days} روز):",
-                "",
+            title = f"گزارش مصرف بازه‌ای — {label}"
+            cols = [
+                "material_name",
+                "tundish_type",
+                "tundish_id",
+                "quantity",
+                "unit",
+                "start",
+                "end",
             ]
             if period.empty:
-                self._empty_range_reply(message, label)
-                return
-            for _, row in period.head(40).iterrows():
-                tundish_type = row.get("tundish_type")
-                type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
-                tid = row.get("tundish_id")
-                tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
-                unit = row.get("unit") or ""
-                lines.append(
-                    f"• {row['material_name']}{type_s}{tid_s}: {float(row['quantity']):.2f} {unit}"
+                self._empty_range_reply(
+                    message, label, title=title, filename_stem="period_consumption"
                 )
-            self._reply(message, "\n".join(lines), kb.analytics_menu())
+                return
+            self._send_simple_pdf_report(
+                message,
+                title=title,
+                subtitle=f"مصرف مواد {label} ({days} روز)",
+                columns=cols,
+                rows=self._df_to_row_dicts(period, cols),
+                empty_message="در این بازه مصرفی ثبت نشده است.",
+                filename_stem="period_consumption",
+                output_name="گزارش_مصرف_بازه‌ای.pdf",
+                caption=f"گزارش مصرف بازه‌ای — {label}",
+            )
             return
 
         rates = daily_rates(tank, monthly)
@@ -2037,40 +2181,71 @@ class BotApp:
 
         if mode == "forecast":
             fc = forecast(use_rates, days)
-            lines = [
-                f"🔮 پیش‌بینی نیاز تاندیش برای {days} روز ({label}):",
-                "",
+            title = f"پیش‌بینی نیاز تاندیش — {label}"
+            cols = [
+                "material_name",
+                "tundish_type",
+                "tundish_id",
+                "avg_daily",
+                "days",
+                "forecast_need",
+                "unit",
             ]
             if fc.empty:
-                self._empty_range_reply(message, label)
-                return
-            for _, row in fc.head(40).iterrows():
-                tundish_type = row.get("tundish_type")
-                type_s = f" | {tundish_type}" if tundish_type not in (None, "") else ""
-                tid = row.get("tundish_id")
-                tid_s = f" | تاندیش {tid}" if tid not in (None, "") else ""
-                unit = row.get("unit") or ""
-                lines.append(
-                    f"• {row['material_name']}{type_s}{tid_s}: "
-                    f"{float(row['forecast_need']):.2f} {unit} "
-                    f"(روزانه {float(row['avg_daily']):.2f} × {days})"
+                self._empty_range_reply(
+                    message, label, title=title, filename_stem="forecast"
                 )
-            self._reply(message, "\n".join(lines), kb.analytics_menu())
+                return
+            self._send_simple_pdf_report(
+                message,
+                title=title,
+                subtitle=f"پیش‌بینی نیاز برای {days} روز ({label})",
+                columns=cols,
+                rows=self._df_to_row_dicts(fc, cols),
+                empty_message="پیش‌بینی‌ای محاسبه نشد.",
+                filename_stem="forecast",
+                output_name="پیش‌بینی_نیاز_تاندیش.pdf",
+                caption=f"پیش‌بینی نیاز تاندیش — {label}",
+            )
             return
 
         if mode == "suggest":
             sug = suggest_requests(use_rates, remaining(self._inventory_with_ledger(inv)), days)
-            if sug.empty and use_rates.empty:
-                self._empty_range_reply(message, label)
-                return
-            lines = [
-                f"🛒 پیشنهاد درخواست مواد برای {days} روز ({label}):",
-                "",
-                format_suggest_list_fa(sug),
-                "",
-                "فرمول: max(0, پیش‌بینی نیاز − موجودی باقیمانده)",
+            title = f"پیشنهاد درخواست مواد — {label}"
+            cols = [
+                "material_name",
+                "avg_daily",
+                "days",
+                "forecast_need",
+                "remaining_qty",
+                "suggest_qty",
+                "unit",
             ]
-            self._reply(message, "\n".join(lines), kb.analytics_menu())
+            if sug.empty and use_rates.empty:
+                self._empty_range_reply(
+                    message, label, title=title, filename_stem="suggest"
+                )
+                return
+            # Prefer rows with positive suggest; still show all if none positive
+            shown = sug
+            if not sug.empty and "suggest_qty" in sug.columns:
+                positive = sug.loc[sug["suggest_qty"] > 0]
+                if not positive.empty:
+                    shown = positive
+            self._send_simple_pdf_report(
+                message,
+                title=title,
+                subtitle=(
+                    f"پیشنهاد برای {days} روز ({label}) | "
+                    "فرمول: max(0, پیش‌بینی نیاز − موجودی باقیمانده)"
+                ),
+                columns=cols,
+                rows=self._df_to_row_dicts(shown, cols),
+                empty_message="پیشنهادی نیست — موجودی برای بازه درخواست کافی به‌نظر می‌رسد.",
+                filename_stem="suggest",
+                output_name="پیشنهاد_درخواست_مواد.pdf",
+                caption=f"پیشنهاد درخواست مواد — {label}",
+            )
 
     def _run_analytics_pdf(
         self,
@@ -2087,7 +2262,9 @@ class BotApp:
         self._reply(message, f"در حال ساخت PDF تحلیل تاندیش ({range_label})…")
         try:
             analytics = self._build_analytics_bundle(frames, start=start, end=end)
-            pdf_path = generate_report(frames, metas, user, analytics=analytics)
+            pdf_path = generate_report(
+                frames, metas, user, analytics=analytics, letterhead_path=self._letterhead_path()
+            )
             self.db.save_report(
                 user["bale_user_id"],
                 session["id"],
@@ -2167,6 +2344,7 @@ class BotApp:
                 grand_kg=data.grand_kg,
                 output_path=pdf_path,
                 title=pdf_title,
+                letterhead_path=self._letterhead_path(),
             )
             month_sum = sum(float(s.get("total_kg") or 0) for s in data.month_sections)
             caption = (
@@ -2197,12 +2375,21 @@ class BotApp:
                 kb.analytics_menu(),
             )
         except ValueError as exc:
-            # Empty filtered set or validation — friendly Persian, no crash
-            self._reply(
+            # Empty filtered set — still send a one-page PDF
+            self._send_simple_pdf_report(
                 message,
-                f"در بازه انتخاب‌شده ({range_label}) داده‌ای برای خلاصه مصرف یافت نشد.\n"
-                f"جزئیات: {exc}",
-                kb.analytics_menu(),
+                title=f"خلاصه مصرفی ماهیانه — {range_label}",
+                subtitle=str(exc),
+                columns=[],
+                rows=[],
+                empty_message=(
+                    f"در بازه انتخاب‌شده ({range_label}) داده‌ای برای خلاصه مصرف یافت نشد. "
+                    f"جزئیات: {exc}"
+                ),
+                filename_stem="monthly_summary_empty",
+                output_name="خلاصه_مصرفی_ماهیانه.pdf",
+                caption=f"خلاصه مصرف ماهیانه — {range_label} (بدون داده)",
+                reply_ok="گزارش ارسال شد (بدون داده در بازه).",
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("monthly summary failed")
@@ -2662,6 +2849,14 @@ class BotApp:
 
 
     # ---------- bot settings (owner/manager) ----------
+    def _letterhead_path(self) -> Path | None:
+        """Return configured blank letterhead PDF path if present on disk."""
+        raw = self.db.get_setting("letterhead_pdf")
+        if not raw:
+            return None
+        path_obj = Path(str(raw))
+        return path_obj if path_obj.is_file() else None
+
     def _clear_bot_settings_pending(self, uid: str) -> None:
         self._bot_settings_pending.pop(str(uid), None)
 
@@ -2682,7 +2877,9 @@ class BotApp:
         return user
 
     def _settings_item_menu(self, which: str) -> dict:
-        return kb.bot_settings_item_menu(include_text=(which != "logo"))
+        if which == "letterhead":
+            return kb.bot_settings_letterhead_menu()
+        return kb.bot_settings_item_menu(include_text=(which not in {"logo", "letterhead"}))
 
     def _image_status_line(self, key: str) -> str:
         raw = self.db.get_setting(key)
@@ -2711,12 +2908,18 @@ class BotApp:
             "invite": "متن دعوت‌نامه کاربران",
             "welcome": "پیام خوشامدگویی",
             "logo": "لوگوی ربات",
+            "letterhead": "سربرگ PDF گزارش‌ها",
         }
         hint = ""
         if which == "invite":
             hint = "\n\n" + PLACEHOLDER_HINT_INVITE
         elif which == "welcome":
             hint = "\n\n" + PLACEHOLDER_HINT_WELCOME
+        elif which == "letterhead":
+            hint = (
+                "\n\nسربرگ اختیاری است. اگر آپلود شود، همه گزارش‌های PDF "
+                "روی این سربرگ (پس‌زمینه هر صفحه) تولید می‌شوند."
+            )
         self._reply(
             message,
             f"بخش «{titles.get(which, which)}» — یک گزینه را انتخاب کنید:{hint}",
@@ -2786,6 +2989,117 @@ class BotApp:
                 return
         self._reply(message, "هنوز لوگو تنظیم نشده.", markup)
 
+    def _preview_letterhead(self, message: dict, user: dict) -> None:
+        markup = self._settings_item_menu("letterhead")
+        raw = self.db.get_setting("letterhead_pdf")
+        if raw and Path(raw).is_file():
+            try:
+                self.client.send_document(
+                    self._chat_id(message),
+                    Path(raw),
+                    caption="سربرگ PDF فعلی (برای همه گزارش‌ها):",
+                )
+                self._reply(message, f"✅ سربرگ تنظیم شده: {Path(raw).name}", markup)
+                return
+            except Exception:  # noqa: BLE001
+                logger.exception("preview letterhead failed")
+                self._reply(
+                    message,
+                    f"سربرگ ذخیره شده ولی ارسال نشد:\n{raw}",
+                    markup,
+                )
+                return
+        self._reply(
+            message,
+            "هنوز سربرگ PDF تنظیم نشده.\n"
+            "با «آپلود سربرگ PDF» یک فایل PDF خالی/قالب بفرستید.",
+            markup,
+        )
+
+    def on_bot_settings_upload_letterhead_start(self, message: dict) -> None:
+        user = self._require_bot_settings_user(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._bot_settings_pending[uid] = {"mode": "await_letterhead", "which": "letterhead"}
+        self._reply(
+            message,
+            "لطفاً فایل سربرگ را به‌صورت Document با پسوند .pdf ارسال کنید.\n"
+            "این فایل به‌عنوان پس‌زمینه همه صفحات گزارش‌های PDF استفاده می‌شود.",
+            self._settings_item_menu("letterhead"),
+        )
+
+    def on_bot_settings_clear_letterhead(self, message: dict) -> None:
+        user = self._require_bot_settings_user(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        old = self.db.get_setting("letterhead_pdf")
+        self.db.clear_setting("letterhead_pdf", updated_by=uid)
+        if old:
+            try:
+                Path(old).unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                logger.warning("could not delete old letterhead %s", old)
+        self._bot_settings_pending[uid] = {"mode": "menu", "which": "letterhead"}
+        self._reply(message, "✅ سربرگ حذف شد.", self._settings_item_menu("letterhead"))
+
+    def on_bot_settings_letterhead_document(self, message: dict) -> bool:
+        """Handle inbound PDF while awaiting letterhead. Returns True if consumed."""
+        uid = str(self._uid(message))
+        pending = self._bot_settings_pending.get(uid)
+        if not pending or pending.get("mode") != "await_letterhead":
+            return False
+        user = self._require_bot_settings_user(message)
+        if not user:
+            self._clear_bot_settings_pending(uid)
+            return True
+        doc = message.get("document") or {}
+        file_name = (doc.get("file_name") or "").strip()
+        file_id = doc.get("file_id")
+        mime = str(doc.get("mime_type") or "")
+        if not file_id:
+            self._reply(
+                message,
+                "فایل نامعتبر است. یک Document با پسوند .pdf بفرستید.",
+                self._settings_item_menu("letterhead"),
+            )
+            return True
+        if not (file_name.lower().endswith(".pdf") or "pdf" in mime.lower()):
+            self._reply(
+                message,
+                f"فقط PDF پذیرفته می‌شود. (دریافت شد: {file_name or mime or 'بدون‌نام'})",
+                self._settings_item_menu("letterhead"),
+            )
+            return True
+        try:
+            BOT_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+            dest = BOT_ASSETS_DIR / f"letterhead_{uid}.pdf"
+            old = self.db.get_setting("letterhead_pdf")
+            saved = self.client.download_file(file_id, dest)
+            if old and Path(old).resolve() != Path(saved).resolve():
+                try:
+                    Path(old).unlink(missing_ok=True)
+                except Exception:  # noqa: BLE001
+                    pass
+            self.db.set_setting("letterhead_pdf", str(saved), updated_by=uid)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("save letterhead failed")
+            self._reply(
+                message,
+                f"ذخیره سربرگ ناموفق بود: {exc}",
+                self._settings_item_menu("letterhead"),
+            )
+            return True
+        self._bot_settings_pending[uid] = {"mode": "menu", "which": "letterhead"}
+        self._reply(
+            message,
+            f"✅ سربرگ PDF ذخیره شد: {Path(saved).name}\n"
+            "از این پس همه گزارش‌های PDF روی این سربرگ تولید می‌شوند.",
+            self._settings_item_menu("letterhead"),
+        )
+        return True
+
     def on_bot_settings_view(self, message: dict) -> None:
         user = self._require_bot_settings_user(message)
         if not user:
@@ -2798,6 +3112,8 @@ class BotApp:
             self._preview_welcome(message, user)
         elif which == "logo":
             self._preview_logo(message, user)
+        elif which == "letterhead":
+            self._preview_letterhead(message, user)
         else:
             self._reply(message, "ابتدا یک بخش تنظیمات را انتخاب کنید.", kb.bot_settings_menu())
 
@@ -2970,10 +3286,13 @@ class BotApp:
             kb.BTN_SET_INVITE,
             kb.BTN_SET_WELCOME,
             kb.BTN_SET_LOGO,
+            kb.BTN_SET_LETTERHEAD,
             kb.BTN_SETTINGS_VIEW,
             kb.BTN_SETTINGS_EDIT_TEXT,
             kb.BTN_SETTINGS_SET_IMAGE,
             kb.BTN_SETTINGS_CLEAR_IMAGE,
+            kb.BTN_SETTINGS_UPLOAD_LETTERHEAD,
+            kb.BTN_SETTINGS_CLEAR_LETTERHEAD,
             kb.BTN_BACK_BOT_SETTINGS,
             kb.BTN_BACK_MAIN,
             kb.BTN_USERS,
@@ -2995,6 +3314,7 @@ class BotApp:
                 kb.BTN_SET_INVITE,
                 kb.BTN_SET_WELCOME,
                 kb.BTN_SET_LOGO,
+                kb.BTN_SET_LETTERHEAD,
                 kb.BTN_BACK_BOT_SETTINGS,
                 kb.BTN_BACK_MAIN,
                 kb.BTN_USERS,
@@ -3821,6 +4141,11 @@ class BotApp:
             return
         text = (message.get("text") or "").strip()
 
+        # Bot-settings letterhead PDF wait — before generic document handler
+        if message.get("document"):
+            if self.on_bot_settings_letterhead_document(message):
+                return
+
         # Bot-settings image wait (photo or image document) — before generic document handler
         if message.get("photo") or message.get("document"):
             if self.on_bot_settings_photo(message):
@@ -3950,6 +4275,15 @@ class BotApp:
             return
         if text == kb.BTN_SET_LOGO:
             self.on_bot_settings_section(message, "logo")
+            return
+        if text == kb.BTN_SET_LETTERHEAD:
+            self.on_bot_settings_section(message, "letterhead")
+            return
+        if text == kb.BTN_SETTINGS_UPLOAD_LETTERHEAD:
+            self.on_bot_settings_upload_letterhead_start(message)
+            return
+        if text == kb.BTN_SETTINGS_CLEAR_LETTERHEAD:
+            self.on_bot_settings_clear_letterhead(message)
             return
         if text == kb.BTN_SETTINGS_VIEW:
             self.on_bot_settings_view(message)

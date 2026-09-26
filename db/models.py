@@ -1694,13 +1694,14 @@ class Database:
         return {"by_id": by_id, "by_name": by_name}
 
 
-    # --- bot settings (invite / welcome / logo) ---
+    # --- bot settings (invite / welcome / logo / letterhead) ---
     BOT_SETTING_KEYS = frozenset({
         "invite_text",
         "invite_image_path",
         "welcome_text",
         "welcome_image_path",
         "logo_path",
+        "letterhead_pdf",
     })
 
     def get_setting(self, key: str) -> Optional[str]:

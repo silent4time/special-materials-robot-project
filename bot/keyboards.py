@@ -24,6 +24,9 @@ BTN_BOT_SETTINGS = "⚙️ تنظیمات ربات"
 BTN_SET_INVITE = "📝 متن دعوت‌نامه کاربران"
 BTN_SET_WELCOME = "👋 پیام خوشامدگویی"
 BTN_SET_LOGO = "🖼 لوگوی ربات"
+BTN_SET_LETTERHEAD = "📄 سربرگ PDF"
+BTN_SETTINGS_UPLOAD_LETTERHEAD = "📄 آپلود سربرگ PDF"
+BTN_SETTINGS_CLEAR_LETTERHEAD = "🗑 حذف سربرگ"
 BTN_BACK_BOT_SETTINGS = "⬅️ بازگشت به تنظیمات ربات"
 BTN_SETTINGS_VIEW = "👁 مشاهده"
 BTN_SETTINGS_EDIT_TEXT = "✏️ ویرایش متن"
@@ -386,13 +389,26 @@ def cancel_pending_menu() -> dict:
 
 
 def bot_settings_menu() -> dict:
-    """Owner/manager submenu for invite / welcome / logo."""
+    """Owner/manager submenu for invite / welcome / logo / letterhead."""
     return BaleClient.reply_keyboard(
         [
             [BTN_SET_INVITE],
             [BTN_SET_WELCOME],
             [BTN_SET_LOGO],
+            [BTN_SET_LETTERHEAD],
             [BTN_BACK_MAIN],
+        ]
+    )
+
+
+def bot_settings_letterhead_menu() -> dict:
+    """Letterhead-specific actions: view / upload PDF / clear."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_SETTINGS_VIEW],
+            [BTN_SETTINGS_UPLOAD_LETTERHEAD],
+            [BTN_SETTINGS_CLEAR_LETTERHEAD],
+            [BTN_BACK_BOT_SETTINGS],
         ]
     )
 

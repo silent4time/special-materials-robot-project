@@ -58,7 +58,7 @@ from excel.work_order import (
     normalize_work_order,
     tundish_kg_totals_from_items,
 )
-from pdf.generator import generate_monthly_summary_pdf, generate_report
+from pdf.generator import generate_monthly_summary_pdf, generate_report, generate_simple_report_pdf, apply_letterhead
 from excel.monthly_summary import summary_sections_for_pdf
 from scripts.make_samples import main as make_samples
 
@@ -381,7 +381,37 @@ def _test_inbound_delta() -> None:
     out = ROOT / "reports" / "smoke_inbound.xlsx"
     write_inbound_excel(inbound, out)
     assert out.exists() and out.stat().st_size > 100
-    print("inbound_delta OK", list(inbound["کد کالا"]))
+    pdf_in = ROOT / "reports" / "smoke_inbound.pdf"
+    generate_simple_report_pdf(
+        "گزارش ورودی به انبار",
+        subtitle="smoke",
+        columns=list(inbound.columns),
+        rows=inbound.to_dict(orient="records"),
+        output_path=pdf_in,
+        filename_stem="smoke_inbound",
+    )
+    assert pdf_in.exists() and pdf_in.stat().st_size > 500
+    # empty inbound still yields a PDF page
+    empty_pdf = ROOT / "reports" / "smoke_inbound_empty.pdf"
+    generate_simple_report_pdf(
+        "گزارش ورودی به انبار",
+        columns=list(inbound.columns),
+        rows=[],
+        empty_message="هیچ قلم ورودی شناسایی نشد.",
+        output_path=empty_pdf,
+    )
+    assert empty_pdf.exists() and empty_pdf.stat().st_size > 400
+    # letterhead stamp
+    from reportlab.pdfgen import canvas as _canvas
+    from reportlab.lib.pagesizes import A4, landscape as _landscape
+    lh = ROOT / "reports" / "smoke_letterhead.pdf"
+    c = _canvas.Canvas(str(lh), pagesize=_landscape(A4))
+    c.drawString(50, 50, "LH")
+    c.showPage()
+    c.save()
+    stamped = apply_letterhead(pdf_in, lh, output_path=ROOT / "reports" / "smoke_inbound_lh.pdf")
+    assert stamped.exists() and stamped.stat().st_size > pdf_in.stat().st_size - 1000
+    print("inbound_delta OK", list(inbound["کد کالا"]), "pdf+letterhead OK")
 
 
 
