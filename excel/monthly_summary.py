@@ -466,6 +466,286 @@ def _style_row(ws, row_idx: int, fill: PatternFill | None = None, bold: bool = F
             cell.font = Font(bold=True)
 
 
+@dataclass
+class SummarySheetRow:
+    """One logical row of the خلاصه مصرفی ماهیانه sheet (Excel and PDF share this)."""
+
+    kind: str
+    # Always length 9 for tabular kinds; ignored for blank/title kinds
+    values: list[Any] = field(default_factory=list)
+    title: str | None = None
+    # Visual cue: header|yellow|green|section|month_title|slab|bloom|billet|unknown|wo
+    fill_key: str | None = None
+    work_order: Any = None
+    # Column schema for this tabular row: "detail" | "month"
+    columns_kind: str = "detail"
+
+
+def _empty9() -> list[Any]:
+    return [None] * 9
+
+
+def _detail_values(item: Any) -> list[Any]:
+    return [
+        item.get("کد دسته بندی"),
+        item.get("کد کالا"),
+        item.get("مقدار"),
+        item.get("ضریب"),
+        item.get("سفارش کار"),
+        item.get("تاریخ"),
+        item.get("ماه"),
+        item.get("واحد"),
+        item.get("شرح"),
+    ]
+
+
+def _month_values(item: Any) -> list[Any]:
+    return [
+        item.get("کد دسته بندی"),
+        item.get("کد کالا"),
+        item.get("مقدار"),
+        item.get("ضریب"),
+        item.get("مصرف_کیلوگرم"),
+        item.get("تاریخ"),
+        item.get("ماه"),
+        item.get("واحد"),
+        item.get("شرح"),
+    ]
+
+
+def _group_label_with_count(key: str, count: int) -> str:
+    if key == UNKNOWN_GROUP:
+        base = UNKNOWN_LABEL_FA
+    else:
+        base = CONSUMPTION_LABELS_FA[key]
+    return f"{base} ({to_persian_digits(count)} قلم)"
+
+
+def build_summary_sheet_rows(data: MonthlySummaryData) -> list[SummarySheetRow]:
+    """Build the exact logical rows written to Excel (and mirrored in PDF)."""
+    rows: list[SummarySheetRow] = []
+    rows.append(
+        SummarySheetRow(
+            kind="header",
+            values=list(DETAIL_COLUMNS_FA),
+            fill_key="header",
+            columns_kind="detail",
+        )
+    )
+
+    items = data.items
+    if items is not None and not items.empty:
+        for desc in data.group_order:
+            group = items[items["شرح"] == desc]
+            if group.empty:
+                continue
+            for _, item in group.iterrows():
+                wo = item.get("سفارش کار")
+                rows.append(
+                    SummarySheetRow(
+                        kind="data",
+                        values=_detail_values(item),
+                        fill_key="wo",
+                        work_order=wo,
+                        columns_kind="detail",
+                    )
+                )
+            subtotal_vals = _empty9()
+            subtotal_vals[2] = float(group["مقدار"].sum())
+            subtotal_vals[8] = f"جمع {desc}"
+            rows.append(
+                SummarySheetRow(
+                    kind="subtotal",
+                    values=subtotal_vals,
+                    fill_key="yellow",
+                    columns_kind="detail",
+                )
+            )
+
+    grand_vals = _empty9()
+    grand_vals[2] = data.grand_kg
+    grand_vals[7] = "کیلوگرم"
+    grand_vals[8] = "جمع کل مصرفی"
+    rows.append(
+        SummarySheetRow(
+            kind="grand_total",
+            values=grand_vals,
+            fill_key="green",
+            columns_kind="detail",
+        )
+    )
+    rows.append(SummarySheetRow(kind="blank"))
+
+    rows.append(
+        SummarySheetRow(
+            kind="section_title",
+            title="مصرف به تفکیک ماه و سال",
+            fill_key="section",
+        )
+    )
+
+    for section in data.month_sections:
+        rows.append(
+            SummarySheetRow(
+                kind="month_title",
+                title=section["title"],
+                fill_key="month_title",
+            )
+        )
+        rows.append(
+            SummarySheetRow(
+                kind="header",
+                values=list(MONTH_SECTION_COLUMNS_FA),
+                fill_key="header",
+                columns_kind="month",
+            )
+        )
+        for _, item in section["rows"].iterrows():
+            wo = item.get("سفارش کار")
+            rows.append(
+                SummarySheetRow(
+                    kind="data",
+                    values=_month_values(item),
+                    fill_key="wo",
+                    work_order=wo,
+                    columns_kind="month",
+                )
+            )
+        month_total_vals = _empty9()
+        month_total_vals[4] = section["total_kg"]
+        month_total_vals[7] = "کیلوگرم"
+        month_total_vals[8] = section["total_title"]
+        rows.append(
+            SummarySheetRow(
+                kind="month_total",
+                values=month_total_vals,
+                fill_key="green",
+                columns_kind="month",
+            )
+        )
+
+        month_totals = tundish_kg_totals_from_items(section["rows"])
+        for key in ("slab", "bloom", "billet"):
+            info = month_totals.get(key) or {"kg": 0.0, "count": 0}
+            count = int(info.get("count") or 0)
+            kg = float(info.get("kg") or 0)
+            if count == 0 and abs(kg) < 1e-9:
+                continue
+            gvals = _empty9()
+            gvals[4] = kg
+            gvals[7] = "کیلوگرم"
+            gvals[8] = _group_label_with_count(key, count)
+            rows.append(
+                SummarySheetRow(
+                    kind="group_total",
+                    values=gvals,
+                    fill_key=key,
+                    columns_kind="month",
+                )
+            )
+        unk = month_totals.get(UNKNOWN_GROUP) or {"kg": 0.0, "count": 0}
+        unk_kg = float(unk.get("kg") or 0)
+        unk_count = int(unk.get("count") or 0)
+        if unk_count or abs(unk_kg) > 1e-9:
+            gvals = _empty9()
+            gvals[4] = unk_kg
+            gvals[7] = "کیلوگرم"
+            gvals[8] = _group_label_with_count(UNKNOWN_GROUP, unk_count)
+            rows.append(
+                SummarySheetRow(
+                    kind="group_total",
+                    values=gvals,
+                    fill_key=UNKNOWN_GROUP,
+                    columns_kind="month",
+                )
+            )
+        rows.append(SummarySheetRow(kind="blank"))
+
+    # Extra blank ≈ two-row gap before tundish section (matches prior workbook)
+    rows.append(SummarySheetRow(kind="blank"))
+    rows.append(
+        SummarySheetRow(
+            kind="section_title",
+            title="مصرف مواد بر حسب اسلب، بلوم و بیلت",
+            fill_key="section",
+        )
+    )
+
+    totals = data.tundish_totals or tundish_kg_totals_from_items(data.items)
+    for key in ("slab", "bloom", "billet"):
+        info = totals.get(key) or {"kg": 0.0, "count": 0}
+        count = int(info.get("count") or 0)
+        kg = float(info.get("kg") or 0)
+        gvals = _empty9()
+        gvals[2] = kg
+        gvals[7] = "کیلوگرم"
+        gvals[8] = _group_label_with_count(key, count)
+        rows.append(
+            SummarySheetRow(
+                kind="group_total",
+                values=gvals,
+                fill_key=key,
+                columns_kind="detail",
+            )
+        )
+    unk = totals.get(UNKNOWN_GROUP) or {"kg": 0.0, "count": 0}
+    unk_kg = float(unk.get("kg") or 0)
+    unk_count = int(unk.get("count") or 0)
+    if unk_count or abs(unk_kg) > 1e-9:
+        gvals = _empty9()
+        gvals[2] = unk_kg
+        gvals[7] = "کیلوگرم"
+        gvals[8] = _group_label_with_count(UNKNOWN_GROUP, unk_count)
+        rows.append(
+            SummarySheetRow(
+                kind="group_total",
+                values=gvals,
+                fill_key=UNKNOWN_GROUP,
+                columns_kind="detail",
+            )
+        )
+    check_kg = (
+        float((totals.get("slab") or {}).get("kg") or 0)
+        + float((totals.get("bloom") or {}).get("kg") or 0)
+        + float((totals.get("billet") or {}).get("kg") or 0)
+        + unk_kg
+    )
+    check_vals = _empty9()
+    check_vals[2] = check_kg
+    check_vals[7] = "کیلوگرم"
+    check_vals[8] = (
+        "جمع کنترل (اسلب+بلوم+بیلت+سایر نواحی) — باید برابر جمع کل مصرفی باشد"
+    )
+    rows.append(
+        SummarySheetRow(
+            kind="check",
+            values=check_vals,
+            fill_key="green",
+            columns_kind="detail",
+        )
+    )
+    return rows
+
+
+def _fill_for_sheet_row(row: SummarySheetRow) -> PatternFill | None:
+    key = row.fill_key
+    if key == "header":
+        return HEADER_FILL
+    if key == "yellow":
+        return YELLOW_FILL
+    if key == "green":
+        return GREEN_FILL
+    if key == "section":
+        return SECTION_FILL
+    if key == "month_title":
+        return MONTH_TITLE_FILL
+    if key in GROUP_FILLS:
+        return GROUP_FILLS[key]
+    if key == "wo":
+        return fill_for_work_order(row.work_order)
+    return None
+
+
 def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
     """Create RTL formatted workbook matching the approved sample layout."""
     wb = Workbook()
@@ -476,220 +756,51 @@ def build_monthly_summary_workbook(data: MonthlySummaryData) -> Workbook:
     for col, width in COL_WIDTHS.items():
         ws.column_dimensions[col].width = width
 
-    # --- Header ---
-    for col_idx, title in enumerate(DETAIL_COLUMNS_FA, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=title)
-        cell.fill = HEADER_FILL
-        cell.font = HEADER_FONT
-        cell.alignment = CENTER
-        cell.border = THIN
-    ws.row_dimensions[1].height = 32
-
-    row_idx = 2
-    items = data.items
-    if not items.empty:
-        for desc in data.group_order:
-            group = items[items["شرح"] == desc]
-            if group.empty:
-                continue
-            for _, item in group.iterrows():
-                values = [
-                    item.get("کد دسته بندی"),
-                    item.get("کد کالا"),
-                    item.get("مقدار"),
-                    item.get("ضریب"),
-                    item.get("سفارش کار"),
-                    item.get("تاریخ"),
-                    item.get("ماه"),
-                    item.get("واحد"),
-                    item.get("شرح"),
-                ]
-                for col_idx, val in enumerate(values, start=1):
-                    ws.cell(row=row_idx, column=col_idx, value=val)
-                _style_row(ws, row_idx, fill=fill_for_work_order(item.get("سفارش کار")))
-                ws.row_dimensions[row_idx].height = 32
-                row_idx += 1
-            # yellow subtotal
-            subtotal_qty = float(group["مقدار"].sum())
-            ws.cell(row=row_idx, column=3, value=subtotal_qty)
-            ws.cell(row=row_idx, column=9, value=f"جمع {desc}")
-            _style_row(ws, row_idx, fill=YELLOW_FILL, bold=True)
-            ws.row_dimensions[row_idx].height = 32
+    row_idx = 1
+    for srow in build_summary_sheet_rows(data):
+        if srow.kind == "blank":
             row_idx += 1
+            continue
 
-    # Grand total (green)
-    ws.cell(row=row_idx, column=3, value=data.grand_kg)
-    ws.cell(row=row_idx, column=8, value="کیلوگرم")
-    ws.cell(row=row_idx, column=9, value="جمع کل مصرفی")
-    _style_row(ws, row_idx, fill=GREEN_FILL, bold=True)
-    ws.row_dimensions[row_idx].height = 32
-    row_idx += 2
-
-    # Section title
-    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=9)
-    cell = ws.cell(row=row_idx, column=1, value="مصرف به تفکیک ماه و سال")
-    cell.fill = SECTION_FILL
-    cell.font = SECTION_FONT
-    cell.alignment = CENTER
-    for col in range(1, 10):
-        ws.cell(row=row_idx, column=col).border = THIN
-        ws.cell(row=row_idx, column=col).fill = SECTION_FILL
-    ws.row_dimensions[row_idx].height = 32
-    row_idx += 1
-
-    for section in data.month_sections:
-        ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=9)
-        title_cell = ws.cell(row=row_idx, column=1, value=section["title"])
-        title_cell.fill = MONTH_TITLE_FILL
-        title_cell.font = MONTH_TITLE_FONT
-        title_cell.alignment = CENTER
-        for col in range(1, 10):
-            ws.cell(row=row_idx, column=col).fill = MONTH_TITLE_FILL
-            ws.cell(row=row_idx, column=col).border = THIN
-        ws.row_dimensions[row_idx].height = 32
-        row_idx += 1
-
-        for col_idx, title in enumerate(MONTH_SECTION_COLUMNS_FA, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=title)
-            cell.fill = HEADER_FILL
-            cell.font = HEADER_FONT
+        if srow.kind in {"section_title", "month_title"}:
+            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=9)
+            cell = ws.cell(row=row_idx, column=1, value=srow.title)
+            fill = _fill_for_sheet_row(srow)
+            font = SECTION_FONT if srow.fill_key == "section" else MONTH_TITLE_FONT
+            cell.fill = fill or SECTION_FILL
+            cell.font = font
             cell.alignment = CENTER
-            cell.border = THIN
-        ws.row_dimensions[row_idx].height = 32
-        row_idx += 1
-
-        for _, item in section["rows"].iterrows():
-            values = [
-                item.get("کد دسته بندی"),
-                item.get("کد کالا"),
-                item.get("مقدار"),
-                item.get("ضریب"),
-                item.get("مصرف_کیلوگرم"),
-                item.get("تاریخ"),
-                item.get("ماه"),
-                item.get("واحد"),
-                item.get("شرح"),
-            ]
-            for col_idx, val in enumerate(values, start=1):
-                ws.cell(row=row_idx, column=col_idx, value=val)
-            _style_row(ws, row_idx, fill=fill_for_work_order(item.get("سفارش کار")))
+            for col in range(1, 10):
+                c = ws.cell(row=row_idx, column=col)
+                c.border = THIN
+                if fill is not None:
+                    c.fill = fill
             ws.row_dimensions[row_idx].height = 32
             row_idx += 1
+            continue
 
-        # month total
-        ws.cell(row=row_idx, column=5, value=section["total_kg"])
-        ws.cell(row=row_idx, column=8, value="کیلوگرم")
-        ws.cell(row=row_idx, column=9, value=section["total_title"])
-        _style_row(ws, row_idx, fill=GREEN_FILL, bold=True)
-        ws.row_dimensions[row_idx].height = 32
-        row_idx += 1
-
-        # Per-month اسلب/بلوم/بیلت (unique شرح within this month)
-        month_totals = tundish_kg_totals_from_items(section["rows"])
-        for key in ("slab", "bloom", "billet"):
-            info = month_totals.get(key) or {"kg": 0.0, "count": 0}
-            count = int(info.get("count") or 0)
-            kg = float(info.get("kg") or 0)
-            if count == 0 and abs(kg) < 1e-9:
-                continue
-            ws.cell(row=row_idx, column=5, value=kg)
-            ws.cell(row=row_idx, column=8, value="کیلوگرم")
-            ws.cell(
-                row=row_idx,
-                column=9,
-                value=f"{CONSUMPTION_LABELS_FA[key]} ({to_persian_digits(count)} قلم)",
-            )
-            _style_row(ws, row_idx, fill=fill_for_group_key(key), bold=True)
+        if srow.kind == "header":
+            for col_idx, title in enumerate(srow.values, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=title)
+                cell.fill = HEADER_FILL
+                cell.font = HEADER_FONT
+                cell.alignment = CENTER
+                cell.border = THIN
             ws.row_dimensions[row_idx].height = 32
             row_idx += 1
-        unk = month_totals.get(UNKNOWN_GROUP) or {"kg": 0.0, "count": 0}
-        unk_kg = float(unk.get("kg") or 0)
-        unk_count = int(unk.get("count") or 0)
-        if unk_count or abs(unk_kg) > 1e-9:
-            ws.cell(row=row_idx, column=5, value=unk_kg)
-            ws.cell(row=row_idx, column=8, value="کیلوگرم")
-            ws.cell(
-                row=row_idx,
-                column=9,
-                value=f"{UNKNOWN_LABEL_FA} ({to_persian_digits(unk_count)} قلم)",
-            )
-            _style_row(ws, row_idx, fill=fill_for_group_key(UNKNOWN_GROUP), bold=True)
-            ws.row_dimensions[row_idx].height = 32
-            row_idx += 1
-        row_idx += 1  # blank before next month
+            continue
 
-    # --- مصرف مواد بر حسب اسلب، بلوم و بیلت (after last month block) ---
-    # month loop already left one blank via +=2; add one more ≈ two rows gap
-    row_idx += 1
-    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=9)
-    title_cell = ws.cell(
-        row=row_idx,
-        column=1,
-        value="مصرف مواد بر حسب اسلب، بلوم و بیلت",
-    )
-    title_cell.fill = SECTION_FILL
-    title_cell.font = SECTION_FONT
-    title_cell.alignment = CENTER
-    for col in range(1, 10):
-        ws.cell(row=row_idx, column=col).border = THIN
-        ws.cell(row=row_idx, column=col).fill = SECTION_FILL
-    ws.row_dimensions[row_idx].height = 32
-    row_idx += 1
-
-    totals = data.tundish_totals or tundish_kg_totals_from_items(data.items)
-    section_order = ["slab", "bloom", "billet"]
-    for key in section_order:
-        info = totals.get(key) or {"kg": 0.0, "count": 0}
-        label = CONSUMPTION_LABELS_FA[key]
-        count = int(info.get("count") or 0)
-        kg = float(info.get("kg") or 0)
-        ws.cell(row=row_idx, column=3, value=kg)
-        ws.cell(row=row_idx, column=8, value="کیلوگرم")
-        ws.cell(
-            row=row_idx,
-            column=9,
-            value=f"{label} ({to_persian_digits(count)} قلم)",
-        )
-        _style_row(ws, row_idx, fill=fill_for_group_key(key), bold=True)
-        ws.row_dimensions[row_idx].height = 32
+        # data / subtotal / grand_total / month_total / group_total / check
+        for col_idx, val in enumerate(srow.values, start=1):
+            ws.cell(row=row_idx, column=col_idx, value=val)
+        fill = _fill_for_sheet_row(srow)
+        bold = srow.kind in {"subtotal", "grand_total", "month_total", "group_total", "check"}
+        _style_row(ws, row_idx, fill=fill, bold=bold)
+        height = 36 if srow.kind == "check" else 32
+        ws.row_dimensions[row_idx].height = height
         row_idx += 1
-
-    unk = totals.get(UNKNOWN_GROUP) or {"kg": 0.0, "count": 0}
-    unk_kg = float(unk.get("kg") or 0)
-    unk_count = int(unk.get("count") or 0)
-    if unk_count or abs(unk_kg) > 1e-9:
-        ws.cell(row=row_idx, column=3, value=unk_kg)
-        ws.cell(row=row_idx, column=8, value="کیلوگرم")
-        ws.cell(
-            row=row_idx,
-            column=9,
-            value=f"{UNKNOWN_LABEL_FA} ({to_persian_digits(unk_count)} قلم)",
-        )
-        _style_row(ws, row_idx, fill=fill_for_group_key(UNKNOWN_GROUP), bold=True)
-        ws.row_dimensions[row_idx].height = 32
-        row_idx += 1
-
-    check_kg = (
-        float((totals.get("slab") or {}).get("kg") or 0)
-        + float((totals.get("bloom") or {}).get("kg") or 0)
-        + float((totals.get("billet") or {}).get("kg") or 0)
-        + unk_kg
-    )
-    ws.cell(row=row_idx, column=3, value=check_kg)
-    ws.cell(row=row_idx, column=8, value="کیلوگرم")
-    ws.cell(
-        row=row_idx,
-        column=9,
-        value="جمع کنترل (اسلب+بلوم+بیلت+سایر نواحی) — باید برابر جمع کل مصرفی باشد",
-    )
-    _style_row(ws, row_idx, fill=GREEN_FILL, bold=True)
-    ws.row_dimensions[row_idx].height = 36
-    row_idx += 1
 
     return wb
-
-
-
 
 
 def _row_year(value: object) -> int:
@@ -871,129 +982,99 @@ def build_monthly_summary(
     return data, excel_out
 
 
+
 def summary_sections_for_pdf(data: MonthlySummaryData) -> list[dict[str, Any]]:
-    """Flatten summary into PDF-friendly section dicts."""
+    """Flatten summary into PDF sections that mirror the Excel sheet rows."""
+    sheet_rows = build_summary_sheet_rows(data)
     sections: list[dict[str, Any]] = []
-    # Main detail table (without yellow subtotals — PDF adds group breaks lightly)
-    main_rows = []
-    for desc in data.group_order:
-        group = data.items[data.items["شرح"] == desc]
-        for _, item in group.iterrows():
-            main_rows.append(
-                {
-                    "category_code": item.get("کد دسته بندی"),
-                    "id": item.get("کد کالا"),
-                    "quantity": item.get("مقدار"),
-                    "coefficient": item.get("ضریب"),
-                    "work_order": item.get("سفارش کار"),
-                    "date": item.get("تاریخ"),
-                    "month": item.get("ماه"),
-                    "unit": item.get("واحد"),
-                    "description": item.get("شرح"),
-                    "kg": item.get("مصرف_کیلوگرم"),
-                }
-            )
-        main_rows.append(
-            {
-                "category_code": "",
-                "id": "",
-                "quantity": float(group["مقدار"].sum()) if not group.empty else 0,
-                "coefficient": "",
-                "work_order": "",
-                "date": "",
-                "month": "",
-                "unit": "",
-                "description": f"جمع {desc}",
-                "kg": "",
-                "_subtotal": True,
-            }
+    current: dict[str, Any] | None = None
+
+    def _flush() -> None:
+        nonlocal current
+        if current is not None:
+            sections.append(current)
+            current = None
+
+    def _start_table(columns_kind: str, title: str | None, kind: str) -> None:
+        nonlocal current
+        _flush()
+        cols = (
+            list(DETAIL_COLUMNS_FA)
+            if columns_kind == "detail"
+            else list(MONTH_SECTION_COLUMNS_FA)
         )
-    sections.append(
-        {
-            "title": SUMMARY_SHEET_NAME,
-            "kind": "main",
-            "columns": [
-                "category_code",
-                "id",
-                "quantity",
-                "coefficient",
-                "work_order",
-                "date",
-                "month",
-                "unit",
-                "description",
-            ],
-            "rows": main_rows,
+        current = {
+            "title": title,
+            "kind": kind,
+            "columns": cols,
+            "columns_kind": columns_kind,
+            "rows": [],
             "grand_kg": data.grand_kg,
         }
-    )
-    for section in data.month_sections:
-        rows = []
-        for _, item in section["rows"].iterrows():
-            rows.append(
+
+    pending_title: str | None = None
+    pending_kind: str = "block"
+
+    for srow in sheet_rows:
+        if srow.kind == "blank":
+            _flush()
+            pending_title = None
+            continue
+
+        if srow.kind == "section_title":
+            _flush()
+            sections.append(
                 {
-                    "category_code": item.get("کد دسته بندی"),
-                    "id": item.get("کد کالا"),
-                    "quantity": item.get("مقدار"),
-                    "coefficient": item.get("ضریب"),
-                    "kg": item.get("مصرف_کیلوگرم"),
-                    "date": item.get("تاریخ"),
-                    "month": item.get("ماه"),
-                    "unit": item.get("واحد"),
-                    "description": item.get("شرح"),
+                    "title": srow.title,
+                    "kind": "banner",
+                    "columns": [],
+                    "rows": [],
                 }
             )
-        sections.append(
-            {
-                "title": section["title"],
-                "kind": "month",
-                "columns": [
-                    "category_code",
-                    "id",
-                    "quantity",
-                    "coefficient",
-                    "kg",
-                    "date",
-                    "month",
-                    "unit",
-                    "description",
-                ],
-                "rows": rows,
-                "total_kg": section["total_kg"],
-                "total_title": section["total_title"],
-                "tundish_totals": tundish_kg_totals_from_items(section["rows"]),
-            }
-        )
-    totals = data.tundish_totals or tundish_kg_totals_from_items(data.items)
-    tundish_rows = []
-    for key in ("slab", "bloom", "billet"):
-        info = totals.get(key) or {"kg": 0.0, "count": 0}
-        tundish_rows.append(
-            {
-                "description": CONSUMPTION_LABELS_FA[key],
-                "count": int(info.get("count") or 0),
-                "kg": float(info.get("kg") or 0),
-                "unit": "کیلوگرم",
-            }
-        )
-    unk = totals.get(UNKNOWN_GROUP) or {"kg": 0.0, "count": 0}
-    if int(unk.get("count") or 0) or abs(float(unk.get("kg") or 0)) > 1e-9:
-        tundish_rows.append(
-            {
-                "description": UNKNOWN_LABEL_FA,
-                "count": int(unk.get("count") or 0),
-                "kg": float(unk.get("kg") or 0),
-                "unit": "کیلوگرم",
-            }
-        )
-    sections.append(
-        {
-            "title": "مصرف مواد بر حسب اسلب، بلوم و بیلت",
-            "kind": "tundish_wo",
-            "columns": ["description", "count", "kg", "unit"],
-            "rows": tundish_rows,
-            "grand_kg": data.grand_kg,
-            "check_kg": sum(float(r["kg"]) for r in tundish_rows),
+            pending_title = None
+            continue
+
+        if srow.kind == "month_title":
+            _flush()
+            pending_title = srow.title
+            pending_kind = "month"
+            continue
+
+        if srow.kind == "header":
+            # Start a new table; use pending month title if any
+            title = pending_title
+            kind = pending_kind if pending_title else (
+                "main" if srow.columns_kind == "detail" else "month"
+            )
+            if title is None and srow.columns_kind == "detail" and not sections:
+                title = SUMMARY_SHEET_NAME
+                kind = "main"
+            _start_table(srow.columns_kind, title, kind)
+            pending_title = None
+            pending_kind = "block"
+            continue
+
+        # Tabular content rows — ensure a table exists (tundish has no header in Excel)
+        if current is None:
+            # After tundish banner: open detail-col table, no title repeat, no header row
+            kind = "tundish_wo"
+            _start_table(srow.columns_kind or "detail", None, kind)
+            current["show_header"] = False
+
+        assert current is not None
+        row_dict = {
+            "_values": list(srow.values),
+            "_kind": srow.kind,
+            "_fill_key": srow.fill_key,
+            "_work_order": srow.work_order,
         }
-    )
+        # Also expose by Persian header name for any legacy readers
+        cols = current["columns"]
+        for i, col_name in enumerate(cols):
+            row_dict[col_name] = srow.values[i] if i < len(srow.values) else None
+        if srow.kind == "subtotal":
+            row_dict["_subtotal"] = True
+        current["rows"].append(row_dict)
+
+    _flush()
     return sections

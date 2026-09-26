@@ -26,11 +26,6 @@ from reportlab.platypus import (
 )
 
 from config import CRITICAL_DAYS, FILE_TYPES, FONTS_DIR, REPORT_DIR, ensure_dirs
-from excel.work_order import (
-    CONSUMPTION_LABELS_FA,
-    UNKNOWN_GROUP,
-    UNKNOWN_LABEL_FA,
-)
 
 _FONT_REGISTERED = False
 FONT_NAME = "DejaVuSans"
@@ -504,19 +499,55 @@ def generate_report(
 
 # --- Monthly consumption summary PDF ---
 
-SUMMARY_HEADER_FA = {
-    "category_code": "کد دسته بندی",
-    "id": "کد کالا",
-    "quantity": "مقدار",
-    "coefficient": "ضریب",
-    "work_order": "سفارش کار",
-    "date": "تاریخ",
-    "month": "ماه",
-    "unit": "واحد",
-    "description": "شرح",
-    "kg": "مصرف کیلوگرم (مقدار×ضریب)",
-    "count": "تعداد قلم",
+# Approximate Excel fills (content-aligned; PDF cannot match pattern fills pixel-perfect)
+_PDF_FILL = {
+    "header": colors.HexColor("#1f4e79"),
+    "yellow": colors.HexColor("#fff2cc"),
+    "green": colors.HexColor("#c6efce"),
+    "section": colors.HexColor("#7030a0"),
+    "month_title": colors.HexColor("#2e75b6"),
+    "slab": colors.HexColor("#ededed"),
+    "bloom": colors.HexColor("#d9d9d9"),
+    "billet": colors.HexColor("#9a9a9a"),
+    "unknown": colors.HexColor("#b0b0b0"),
+    "wo_slab": colors.HexColor("#ededed"),
+    "wo_bloom": colors.HexColor("#d9d9d9"),
+    "wo_billet": colors.HexColor("#9a9a9a"),
+    "wo_unknown": colors.HexColor("#c0c0c0"),
 }
+
+
+def _pdf_fill_for_row(row: dict[str, Any]) -> colors.Color | None:
+    key = row.get("_fill_key")
+    if key == "wo":
+        from excel.work_order import group_for_work_order, UNKNOWN_GROUP
+
+        group = group_for_work_order(row.get("_work_order")) or UNKNOWN_GROUP
+        return _PDF_FILL.get(f"wo_{group}", colors.whitesmoke)
+    if key in _PDF_FILL:
+        return _PDF_FILL[key]
+    return None
+
+
+def _format_summary_cell(val: Any) -> str:
+    if val is None:
+        return ""
+    try:
+        if bool(pd.isna(val)):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    if isinstance(val, float):
+        if val != val:
+            return ""
+        # Enough precision to keep Excel-like decimals (avoid default :g rounding)
+        text = f"{val:.10g}"
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text
+    if isinstance(val, int):
+        return str(val)
+    return str(val)
 
 
 def generate_monthly_summary_pdf(
@@ -527,7 +558,7 @@ def generate_monthly_summary_pdf(
     title: str = "خلاصه مصرفی ماهیانه",
     letterhead_path: Path | str | None = None,
 ) -> Path:
-    """Landscape RTL PDF for the monthly consumption summary report."""
+    """Landscape RTL PDF mirroring the monthly summary Excel sheet content."""
     _register_fonts()
     ensure_dirs()
     styles = _styles()
@@ -551,127 +582,57 @@ def generate_monthly_summary_pdf(
     story.append(Paragraph(rtl(title), styles["title"]))
     story.append(
         Paragraph(
-            rtl(f"جمع کل مصرفی: {grand_kg:g} کیلوگرم"),
+            rtl(f"جمع کل مصرفی: {_format_summary_cell(float(grand_kg))} کیلوگرم"),
             styles["body"],
         )
     )
     story.append(Spacer(1, 0.3 * cm))
 
     for section in sections:
-        story.append(Paragraph(rtl(section.get("title") or title), styles["heading"]))
-        cols = list(section.get("columns") or [])
-        rows = section.get("rows") or []
-        header = [
-            Paragraph(rtl(SUMMARY_HEADER_FA.get(c, c)), styles["cell"]) for c in cols
-        ]
-        data = [list(reversed(header))]
-        for row in rows:
-            cells = []
-            for c in cols:
-                val = row.get(c, "")
-                if val is None:
-                    val = ""
-                elif isinstance(val, float):
-                    val = f"{val:g}"
-                cells.append(Paragraph(rtl(val), styles["cell"]))
-            data.append(list(reversed(cells)))
-            if row.get("_subtotal"):
-                # highlight last appended row
-                pass
-        if section.get("kind") == "main":
-            # grand total row
-            grand_cells = []
-            for c in cols:
-                if c == "quantity":
-                    grand_cells.append(Paragraph(rtl(f"{grand_kg:g}"), styles["cell"]))
-                elif c == "unit":
-                    grand_cells.append(Paragraph(rtl("کیلوگرم"), styles["cell"]))
-                elif c == "description":
-                    grand_cells.append(Paragraph(rtl("جمع کل مصرفی"), styles["cell"]))
-                else:
-                    grand_cells.append(Paragraph(rtl(""), styles["cell"]))
-            data.append(list(reversed(grand_cells)))
-        elif section.get("kind") == "month":
-            total_cells = []
-            for c in cols:
-                if c == "kg":
-                    total_cells.append(
-                        Paragraph(rtl(f"{float(section.get('total_kg') or 0):g}"), styles["cell"])
-                    )
-                elif c == "unit":
-                    total_cells.append(Paragraph(rtl("کیلوگرم"), styles["cell"]))
-                elif c == "description":
-                    total_cells.append(
-                        Paragraph(rtl(section.get("total_title") or ""), styles["cell"])
-                    )
-                else:
-                    total_cells.append(Paragraph(rtl(""), styles["cell"]))
-            data.append(list(reversed(total_cells)))
-            # Per-month اسلب/بلوم/بیلت under that month
-            mtot = section.get("tundish_totals") or {}
-            for _key in ("slab", "bloom", "billet"):
-                _info = mtot.get(_key) or {"kg": 0.0, "count": 0}
-                _count = int(_info.get("count") or 0)
-                _kg = float(_info.get("kg") or 0)
-                if _count == 0 and abs(_kg) < 1e-9:
-                    continue
-                _cells = []
-                for c in cols:
-                    if c == "kg":
-                        _cells.append(Paragraph(rtl(f"{_kg:g}"), styles["cell"]))
-                    elif c == "unit":
-                        _cells.append(Paragraph(rtl("کیلوگرم"), styles["cell"]))
-                    elif c == "description":
-                        _cells.append(
-                            Paragraph(
-                                rtl(f"{CONSUMPTION_LABELS_FA[_key]} ({_count} قلم)"),
-                                styles["cell"],
-                            )
-                        )
-                    else:
-                        _cells.append(Paragraph(rtl(""), styles["cell"]))
-                data.append(list(reversed(_cells)))
-            _unk = mtot.get(UNKNOWN_GROUP) or {"kg": 0.0, "count": 0}
-            _unk_kg = float(_unk.get("kg") or 0)
-            _unk_count = int(_unk.get("count") or 0)
-            if _unk_count or abs(_unk_kg) > 1e-9:
-                _cells = []
-                for c in cols:
-                    if c == "kg":
-                        _cells.append(Paragraph(rtl(f"{_unk_kg:g}"), styles["cell"]))
-                    elif c == "unit":
-                        _cells.append(Paragraph(rtl("کیلوگرم"), styles["cell"]))
-                    elif c == "description":
-                        _cells.append(
-                            Paragraph(
-                                rtl(f"{UNKNOWN_LABEL_FA} ({_unk_count} قلم)"),
-                                styles["cell"],
-                            )
-                        )
-                    else:
-                        _cells.append(Paragraph(rtl(""), styles["cell"]))
-                data.append(list(reversed(_cells)))
-        elif section.get("kind") == "tundish_wo":
-            check_cells = []
-            for c in cols:
-                if c == "kg":
-                    check_cells.append(
-                        Paragraph(rtl(f"{float(section.get('check_kg') or 0):g}"), styles["cell"])
-                    )
-                elif c == "unit":
-                    check_cells.append(Paragraph(rtl("کیلوگرم"), styles["cell"]))
-                elif c == "description":
-                    check_cells.append(
-                        Paragraph(rtl("جمع کنترل (اسلب+بلوم+بیلت+سایر نواحی)"), styles["cell"])
-                    )
-                else:
-                    check_cells.append(Paragraph(rtl(""), styles["cell"]))
-            data.append(list(reversed(check_cells)))
+        kind = section.get("kind")
+        sec_title = section.get("title")
 
-        table = Table(data, repeatRows=1)
-        style_cmds = [
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f4e79")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        if kind == "banner":
+            if sec_title:
+                story.append(Paragraph(rtl(str(sec_title)), styles["heading"]))
+                story.append(Spacer(1, 0.15 * cm))
+            continue
+
+        if sec_title:
+            story.append(Paragraph(rtl(str(sec_title)), styles["heading"]))
+
+        cols = list(section.get("columns") or [])
+        rows = list(section.get("rows") or [])
+        if not cols or not rows:
+            continue
+
+        show_header = section.get("show_header", True)
+        data: list = []
+        row_fills: list[colors.Color | None] = []
+        data_row_meta: list[dict] = []
+
+        if show_header:
+            # Header uses Persian column titles directly (same as Excel)
+            header = [Paragraph(rtl(str(c)), styles["cell"]) for c in cols]
+            data.append(list(reversed(header)))
+            row_fills.append(None)  # styled as header below
+            data_row_meta.append({"_kind": "header"})
+
+        for row in rows:
+            values = row.get("_values")
+            if values is None:
+                values = [row.get(c, "") for c in cols]
+            values = list(values) + [None] * max(0, len(cols) - len(values))
+            values = values[: len(cols)]
+            cells = [
+                Paragraph(rtl(_format_summary_cell(v)), styles["cell"]) for v in values
+            ]
+            data.append(list(reversed(cells)))
+            row_fills.append(_pdf_fill_for_row(row))
+            data_row_meta.append(row)
+
+        table = Table(data, repeatRows=1 if show_header else 0)
+        style_cmds: list = [
             ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
             ("FONTSIZE", (0, 0), (-1, -1), 7),
             ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
@@ -681,12 +642,29 @@ def generate_monthly_summary_pdf(
             ("RIGHTPADDING", (0, 0), (-1, -1), 2),
             ("TOPPADDING", (0, 0), (-1, -1), 3),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.Color(0.93, 0.95, 1)]),
         ]
-        # Green last row (totals)
-        style_cmds.append(
-            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#c6efce"))
-        )
+        if show_header:
+            style_cmds.extend(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f4e79")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), FONT_BOLD),
+                ]
+            )
+        for i, fill in enumerate(row_fills):
+            meta = data_row_meta[i]
+            if meta.get("_kind") == "header":
+                continue
+            if fill is not None:
+                style_cmds.append(("BACKGROUND", (0, i), (-1, i), fill))
+            if meta.get("_kind") in {
+                "subtotal",
+                "grand_total",
+                "month_total",
+                "group_total",
+                "check",
+            }:
+                style_cmds.append(("FONTNAME", (0, i), (-1, i), FONT_BOLD))
         table.setStyle(TableStyle(style_cmds))
         story.append(table)
         story.append(Spacer(1, 0.45 * cm))
