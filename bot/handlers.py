@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
+
+import pandas as pd
 from typing import Any
 
 from analytics.tundish import (
@@ -33,7 +35,13 @@ from bot import keyboards as kb
 from bot.bale_api import BaleClient
 from config import CRITICAL_DAYS, FILE_TYPES, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
 from db.models import Database
-from excel.processor import ExcelValidationError, extract_and_save_clean, process_session_files
+from excel.processor import (
+    ExcelValidationError,
+    extract_and_save_clean,
+    format_inventory_table_fa,
+    process_file,
+    process_session_files,
+)
 from pdf.generator import generate_report
 
 logger = logging.getLogger(__name__)
@@ -167,6 +175,104 @@ class BotApp:
         if not present:
             return {}, {}
         return process_session_files(present, user)
+
+    def _load_latest_inventory_frame(
+        self, user: dict, *, include_catalog_fallback: bool = True
+    ) -> tuple[pd.DataFrame | None, bool, str | None]:
+        """Load the newest usable cleaned inventory and its provenance.
+
+        Returns (frame, has_inventory_extract, source). A catalog fallback keeps
+        category/name visible when an old extract file was removed, but quantity
+        remains an em dash because catalog_items does not store warehouse qty.
+        """
+        uid = str(user["bale_user_id"])
+        session = self.db.get_or_create_session(uid)
+        latest = self.db.get_latest_extracted(uid, "product_inventory")
+        candidates: list[tuple[str, str]] = []
+        if latest and latest.get("clean_path"):
+            candidates.append((str(latest["clean_path"]), "آخرین استخراج موجودی انبار"))
+        if session.get("inventory_path"):
+            candidates.append((str(session["inventory_path"]), "موجودی انبار جلسه جاری"))
+
+        seen: set[str] = set()
+        for raw_path, source in candidates:
+            if raw_path in seen:
+                continue
+            seen.add(raw_path)
+            try:
+                frame, _ = process_file(raw_path, "product_inventory", user)
+                return frame, True, source
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inventory list load failed for %s: %s", raw_path, exc)
+
+        if include_catalog_fallback:
+            catalog = self.db.list_catalog_items(active_only=True)
+            if catalog:
+                rows = [
+                    {
+                        "category_code": item.get("category_code"),
+                        "id": item.get("id"),
+                        "item_code_desc": item.get("name_desc"),
+                        "product_name": item.get("name_desc"),
+                        "quantity": None,
+                    }
+                    for item in catalog
+                ]
+                return pd.DataFrame(rows), False, "کاتالوگ همگام‌شده"
+        return None, False, None
+
+    @staticmethod
+    def _normalise_inventory_category(value: object) -> str | None:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return None
+        text = str(value).strip()
+        if not text or text.casefold() == "nan":
+            return None
+        if text.endswith(".0") and text[:-2].isdigit():
+            text = text[:-2]
+        if text.isdigit() and len(text) <= 4:
+            text = text.zfill(4)
+        return text if text.isdigit() and len(text) == 4 else None
+
+    def _category_inventory_table(self, user: dict) -> tuple[pd.DataFrame, bool, str | None]:
+        """Build rows for active allowlisted categories, including empty codes."""
+        active_rows = self.db.list_category_codes(active_only=True)
+        active_codes = [str(row["code"]) for row in active_rows]
+        frame, has_extract, source = self._load_latest_inventory_frame(user)
+        if frame is None:
+            work = pd.DataFrame(columns=["category_code", "id", "item_code_desc", "quantity"])
+        else:
+            work = frame.copy()
+            if "category_code" in work.columns:
+                work["category_code"] = work["category_code"].map(
+                    self._normalise_inventory_category
+                )
+                work = work[work["category_code"].isin(active_codes)].copy()
+            else:
+                work = work.iloc[0:0].copy()
+
+        present = set(work.get("category_code", pd.Series(dtype=str)).dropna().astype(str))
+        missing = [
+            {"category_code": code, "item_code_desc": "—", "quantity": None}
+            for code in active_codes
+            if code not in present
+        ]
+        if missing:
+            work = pd.concat([work, pd.DataFrame(missing)], ignore_index=True)
+        if not work.empty:
+            order = {code: i for i, code in enumerate(active_codes)}
+            work["_category_order"] = work["category_code"].map(order).fillna(len(order))
+            work = work.sort_values(["_category_order"], kind="stable").drop(
+                columns=["_category_order"]
+            )
+        return work.reset_index(drop=True), has_extract, source
+
+    @staticmethod
+    def _inventory_cell(value: object, fallback: str = "—") -> str:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return fallback
+        text = str(value).strip()
+        return text if text and text.casefold() not in {"nan", "none"} else fallback
 
     def _clear_analysis_pending(self, uid: str) -> None:
         self._analysis_pending.pop(uid, None)
@@ -647,20 +753,34 @@ class BotApp:
             return
         if self._deny_technician(message, user):
             return
-        rows = self.db.list_category_codes(active_only=False)
-        if not rows:
+        active_codes = self.db.list_category_codes(active_only=True)
+        if not active_codes:
             self._reply(
                 message,
-                "هنوز هیچ کد دسته‌بندی ثبت نشده است.",
+                "هنوز هیچ کد دسته‌بندی فعالی ثبت نشده است.",
                 kb.inventory_menu(),
             )
             return
-        lines = ["کدهای دسته بندی:"]
-        for r in rows:
-            flag = "🟢" if r.get("active") else "🔴"
-            label = f" — {r['label']}" if r.get("label") else ""
-            lines.append(f"{flag} {r['code']}{label}")
-        self._reply(message, "\n".join(lines), kb.inventory_menu())
+
+        table, has_extract, source = self._category_inventory_table(user)
+        if has_extract:
+            notice = f"منبع: {source or 'آخرین موجودی انبار تمیزشده'}"
+        elif source == "کاتالوگ همگام‌شده":
+            notice = (
+                "استخراج فعلی موجودی انبار در دسترس نیست؛ شرح کالا از کاتالوگ است "
+                "و مقدار تا آپلود موجودی انبار قابل نمایش نیست."
+            )
+        else:
+            notice = (
+                "هنوز استخراج موجودی انبار ندارید. برای جدول کامل، ابتدا فایل «موجودی انبار» "
+                "را آپلود کنید."
+            )
+        chunks = format_inventory_table_fa(table)
+        prefix = "📋 لیست کد دسته‌بندی و موجودی\n" + notice + "\n\n"
+        for index, chunk in enumerate(chunks):
+            is_last = index == len(chunks) - 1
+            self._reply(message, (prefix if index == 0 else "") + chunk,
+                        kb.inventory_menu() if is_last else None)
 
     # ---------- analytics ----------
 
@@ -1292,11 +1412,28 @@ class BotApp:
             "rows": rows[:80],
             "unassigned_only": unassigned_only,
         }
+        inventory_frame, _, _ = self._load_latest_inventory_frame(
+            user, include_catalog_fallback=False
+        )
+        inventory_by_id: dict[str, dict] = {}
+        if inventory_frame is not None and not inventory_frame.empty:
+            for _, inv_row in inventory_frame.iterrows():
+                item_id = self._inventory_cell(inv_row.get("id"), "")
+                if item_id:
+                    inventory_by_id[item_id] = inv_row.to_dict()
         lines = [title, "برای تخصیص، شماره یا شناسه قلم را بفرستید.", ""]
+        lines.append("کد دسته | شرح کالا | موجودی | گروه")
+        lines.append("───────── | ───────────── | ─────── | ────")
         for i, r in enumerate(rows[:40], 1):
             group = r.get("tundish_group")
             g_label = SITE_STOCK_GROUPS.get(group, "—") if group else "—"
-            lines.append(f"{i}. [{r['id']}] {r.get('name_desc') or r['id']} → {g_label}")
+            inv = inventory_by_id.get(str(r["id"]).strip(), {})
+            category = self._inventory_cell(
+                inv.get("category_code"), self._inventory_cell(r.get("category_code"))
+            )
+            quantity = self._inventory_cell(inv.get("quantity"))
+            desc = self._inventory_cell(r.get("name_desc"), str(r["id"]))
+            lines.append(f"{i}. [{r['id']}] {category} | {desc} | {quantity} | {g_label}")
         if len(rows) > 40:
             lines.append(f"\n… و {len(rows) - 40} قلم دیگر (با شناسه دقیق بفرستید).")
         self._reply(message, "\n".join(lines), kb.catalog_settings_menu())

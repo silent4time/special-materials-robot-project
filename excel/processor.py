@@ -476,6 +476,82 @@ def extract_and_save_clean(
     )
 
 
+# Keep table chunks below Bale's practical message limit; callers may prepend context.
+INVENTORY_TABLE_CHUNK_CHARS = 3200
+
+
+def _display_inventory_value(value: object, *, empty: str = "—") -> str:
+    """Render a cell for the Persian inventory table without pandas artefacts."""
+    if value is None:
+        return empty
+    try:
+        if bool(pd.isna(value)):
+            return empty
+    except (TypeError, ValueError):
+        pass
+    text = " ".join(str(value).strip().split())
+    if not text or text.casefold() in {"nan", "none", "nat"}:
+        return empty
+    return text
+
+
+def _inventory_description(row: pd.Series) -> str:
+    """Choose the most useful item description for an inventory row."""
+    item_code_desc = _display_inventory_value(row.get("item_code_desc"), empty="")
+    if item_code_desc:
+        return item_code_desc
+    product_name = _display_inventory_value(row.get("product_name"), empty="")
+    item_id = _display_inventory_value(row.get("id"), empty="")
+    if item_id and product_name:
+        return f"{item_id} - {product_name}"
+    return product_name or item_id or "—"
+
+
+def _format_inventory_quantity(value: object) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "—"
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.notna(numeric):
+        return f"{float(numeric):g}"
+    return _display_inventory_value(value)
+
+
+def format_inventory_table_fa(
+    df: pd.DataFrame | None,
+    *,
+    max_chars: int = INVENTORY_TABLE_CHUNK_CHARS,
+) -> list[str]:
+    """Format warehouse inventory as Persian table chunks.
+
+    The stable three-column layout intentionally works for both cleaned Excel
+    data and catalog fallbacks: category, item description, and quantity.
+    Each returned string repeats the header so every Bale message is readable.
+    """
+    if df is None or df.empty:
+        return []
+    max_chars = max(500, int(max_chars))
+    header = "کد دسته | شرح کالا | موجودی\n───────── | ───────────── | ───────"
+    row_lines: list[str] = []
+    for _, row in df.iterrows():
+        category = _display_inventory_value(row.get("category_code"))
+        description = _inventory_description(row)
+        quantity = _format_inventory_quantity(row.get("quantity"))
+        row_lines.append(f"{category} | {description} | {quantity}")
+
+    chunks: list[str] = []
+    current = header
+    for row_line in row_lines:
+        candidate = f"{current}\n{row_line}"
+        if current != header and len(candidate) > max_chars:
+            chunks.append(current)
+            current = f"{header}\n{row_line}"
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def process_file(path: Path | str, file_type: str, user: dict[str, Any]) -> tuple[pd.DataFrame, dict]:
     if file_type not in FILE_TYPES:
         raise ExcelValidationError(f"نوع فایل ناشناخته: {file_type}")

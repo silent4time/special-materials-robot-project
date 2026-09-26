@@ -26,7 +26,11 @@ from auth.rbac import can_configure_catalog
 from config import CRITICAL_DAYS, DEFAULT_CATEGORY_CODES, REQUIRED_COLUMNS, SITE_STOCK_GROUPS
 from db.models import Database
 from excel.id_parse import extract_item_id, extract_product_name
-from excel.processor import extract_and_save_clean, process_session_files
+from excel.processor import (
+    extract_and_save_clean,
+    format_inventory_table_fa,
+    process_session_files,
+)
 from pdf.generator import generate_report
 from scripts.make_samples import main as make_samples
 
@@ -233,6 +237,9 @@ def main() -> int:
     assert set(clean_df["id"].astype(str)) == {"ACID01", "CAUST02", "CL04", "OIL05"}
     assert (clean_df["priority"] == 1).all()
     assert (clean_df["category_code"].astype(str) == "1201").all()
+    table_text = "\n".join(format_inventory_table_fa(clean_df))
+    assert "کد دسته" in table_text and "شرح کالا" in table_text and "موجودی" in table_text
+    assert "1201" in table_text and "ACID01 - اسید سولفوریک" in table_text and "20" in table_text
 
     sess = db.get_or_create_session("999")
     eid = db.save_extracted(
