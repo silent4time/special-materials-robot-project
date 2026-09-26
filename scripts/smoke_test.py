@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline smoke test: RBAC + warehouse inventory extract + surplus + PDF."""
+"""Offline smoke test: RBAC + warehouse inventory extract + site stock + surplus + PDF."""
 from __future__ import annotations
 
 import sys
@@ -22,7 +22,8 @@ from analytics.tundish import (
     suggest_requests,
     surplus_materials,
 )
-from config import CRITICAL_DAYS, DEFAULT_CATEGORY_CODES, REQUIRED_COLUMNS
+from auth.rbac import can_configure_catalog
+from config import CRITICAL_DAYS, DEFAULT_CATEGORY_CODES, REQUIRED_COLUMNS, SITE_STOCK_GROUPS
 from db.models import Database
 from excel.id_parse import extract_item_id, extract_product_name
 from excel.processor import extract_and_save_clean, process_session_files
@@ -75,12 +76,29 @@ def main() -> int:
     tech_menu = menu_texts(kb.main_menu(db.get_user("1001")))
     owner_menu = menu_texts(kb.main_menu(db.get_user("998")))
     manager_menu = menu_texts(kb.main_menu(db.get_user("999")))
-    assert kb.BTN_TANK in tech_menu
+    officer_menu = menu_texts(kb.main_menu(db.get_user("1002")))
+    assert kb.BTN_SITE_STOCK in tech_menu
     assert kb.BTN_INV_MENU not in tech_menu
     assert kb.BTN_ANALYTICS not in tech_menu
     assert kb.BTN_MONTHLY not in tech_menu
-    for full_menu in (owner_menu, manager_menu):
-        assert {kb.BTN_INV_MENU, kb.BTN_ANALYTICS, kb.BTN_MONTHLY, kb.BTN_TANK}.issubset(full_menu)
+    assert kb.BTN_CATALOG_SETTINGS not in tech_menu
+    for full_menu in (owner_menu, manager_menu, officer_menu):
+        assert {kb.BTN_INV_MENU, kb.BTN_ANALYTICS, kb.BTN_MONTHLY, kb.BTN_SITE_STOCK}.issubset(full_menu)
+        assert kb.BTN_CATALOG_SETTINGS in full_menu
+
+    # site stock submenu labels
+    site_menu = menu_texts(kb.site_stock_menu())
+    assert kb.BTN_SITE_SLAB in site_menu
+    assert kb.BTN_SITE_BLOOM in site_menu
+    assert kb.BTN_SITE_BILLET in site_menu
+    assert SITE_STOCK_GROUPS["billet"] == "موجودی مواد بیلت"
+    assert kb.SITE_GROUP_BUTTONS[kb.BTN_SITE_BILLET] == "billet"
+
+    # RBAC: technician cannot configure catalog; others can
+    assert not can_configure_catalog(db.get_user("1001"))
+    assert can_configure_catalog(db.get_user("998"))
+    assert can_configure_catalog(db.get_user("999"))
+    assert can_configure_catalog(db.get_user("1002"))
 
     # --- category allowlist (defaults seeded on DB init) ---
     assert db.active_category_code_set() == set(DEFAULT_CATEGORY_CODES)
@@ -245,7 +263,87 @@ def main() -> int:
     )
     assert isinstance(surplus2, pd.DataFrame)
 
-    print("SMOKE OK CRITICAL_DAYS=", CRITICAL_DAYS)
+    # ========== catalog assignment + technician site stock entry ==========
+    seed = db.seed_catalog_from_latest_warehouse()
+    assert seed["ok"] is True
+    assert seed["counts"]["inserted"] >= 4
+    catalog = db.list_catalog_items(active_only=True)
+    assert len(catalog) >= 4
+    ids = {c["id"] for c in catalog}
+    assert {"ACID01", "CAUST02", "CL04", "OIL05"}.issubset(ids)
+
+    # manager assigns items to groups
+    db.assign_item_to_group("ACID01", "slab", assigned_by="999")
+    db.assign_item_to_group("CAUST02", "slab", assigned_by="999")
+    db.assign_item_to_group("CL04", "bloom", assigned_by="1002")
+    db.assign_item_to_group("OIL05", "billet", assigned_by="998")
+
+    slab_items = db.list_items_for_group("slab")
+    bloom_items = db.list_items_for_group("bloom")
+    billet_items = db.list_items_for_group("billet")
+    assert {i["id"] for i in slab_items} == {"ACID01", "CAUST02"}
+    assert {i["id"] for i in bloom_items} == {"CL04"}
+    assert {i["id"] for i in billet_items} == {"OIL05"}
+
+    # one group per item — reassign moves
+    db.assign_item_to_group("OIL05", "slab", assigned_by="999")
+    assert "OIL05" in {i["id"] for i in db.list_items_for_group("slab")}
+    assert db.list_items_for_group("billet") == []
+    db.assign_item_to_group("OIL05", "billet", assigned_by="999")  # restore
+
+    # technician entry: upsert daily quantities
+    day = db.tehran_today()
+    e1 = db.upsert_site_stock_entry(
+        bale_user_id="1001",
+        tundish_group="slab",
+        item_id="ACID01",
+        quantity=12.5,
+        item_name_snapshot="ACID01 - اسید سولفوریک",
+    )
+    assert e1["entry_date"] == day
+    assert float(e1["quantity"]) == 12.5
+    # re-entry same day upserts
+    e1b = db.upsert_site_stock_entry(
+        bale_user_id="1001",
+        tundish_group="slab",
+        item_id="ACID01",
+        quantity=15,
+    )
+    assert float(e1b["quantity"]) == 15.0
+    same_day = db.list_site_stock_entries(entry_date=day, tundish_group="slab", item_id="ACID01")
+    assert len(same_day) == 1
+
+    db.upsert_site_stock_entry(
+        bale_user_id="1001", tundish_group="slab", item_id="CAUST02", quantity=3
+    )
+    db.upsert_site_stock_entry(
+        bale_user_id="1001", tundish_group="bloom", item_id="CL04", quantity=7
+    )
+    db.upsert_site_stock_entry(
+        bale_user_id="1001", tundish_group="billet", item_id="OIL05", quantity=100
+    )
+    assert len(db.list_site_stock_entries(entry_date=day)) == 4
+
+    # site stock as remaining source
+    rem_rows = db.site_stock_as_remaining_rows(day)
+    rem_site = remaining(pd.DataFrame(rem_rows))
+    assert not rem_site.empty
+    names = set(rem_site["material_name"].astype(str))
+    assert any("اسید" in n or "ACID01" in n for n in names)
+
+    # tables exist
+    with db.connect() as conn:
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    assert "catalog_items" in tables
+    assert "catalog_group_assignments" in tables
+    assert "site_stock_entries" in tables
+
+    print("SMOKE OK CRITICAL_DAYS=", CRITICAL_DAYS, "site_stock_date=", day)
     return 0
 
 

@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from config import ADMIN_ROLES, FILE_TYPES, FULL_DATA_ROLES, ROLES
+from config import ADMIN_ROLES, CATALOG_ADMIN_ROLES, FILE_TYPES, FULL_DATA_ROLES, ROLES
 from db.models import Database
 
 
@@ -36,6 +36,12 @@ def require_manager(user: dict | None) -> bool:
 
 def require_owner(user: dict | None) -> bool:
     return bool(user and user.get("active") and user.get("role") == "owner")
+
+
+
+def can_configure_catalog(user: dict | None) -> bool:
+    """Owner / manager / responsible_officer may assign catalog items to groups."""
+    return bool(user and user.get("active") and user.get("role") in CATALOG_ADMIN_ROLES)
 
 
 def role_label(role: str) -> str:

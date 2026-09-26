@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Generator, Iterable, Optional
 
-from config import DATABASE_PATH, DEFAULT_CATEGORY_CODES, ROLES, ensure_dirs
+from config import DATABASE_PATH, DEFAULT_CATEGORY_CODES, ROLES, SITE_STOCK_GROUP_KEYS, ensure_dirs
 
 
 def _utcnow() -> str:
@@ -93,6 +93,43 @@ class Database:
                     created_by TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS catalog_items (
+                    id TEXT PRIMARY KEY,
+                    name_desc TEXT NOT NULL,
+                    category_code TEXT,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS catalog_group_assignments (
+                    item_id TEXT NOT NULL PRIMARY KEY,
+                    tundish_group TEXT NOT NULL
+                        CHECK(tundish_group IN ('slab','bloom','billet')),
+                    assigned_by TEXT,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(item_id) REFERENCES catalog_items(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS site_stock_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bale_user_id TEXT NOT NULL,
+                    tundish_group TEXT NOT NULL
+                        CHECK(tundish_group IN ('slab','bloom','billet')),
+                    item_id TEXT NOT NULL,
+                    item_name_snapshot TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    pallet_qty REAL,
+                    unit_qty REAL,
+                    quantity_detail TEXT,
+                    entry_date TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    session_id INTEGER,
+                    UNIQUE(entry_date, tundish_group, item_id),
+                    FOREIGN KEY(item_id) REFERENCES catalog_items(id),
+                    FOREIGN KEY(session_id) REFERENCES upload_sessions(id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_users_bale ON users(bale_user_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_user ON upload_sessions(bale_user_id);
                 CREATE INDEX IF NOT EXISTS idx_extracted_user_type
@@ -101,6 +138,14 @@ class Database:
                     ON extracted_datasets(session_id);
                 CREATE INDEX IF NOT EXISTS idx_category_codes_active
                     ON category_codes(active);
+                CREATE INDEX IF NOT EXISTS idx_catalog_items_active
+                    ON catalog_items(active);
+                CREATE INDEX IF NOT EXISTS idx_catalog_assign_group
+                    ON catalog_group_assignments(tundish_group);
+                CREATE INDEX IF NOT EXISTS idx_site_stock_date_group
+                    ON site_stock_entries(entry_date, tundish_group);
+                CREATE INDEX IF NOT EXISTS idx_site_stock_item
+                    ON site_stock_entries(item_id, entry_date);
                 """
             )
             self._migrate_users_role_check(conn)
@@ -530,3 +575,409 @@ class Database:
                 self.set_role(admin_bale_user_id, "owner")
             return
         self.upsert_user(admin_bale_user_id, role="owner", display_name=display_name)
+
+
+    # --- catalog items (site stock master list) ---
+    def upsert_catalog_item(
+        self,
+        item_id: str,
+        name_desc: str,
+        category_code: str | None = None,
+        active: bool = True,
+    ) -> dict[str, Any]:
+        iid = str(item_id).strip()
+        if not iid:
+            raise ValueError("شناسه کالا خالی است.")
+        name = (name_desc or "").strip() or iid
+        now = _utcnow()
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT id FROM catalog_items WHERE id = ?", (iid,)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE catalog_items
+                    SET name_desc = ?,
+                        category_code = COALESCE(?, category_code),
+                        active = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (name, category_code, 1 if active else 0, now, iid),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO catalog_items
+                    (id, name_desc, category_code, active, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (iid, name, category_code, 1 if active else 0, now, now),
+                )
+        return self.get_catalog_item(iid)  # type: ignore[return-value]
+
+    def get_catalog_item(self, item_id: str) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM catalog_items WHERE id = ?", (str(item_id).strip(),)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_catalog_items(self, active_only: bool = True) -> list[dict[str, Any]]:
+        q = "SELECT * FROM catalog_items"
+        if active_only:
+            q += " WHERE active = 1"
+        q += " ORDER BY name_desc COLLATE NOCASE, id"
+        with self.connect() as conn:
+            return [dict(r) for r in conn.execute(q).fetchall()]
+
+    def deactivate_catalog_item(self, item_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE catalog_items SET active = 0, updated_at = ? WHERE id = ?",
+                (_utcnow(), str(item_id).strip()),
+            )
+
+    def seed_catalog_from_inventory_extract(
+        self,
+        clean_path: str | Path,
+        *,
+        only_missing: bool = True,
+    ) -> dict[str, int]:
+        """Seed catalog_items from a cleaned product_inventory Excel.
+
+        Returns counts: inserted / updated / skipped / total_rows.
+        """
+        import pandas as pd
+
+        path = Path(clean_path)
+        if not path.exists():
+            raise FileNotFoundError(f"فایل موجودی یافت نشد: {path}")
+        df = pd.read_excel(path, engine="openpyxl")
+        if df is None or df.empty:
+            return {"inserted": 0, "updated": 0, "skipped": 0, "total_rows": 0}
+        cols = {str(c).strip().lower(): c for c in df.columns}
+        id_col = cols.get("id")
+        name_col = (
+            cols.get("item_code_desc")
+            or cols.get("product_name")
+            or cols.get("name_desc")
+            or cols.get("material_name")
+        )
+        cat_col = cols.get("category_code")
+        if not id_col:
+            raise ValueError("ستون id در فایل تمیز موجودی یافت نشد.")
+        inserted = updated = skipped = 0
+        for _, row in df.iterrows():
+            raw_id = row.get(id_col)
+            if raw_id is None or (isinstance(raw_id, float) and pd.isna(raw_id)):
+                skipped += 1
+                continue
+            iid = str(raw_id).strip()
+            if not iid or iid.lower() == "nan":
+                skipped += 1
+                continue
+            name = ""
+            if name_col is not None:
+                val = row.get(name_col)
+                if val is not None and not (isinstance(val, float) and pd.isna(val)):
+                    name = str(val).strip()
+            if not name:
+                name = iid
+            cat = None
+            if cat_col is not None:
+                cval = row.get(cat_col)
+                if cval is not None and not (isinstance(cval, float) and pd.isna(cval)):
+                    cat = str(cval).strip()
+                    if cat.endswith(".0") and cat[:-2].isdigit():
+                        cat = cat[:-2]
+            existing = self.get_catalog_item(iid)
+            if existing and only_missing:
+                skipped += 1
+                continue
+            before = existing
+            self.upsert_catalog_item(iid, name, category_code=cat, active=True)
+            if before:
+                updated += 1
+            else:
+                inserted += 1
+        return {
+            "inserted": inserted,
+            "updated": updated,
+            "skipped": skipped,
+            "total_rows": int(len(df)),
+        }
+
+    def seed_catalog_from_latest_warehouse(
+        self, bale_user_id: str | int | None = None
+    ) -> dict[str, Any]:
+        """Seed from the newest product_inventory extract (any user if uid omitted)."""
+        with self.connect() as conn:
+            if bale_user_id is not None:
+                row = conn.execute(
+                    """
+                    SELECT * FROM extracted_datasets
+                    WHERE file_type = 'product_inventory' AND bale_user_id = ?
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (str(bale_user_id),),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT * FROM extracted_datasets
+                    WHERE file_type = 'product_inventory'
+                    ORDER BY id DESC LIMIT 1
+                    """
+                ).fetchone()
+        if not row:
+            return {"ok": False, "error": "هیچ استخراج موجودی انباری یافت نشد.", "counts": {}}
+        extract = dict(row)
+        counts = self.seed_catalog_from_inventory_extract(extract["clean_path"])
+        return {"ok": True, "extract": extract, "counts": counts}
+
+    # --- catalog group assignments ---
+    def assign_item_to_group(
+        self,
+        item_id: str,
+        tundish_group: str,
+        assigned_by: str | int | None = None,
+    ) -> dict[str, Any]:
+        group = (tundish_group or "").strip().lower()
+        if group not in SITE_STOCK_GROUP_KEYS:
+            raise ValueError("گروه نامعتبر. یکی از: slab / bloom / billet")
+        iid = str(item_id).strip()
+        item = self.get_catalog_item(iid)
+        if not item or not item.get("active"):
+            raise KeyError("کالا در کاتالوگ یافت نشد یا غیرفعال است.")
+        now = _utcnow()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO catalog_group_assignments
+                    (item_id, tundish_group, assigned_by, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(item_id) DO UPDATE SET
+                    tundish_group = excluded.tundish_group,
+                    assigned_by = excluded.assigned_by,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    iid,
+                    group,
+                    str(assigned_by) if assigned_by is not None else None,
+                    now,
+                ),
+            )
+        return self.get_item_assignment(iid)  # type: ignore[return-value]
+
+    def unassign_item(self, item_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "DELETE FROM catalog_group_assignments WHERE item_id = ?",
+                (str(item_id).strip(),),
+            )
+
+    def get_item_assignment(self, item_id: str) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT a.*, c.name_desc, c.category_code, c.active AS item_active
+                FROM catalog_group_assignments a
+                JOIN catalog_items c ON c.id = a.item_id
+                WHERE a.item_id = ?
+                """,
+                (str(item_id).strip(),),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_items_for_group(
+        self, tundish_group: str, active_only: bool = True
+    ) -> list[dict[str, Any]]:
+        group = (tundish_group or "").strip().lower()
+        if group not in SITE_STOCK_GROUP_KEYS:
+            raise ValueError("گروه نامعتبر.")
+        q = """
+            SELECT c.id, c.name_desc, c.category_code, c.active,
+                   a.tundish_group, a.assigned_by, a.updated_at AS assigned_at
+            FROM catalog_group_assignments a
+            JOIN catalog_items c ON c.id = a.item_id
+            WHERE a.tundish_group = ?
+        """
+        if active_only:
+            q += " AND c.active = 1"
+        q += " ORDER BY c.name_desc COLLATE NOCASE, c.id"
+        with self.connect() as conn:
+            return [dict(r) for r in conn.execute(q, (group,)).fetchall()]
+
+    def list_catalog_with_assignments(
+        self, active_only: bool = True
+    ) -> list[dict[str, Any]]:
+        q = """
+            SELECT c.id, c.name_desc, c.category_code, c.active,
+                   a.tundish_group, a.assigned_by, a.updated_at AS assigned_at
+            FROM catalog_items c
+            LEFT JOIN catalog_group_assignments a ON a.item_id = c.id
+        """
+        if active_only:
+            q += " WHERE c.active = 1"
+        q += " ORDER BY (a.tundish_group IS NULL) DESC, a.tundish_group, c.name_desc COLLATE NOCASE, c.id"
+        with self.connect() as conn:
+            return [dict(r) for r in conn.execute(q).fetchall()]
+
+    def list_unassigned_catalog_items(
+        self, active_only: bool = True
+    ) -> list[dict[str, Any]]:
+        q = """
+            SELECT c.*
+            FROM catalog_items c
+            LEFT JOIN catalog_group_assignments a ON a.item_id = c.id
+            WHERE a.item_id IS NULL
+        """
+        if active_only:
+            q += " AND c.active = 1"
+        q += " ORDER BY c.name_desc COLLATE NOCASE, c.id"
+        with self.connect() as conn:
+            return [dict(r) for r in conn.execute(q).fetchall()]
+
+    # --- site stock daily entries ---
+    @staticmethod
+    def tehran_today() -> str:
+        """Asia/Tehran calendar date as YYYY-MM-DD."""
+        try:
+            from zoneinfo import ZoneInfo
+
+            return datetime.now(ZoneInfo("Asia/Tehran")).date().isoformat()
+        except Exception:
+            # fallback: use local date (box is configured Asia/Tehran)
+            return datetime.now().date().isoformat()
+
+    def upsert_site_stock_entry(
+        self,
+        *,
+        bale_user_id: str | int,
+        tundish_group: str,
+        item_id: str,
+        quantity: float,
+        item_name_snapshot: str | None = None,
+        pallet_qty: float | None = None,
+        unit_qty: float | None = None,
+        quantity_detail: dict | list | None = None,
+        entry_date: str | None = None,
+        session_id: int | None = None,
+    ) -> dict[str, Any]:
+        group = (tundish_group or "").strip().lower()
+        if group not in SITE_STOCK_GROUP_KEYS:
+            raise ValueError("گروه نامعتبر.")
+        iid = str(item_id).strip()
+        item = self.get_catalog_item(iid)
+        if not item:
+            raise KeyError("کالا در کاتالوگ یافت نشد.")
+        name = (item_name_snapshot or item.get("name_desc") or iid).strip()
+        try:
+            qty = float(quantity)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("مقدار باید عدد باشد.") from exc
+        day = (entry_date or self.tehran_today()).strip()
+        detail_json = (
+            json.dumps(quantity_detail, ensure_ascii=False)
+            if quantity_detail is not None
+            else None
+        )
+        now = _utcnow()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO site_stock_entries
+                    (bale_user_id, tundish_group, item_id, item_name_snapshot,
+                     quantity, pallet_qty, unit_qty, quantity_detail,
+                     entry_date, created_at, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entry_date, tundish_group, item_id) DO UPDATE SET
+                    bale_user_id = excluded.bale_user_id,
+                    item_name_snapshot = excluded.item_name_snapshot,
+                    quantity = excluded.quantity,
+                    pallet_qty = excluded.pallet_qty,
+                    unit_qty = excluded.unit_qty,
+                    quantity_detail = excluded.quantity_detail,
+                    created_at = excluded.created_at,
+                    session_id = COALESCE(excluded.session_id, site_stock_entries.session_id)
+                """,
+                (
+                    str(bale_user_id),
+                    group,
+                    iid,
+                    name,
+                    qty,
+                    pallet_qty,
+                    unit_qty,
+                    detail_json,
+                    day,
+                    now,
+                    session_id,
+                ),
+            )
+            row = conn.execute(
+                """
+                SELECT * FROM site_stock_entries
+                WHERE entry_date = ? AND tundish_group = ? AND item_id = ?
+                """,
+                (day, group, iid),
+            ).fetchone()
+        return dict(row) if row else {}
+
+    def list_site_stock_entries(
+        self,
+        *,
+        entry_date: str | None = None,
+        tundish_group: str | None = None,
+        item_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if entry_date:
+            clauses.append("entry_date = ?")
+            params.append(entry_date)
+        if tundish_group:
+            group = tundish_group.strip().lower()
+            if group not in SITE_STOCK_GROUP_KEYS:
+                raise ValueError("گروه نامعتبر.")
+            clauses.append("tundish_group = ?")
+            params.append(group)
+        if item_id:
+            clauses.append("item_id = ?")
+            params.append(str(item_id).strip())
+        q = "SELECT * FROM site_stock_entries"
+        if clauses:
+            q += " WHERE " + " AND ".join(clauses)
+        q += " ORDER BY tundish_group, item_name_snapshot, item_id"
+        with self.connect() as conn:
+            return [dict(r) for r in conn.execute(q, params).fetchall()]
+
+    def get_latest_site_stock_date(self) -> Optional[str]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT entry_date FROM site_stock_entries ORDER BY entry_date DESC LIMIT 1"
+            ).fetchone()
+            return row["entry_date"] if row else None
+
+    def site_stock_as_remaining_rows(
+        self, entry_date: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Rows compatible with analytics.remaining() input (product_name/quantity)."""
+        day = entry_date or self.get_latest_site_stock_date()
+        if not day:
+            return []
+        entries = self.list_site_stock_entries(entry_date=day)
+        return [
+            {
+                "product_name": e.get("item_name_snapshot") or e["item_id"],
+                "quantity": e["quantity"],
+                "id": e["item_id"],
+                "location": e["tundish_group"],
+                "unit": None,
+            }
+            for e in entries
+        ]
+

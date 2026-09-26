@@ -22,6 +22,7 @@ from analytics.tundish import (
     surplus_materials,
 )
 from auth.rbac import (
+    can_configure_catalog,
     can_generate_report,
     ensure_registered,
     require_manager,
@@ -30,7 +31,7 @@ from auth.rbac import (
 )
 from bot import keyboards as kb
 from bot.bale_api import BaleClient
-from config import CRITICAL_DAYS, FILE_TYPES, ROLES, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
+from config import CRITICAL_DAYS, FILE_TYPES, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
 from db.models import Database
 from excel.processor import ExcelValidationError, extract_and_save_clean, process_session_files
 from pdf.generator import generate_report
@@ -39,46 +40,42 @@ logger = logging.getLogger(__name__)
 
 HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 
-این بازو به‌صورت درخواست‌محور کار می‌کند:
-۱) از منو نوع فایل را انتخاب کنید
-۲) فایل Excel مربوطه (.xlsx) را پیوست کنید
-۳) همین کار را برای هر سه نوع انجام دهید
-۴) دکمه «تولید گزارش PDF» را بزنید
-۵) از «گزارش‌ها / تحلیل تاندیش» برای مصرف روزانه، پیشنهاد درخواست، گزارش بازه‌ای، مواد بحرانی، مواد مازاد و پیش‌بینی استفاده کنید
+جریان اصلی:
+۱) موجودی انبار و مصرف ماهیانه را از منو با Excel (.xlsx) بفرستید
+۲) «موجودی روزانه سایت» را به‌صورت تعاملی وارد کنید (نه Excel تکنسین)
+۳) دکمه «تولید گزارش PDF» یا «گزارش‌ها / تحلیل تاندیش» را بزنید
 
-انواع فایل:
+موجودی روزانه سایت (ورود تعاملی در SQLite):
+• سه بخش: موجودی مواد اسلب / بلوم / بیلت
+• ربات اقلام تخصیص‌یافته به هر گروه را نشان می‌دهد؛ مقدار را یکی‌یکی بفرستید
+• داده در جدول site_stock_entries ذخیره می‌شود (upsert روزانه)
+
+تنظیمات اقلام سایت / تخصیص به گروه (مالک، مدیر، کاردان مسئول — نه تکنسین):
+• همگام‌سازی اقلام از آخرین استخراج موجودی انبار
+• تخصیص هر قلم به اسلب یا بلوم یا بیلت
+
+انواع فایل Excel:
 • موجودی انبار — ۳ ستون: کد دسته بندی، کد و شرح کالا، موجودی
-  (شناسه از «کد و شرح کالا» استخراج می‌شود؛ فقط دسته‌های مجاز در پایگاه‌داده نگه داشته می‌شوند؛ اولویت ۰ حذف می‌شود)
 • مصرف ماهیانه مواد
-• موجودی روزانه سایت (فیلدهای تاندیش برای تحلیل حفظ شده‌اند)
 
-منوی موجودی انبار:
-• ورود فایل اکسل
-• اضافه کردن کد دسته بندی (دقیقاً ۴ رقم)
-
-تحلیل (نیاز به فایل مرتبط):
-• مصرف روزانه — موجودی روزانه سایت (ماهانه اختیاری)
-• پیشنهاد درخواست = max(0, نیاز پیش‌بینی − موجودی)
-• گزارش بازه‌ای — امروز / ۷ روز / ۳۰ روز یا «از YYYY-MM-DD تا YYYY-MM-DD»
-• مواد بحرانی — پوشش کمتر از CRITICAL_DAYS={critical} روز
-• مواد مازاد — پوشش > max(CRITICAL_DAYS×3، {surplus_cover}) روز یا موجودی بیش از نیاز {surplus_forecast} روز؛ بدون مصرف = مازاد/بدون مصرف
-• پیش‌بینی = میانگین روزانه × تعداد روز بازه
+تحلیل:
+• مصرف روزانه / بازه‌ای / پیشنهاد / بحرانی / مازاد / پیش‌بینی
+• مواد بحرانی — پوشش < CRITICAL_DAYS={critical} روز
+• اگر موجودی روزانه سایت ثبت شده باشد، برای «موجودی و مواد بحرانی» به‌عنوان منبع باقیمانده سایت استفاده می‌شود
 
 نقش‌ها:
-• مالک / مدیر — همه ردیف‌ها + مدیریت کاربران
-• کاردان مسئول — فیلتر حوزه/تخصیص روی فایل‌های دارای domain؛ موجودی انبار بدون domain برای همه کاربران مجاز قابل مشاهده است
-• تکنسین — فقط ورود «موجودی روزانه سایت» فعال است و سایر منوها/گزارش‌ها دسترسی ندارند
+• مالک / مدیر — همه ردیف‌ها + مدیریت کاربران + تنظیمات اقلام
+• کاردان مسئول — فیلتر حوزه + تنظیمات اقلام سایت
+• تکنسین — فقط ورود موجودی روزانه سایت (سه گروه)؛ بدون تنظیمات/گزارش
 
 دستورات مدیر:
 /users
 /adduser <bale_id> <role> [scope] [name...]
 /setrole <bale_id> <role>
 /setscope <bale_id> <scope>
-/reset — پاک کردن جلسه آپلود جاری
+/reset — پاک کردن جلسه آپلود و وضعیت ورود جاری
 """.format(
     critical=int(CRITICAL_DAYS) if CRITICAL_DAYS == int(CRITICAL_DAYS) else CRITICAL_DAYS,
-    surplus_cover=int(SURPLUS_COVER_DAYS) if SURPLUS_COVER_DAYS == int(SURPLUS_COVER_DAYS) else SURPLUS_COVER_DAYS,
-    surplus_forecast=int(SURPLUS_FORECAST_DAYS) if SURPLUS_FORECAST_DAYS == int(SURPLUS_FORECAST_DAYS) else SURPLUS_FORECAST_DAYS,
 )
 
 
@@ -91,6 +88,10 @@ class BotApp:
         self._analysis_tundish_filter: dict[str, str | None] = {}
         # awaiting plain text for category code entry
         self._await_category_code: set[str] = set()
+        # site stock interactive entry: uid -> {group, items, index, values}
+        self._site_stock_pending: dict[str, dict[str, Any]] = {}
+        # catalog assignment: uid -> {item_id} while choosing group
+        self._catalog_assign_pending: dict[str, dict[str, Any]] = {}
         ensure_dirs()
 
     # ---------- helpers ----------
@@ -126,6 +127,8 @@ class BotApp:
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(uid)
         self._await_category_code.discard(uid)
+        self._site_stock_pending.pop(uid, None)
+        self._catalog_assign_pending.pop(uid, None)
         self._reply(
             message,
             "دسترسی ندارید؛ فقط ورود موجودی روزانه سایت برای نقش تکنسین فعال است.",
@@ -211,12 +214,13 @@ class BotApp:
             f"حوزه: {user.get('scope') or '—'}\n\n"
             + (
                 "برای نقش تکنسین فقط ورود «موجودی روزانه سایت» فعال است.\n"
-                "فایل Excel موجودی روزانه سایت را از منو انتخاب و ارسال کنید."
+                "از منو یکی از گروه‌های اسلب / بلوم / بیلت را انتخاب و مقادیر را یکی‌یکی بفرستید."
                 if user.get('role') == 'technician'
                 else
                 "از منو: موجودی انبار / مصرف ماهیانه / موجودی روزانه سایت را انتخاب کنید.\n"
-                "برای موجودی انبار ابتدا کدهای دسته بندی ۴ رقمی را اضافه کنید، سپس Excel بفرستید.\n"
-                "از «گزارش‌ها / تحلیل تاندیش» برای تحلیل‌ها و گزارش مواد مازاد استفاده کنید."
+                "موجودی روزانه سایت تعاملی است (سه گروه اسلب/بلوم/بیلت).\n"
+                "از «تنظیمات اقلام سایت / تخصیص به گروه» اقلام را به گروه تخصیص دهید.\n"
+                "از «گزارش‌ها / تحلیل تاندیش» برای تحلیل‌ها استفاده کنید."
             )
         )
         self._reply(message, text, kb.main_menu(user))
@@ -347,18 +351,21 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        self._clear_analysis_pending(user["bale_user_id"])
-        self._analysis_tundish_filter.pop(str(user["bale_user_id"]), None)
-        self._await_category_code.discard(str(user["bale_user_id"]))
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._analysis_tundish_filter.pop(uid, None)
+        self._await_category_code.discard(uid)
+        self._site_stock_pending.pop(uid, None)
+        self._catalog_assign_pending.pop(uid, None)
         self.db.reset_session(user["bale_user_id"])
-        self._reply(message, "جلسه آپلود پاک شد. از منو دوباره شروع کنید.", kb.main_menu(user))
+        self._reply(message, "جلسه آپلود و وضعیت ورود جاری پاک شد. از منو دوباره شروع کنید.", kb.main_menu(user))
 
     # ---------- request-driven flow ----------
     def on_pick_file_type(self, message: dict, file_type: str) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
-        if user.get("role") == "technician" and file_type != "tank_consumption":
+        if user.get("role") == "technician":
             self._deny_technician(message, user)
             return
         self._clear_analysis_pending(user["bale_user_id"])
@@ -395,7 +402,7 @@ class BotApp:
             return
         session = self.db.get_or_create_session(user["bale_user_id"])
         pending = session.get("pending_file_type")
-        if user.get("role") == "technician" and pending != "tank_consumption":
+        if user.get("role") == "technician":
             if pending:
                 self.db.set_pending_file_type(user["bale_user_id"], None)
             self._deny_technician(message, user)
@@ -476,6 +483,19 @@ class BotApp:
             columns=result.columns,
         )
 
+        catalog_note = ""
+        if pending == "product_inventory":
+            try:
+                counts = self.db.seed_catalog_from_inventory_extract(
+                    result.clean_path, only_missing=True
+                )
+                catalog_note = (
+                    f"\nکاتالوگ اقلام سایت: +{counts.get('inserted', 0)} قلم جدید "
+                    f"(ردشده/موجود={counts.get('skipped', 0)})."
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("catalog seed after inventory failed: %s", exc)
+
         label = FILE_TYPES[pending]["label_fa"]
         reasons = result.drop_reasons or {}
         if pending == "product_inventory" and reasons:
@@ -503,7 +523,7 @@ class BotApp:
             (
                 f"✅ فایل «{label}» دریافت شد.\n"
                 f"از {result.raw_row_count} ردیف خام، {result.kept_row_count} ردیف نگه داشته شد."
-                f"{dropped_note}{extra_cols_note}\n"
+                f"{dropped_note}{extra_cols_note}{catalog_note}\n"
                 f"نسخه تمیز ذخیره و در پایگاه‌داده ثبت شد.\n\n"
             )
             + self._status_text(session),
@@ -760,9 +780,9 @@ class BotApp:
             return
         _, frames, _ = loaded
         rates = daily_rates(frames.get("tank_consumption"), frames.get("monthly_consumption"))
-        rem = remaining(frames.get("product_inventory"))
+        rem, rem_source = self._resolve_remaining(frames)
         crit = critical_materials(rates, rem, CRITICAL_DAYS)
-        lines = ["📦 موجودی باقیمانده:", ""]
+        lines = [f"📦 موجودی باقیمانده ({rem_source}):", ""]
         if rem.empty:
             lines.append("موجودی خالی است.")
         else:
@@ -990,6 +1010,400 @@ class BotApp:
             logger.exception("analytics pdf failed")
             self._reply(message, f"خطا در تولید PDF: {exc}", kb.analytics_menu())
 
+
+    def _resolve_remaining(self, frames: dict) -> tuple[Any, str]:
+        """Prefer today's (or latest) site_stock_entries; else warehouse inventory."""
+        import pandas as pd
+
+        rows = self.db.site_stock_as_remaining_rows()
+        if rows:
+            day = self.db.get_latest_site_stock_date() or "—"
+            rem = remaining(pd.DataFrame(rows))
+            return rem, f"موجودی روزانه سایت — {day}"
+        rem = remaining(frames.get("product_inventory"))
+        return rem, "موجودی انبار"
+
+    def _clear_site_stock_pending(self, uid: str) -> None:
+        self._site_stock_pending.pop(str(uid), None)
+
+    def _clear_catalog_pending(self, uid: str) -> None:
+        self._catalog_assign_pending.pop(str(uid), None)
+
+    # ---------- موجودی روزانه سایت (interactive) ----------
+    def on_site_stock_menu(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._await_category_code.discard(uid)
+        self._clear_site_stock_pending(uid)
+        self._clear_catalog_pending(uid)
+        self.db.set_pending_file_type(user["bale_user_id"], None)
+        self._reply(
+            message,
+            "موجودی روزانه سایت\n"
+            "یکی از گروه‌های زیر را انتخاب کنید؛ سپس مقادیر اقلام را یکی‌یکی بفرستید.\n"
+            f"تاریخ ورود (تهران): {self.db.tehran_today()}",
+            kb.site_stock_menu(),
+        )
+
+    def on_site_stock_group(self, message: dict, group_key: str) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        group_key = (group_key or "").strip().lower()
+        label = SITE_STOCK_GROUPS.get(group_key)
+        if not label:
+            self._reply(message, "گروه نامعتبر.", kb.site_stock_menu())
+            return
+        items = self.db.list_items_for_group(group_key, active_only=True)
+        if not items:
+            self._reply(
+                message,
+                f"هیچ قلمی به «{label}» تخصیص داده نشده است.\n"
+                + (
+                    "از منوی «تنظیمات اقلام سایت / تخصیص به گروه» اقلام را تخصیص دهید."
+                    if can_configure_catalog(user)
+                    else "با مدیر یا کاردان مسئول برای تخصیص اقلام تماس بگیرید."
+                ),
+                kb.site_stock_menu(),
+            )
+            return
+        uid = str(user["bale_user_id"])
+        self._site_stock_pending[uid] = {
+            "group": group_key,
+            "items": items,
+            "index": 0,
+            "values": {},  # item_id -> quantity
+        }
+        lines = [f"📋 {label} — اقلام تخصیص‌یافته ({len(items)}):", ""]
+        lines.append("نام و شرح کالا")
+        lines.append("─" * 12)
+        for i, it in enumerate(items, 1):
+            lines.append(f"{i}. {it.get('name_desc') or it['id']}")
+        lines.append("")
+        lines.append("حالا مقدار هر قلم را به‌صورت عدد بفرستید.")
+        self._reply(message, "\n".join(lines), kb.site_stock_entry_menu())
+        self._prompt_site_stock_item(message, user)
+
+    def _prompt_site_stock_item(self, message: dict, user: dict) -> None:
+        uid = str(user["bale_user_id"])
+        pending = self._site_stock_pending.get(uid)
+        if not pending:
+            return
+        items = pending["items"]
+        idx = pending["index"]
+        if idx >= len(items):
+            self._finish_site_stock_entry(message, user)
+            return
+        item = items[idx]
+        label = SITE_STOCK_GROUPS.get(pending["group"], pending["group"])
+        self._reply(
+            message,
+            f"قلم {idx + 1} از {len(items)} — {label}\n"
+            f"نام: {item.get('name_desc') or item['id']}\n"
+            f"شناسه: {item['id']}\n"
+            "مقدار عددی را بفرستید "
+            f"(یا «{kb.BTN_SITE_SKIP}» برای رد کردن).",
+            kb.site_stock_entry_menu(),
+        )
+
+    def on_site_stock_quantity_text(self, message: dict, text: str) -> bool:
+        """Consume numeric quantity while site-stock entry is pending."""
+        uid = str(self._uid(message))
+        pending = self._site_stock_pending.get(uid)
+        if not pending:
+            return False
+        user = self._user_or_deny(message)
+        if not user:
+            self._clear_site_stock_pending(uid)
+            return True
+        raw = (text or "").strip().replace(",", "٫").replace("٫", ".")
+        # Persian digits → English
+        trans = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+        raw = raw.translate(trans)
+        try:
+            qty = float(raw)
+        except ValueError:
+            self._reply(
+                message,
+                "لطفاً فقط یک عدد بفرستید (مثال: 12 یا 3.5).",
+                kb.site_stock_entry_menu(),
+            )
+            return True
+        items = pending["items"]
+        idx = pending["index"]
+        if idx >= len(items):
+            self._finish_site_stock_entry(message, user)
+            return True
+        item = items[idx]
+        try:
+            self.db.upsert_site_stock_entry(
+                bale_user_id=user["bale_user_id"],
+                tundish_group=pending["group"],
+                item_id=item["id"],
+                quantity=qty,
+                item_name_snapshot=item.get("name_desc"),
+            )
+        except (ValueError, KeyError) as exc:
+            self._reply(message, f"خطا در ذخیره: {exc}", kb.site_stock_entry_menu())
+            return True
+        pending["values"][item["id"]] = qty
+        pending["index"] = idx + 1
+        if pending["index"] >= len(items):
+            self._finish_site_stock_entry(message, user)
+        else:
+            self._prompt_site_stock_item(message, user)
+        return True
+
+    def on_site_stock_skip(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        pending = self._site_stock_pending.get(uid)
+        if not pending:
+            self._reply(message, "ورود موجودی فعالی نیست.", kb.site_stock_menu())
+            return
+        pending["index"] = pending["index"] + 1
+        if pending["index"] >= len(pending["items"]):
+            self._finish_site_stock_entry(message, user)
+        else:
+            self._prompt_site_stock_item(message, user)
+
+    def on_site_stock_cancel(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        self._clear_site_stock_pending(str(user["bale_user_id"]))
+        self._reply(message, "ورود موجودی لغو شد.", kb.site_stock_menu())
+
+    def _finish_site_stock_entry(self, message: dict, user: dict) -> None:
+        uid = str(user["bale_user_id"])
+        pending = self._site_stock_pending.pop(uid, None)
+        if not pending:
+            self._reply(message, "ورود تمام شد.", kb.site_stock_menu())
+            return
+        group = pending["group"]
+        label = SITE_STOCK_GROUPS.get(group, group)
+        day = self.db.tehran_today()
+        values = pending.get("values") or {}
+        lines = [
+            f"✅ ثبت موجودی «{label}» برای تاریخ {day}",
+            f"تعداد اقلام ثبت‌شده: {len(values)} از {len(pending['items'])}",
+            "",
+        ]
+        if values:
+            id_to_name = {it["id"]: it.get("name_desc") or it["id"] for it in pending["items"]}
+            for iid, qty in values.items():
+                lines.append(f"• {id_to_name.get(iid, iid)}: {qty:g}")
+        else:
+            lines.append("(هیچ مقداری ثبت نشد)")
+        lines.append("")
+        lines.append("داده‌ها در پایگاه‌داده ذخیره شدند.")
+        self._reply(message, "\n".join(lines), kb.site_stock_menu())
+
+    # ---------- تنظیمات اقلام سایت / تخصیص ----------
+    def _deny_catalog_settings(self, message: dict, user: dict) -> bool:
+        if can_configure_catalog(user):
+            return False
+        if user.get("role") == "technician":
+            self._deny_technician(message, user)
+        else:
+            self._reply(
+                message,
+                "دسترسی تنظیمات اقلام سایت فقط برای مالک، مدیر و کاردان مسئول است.",
+                kb.main_menu(user),
+            )
+        return True
+
+    def on_catalog_settings_menu(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_catalog_settings(message, user):
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._clear_site_stock_pending(uid)
+        self._clear_catalog_pending(uid)
+        self._await_category_code.discard(uid)
+        total = len(self.db.list_catalog_items(active_only=True))
+        unassigned = len(self.db.list_unassigned_catalog_items(active_only=True))
+        self._reply(
+            message,
+            "⚙️ تنظیمات اقلام سایت / تخصیص به گروه\n"
+            f"اقلام فعال کاتالوگ: {total} | بدون گروه: {unassigned}\n"
+            "ابتدا در صورت نیاز از موجودی انبار همگام‌سازی کنید، سپس اقلام را به اسلب/بلوم/بیلت تخصیص دهید.",
+            kb.catalog_settings_menu(),
+        )
+
+    def on_catalog_seed(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_catalog_settings(message, user):
+            return
+        result = self.db.seed_catalog_from_latest_warehouse()
+        if not result.get("ok"):
+            self._reply(
+                message,
+                result.get("error")
+                or "همگام‌سازی ناموفق. ابتدا فایل موجودی انبار را آپلود کنید.",
+                kb.catalog_settings_menu(),
+            )
+            return
+        counts = result["counts"]
+        extract = result["extract"]
+        self._reply(
+            message,
+            "✅ همگام‌سازی کاتالوگ از آخرین موجودی انبار انجام شد.\n"
+            f"ردیف‌های فایل: {counts.get('total_rows', 0)}\n"
+            f"افزوده: {counts.get('inserted', 0)} | به‌روز: {counts.get('updated', 0)} | "
+            f"ردشده/موجود: {counts.get('skipped', 0)}\n"
+            f"منبع: extract#{extract.get('id')} ({extract.get('row_count')} ردیف تمیز)",
+            kb.catalog_settings_menu(),
+        )
+
+    def on_catalog_list(self, message: dict, unassigned_only: bool = False) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_catalog_settings(message, user):
+            return
+        if unassigned_only:
+            rows = self.db.list_unassigned_catalog_items(active_only=True)
+            title = "📭 اقلام بدون گروه"
+        else:
+            rows = self.db.list_catalog_with_assignments(active_only=True)
+            title = "📋 لیست اقلام و تخصیص‌ها"
+        if not rows:
+            self._reply(
+                message,
+                title + "\nلیست خالی است. ابتدا همگام‌سازی از موجودی انبار را بزنید.",
+                kb.catalog_settings_menu(),
+            )
+            return
+        # Show up to 40; instruct to pick by id or number
+        uid = str(user["bale_user_id"])
+        self._catalog_assign_pending[uid] = {
+            "mode": "pick",
+            "rows": rows[:80],
+            "unassigned_only": unassigned_only,
+        }
+        lines = [title, "برای تخصیص، شماره یا شناسه قلم را بفرستید.", ""]
+        for i, r in enumerate(rows[:40], 1):
+            group = r.get("tundish_group")
+            g_label = SITE_STOCK_GROUPS.get(group, "—") if group else "—"
+            lines.append(f"{i}. [{r['id']}] {r.get('name_desc') or r['id']} → {g_label}")
+        if len(rows) > 40:
+            lines.append(f"\n… و {len(rows) - 40} قلم دیگر (با شناسه دقیق بفرستید).")
+        self._reply(message, "\n".join(lines), kb.catalog_settings_menu())
+
+    def on_catalog_pick_text(self, message: dict, text: str) -> bool:
+        """While awaiting item pick for assignment."""
+        uid = str(self._uid(message))
+        pending = self._catalog_assign_pending.get(uid)
+        if not pending or pending.get("mode") != "pick":
+            return False
+        # Ignore menu buttons — let dispatcher handle them
+        menu_buttons = {
+            kb.BTN_CATALOG_SETTINGS,
+            kb.BTN_CATALOG_LIST,
+            kb.BTN_CATALOG_UNASSIGNED,
+            kb.BTN_CATALOG_SEED,
+            kb.BTN_BACK_MAIN,
+            kb.BTN_BACK_CATALOG,
+            kb.BTN_SITE_STOCK,
+            kb.BTN_HELP,
+            kb.BTN_CANCEL_PENDING,
+        }
+        if text in menu_buttons or text in kb.SITE_GROUP_BUTTONS or text in kb.ASSIGN_GROUP_BUTTONS:
+            return False
+        user = self._user_or_deny(message)
+        if not user:
+            self._clear_catalog_pending(uid)
+            return True
+        if self._deny_catalog_settings(message, user):
+            return True
+        rows = pending.get("rows") or []
+        raw = (text or "").strip()
+        trans = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+        raw_n = raw.translate(trans)
+        chosen = None
+        if raw_n.isdigit():
+            n = int(raw_n)
+            if 1 <= n <= len(rows):
+                chosen = rows[n - 1]
+        if chosen is None:
+            for r in rows:
+                if str(r["id"]).strip() == raw:
+                    chosen = r
+                    break
+        if chosen is None:
+            # try full catalog by id
+            item = self.db.get_catalog_item(raw)
+            if item and item.get("active"):
+                chosen = item
+        if chosen is None:
+            self._reply(
+                message,
+                "قلم یافت نشد. شماره لیست یا شناسه دقیق را بفرستید.",
+                kb.catalog_settings_menu(),
+            )
+            return True
+        item_id = chosen["id"]
+        self._catalog_assign_pending[uid] = {"mode": "assign", "item_id": item_id}
+        current = self.db.get_item_assignment(item_id)
+        cur_label = (
+            SITE_STOCK_GROUPS.get(current["tundish_group"], current["tundish_group"])
+            if current
+            else "—"
+        )
+        name = chosen.get("name_desc") or item_id
+        self._reply(
+            message,
+            f"قلم انتخاب شد:\n[{item_id}] {name}\nتخصیص فعلی: {cur_label}\n"
+            "گروه مقصد را انتخاب کنید:",
+            kb.catalog_assign_menu(),
+        )
+        return True
+
+    def on_catalog_assign_group(self, message: dict, group_key: str | None) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_catalog_settings(message, user):
+            return
+        uid = str(user["bale_user_id"])
+        pending = self._catalog_assign_pending.get(uid)
+        if not pending or pending.get("mode") != "assign":
+            self._reply(
+                message,
+                "ابتدا از لیست یک قلم را انتخاب کنید.",
+                kb.catalog_settings_menu(),
+            )
+            return
+        item_id = pending["item_id"]
+        try:
+            if group_key is None:
+                self.db.unassign_item(item_id)
+                msg = f"تخصیص قلم [{item_id}] حذف شد."
+            else:
+                row = self.db.assign_item_to_group(
+                    item_id, group_key, assigned_by=user["bale_user_id"]
+                )
+                label = SITE_STOCK_GROUPS.get(row["tundish_group"], row["tundish_group"])
+                msg = f"✅ قلم [{item_id}] به «{label}» تخصیص داده شد."
+        except (ValueError, KeyError) as exc:
+            self._reply(message, str(exc), kb.catalog_settings_menu())
+            self._clear_catalog_pending(uid)
+            return
+        self._clear_catalog_pending(uid)
+        self._reply(message, msg, kb.catalog_settings_menu())
+
+
     # ---------- dispatcher ----------
     def handle_message(self, message: dict) -> None:
         if not message:
@@ -1034,6 +1448,14 @@ class BotApp:
         if self.on_category_code_text(message, text):
             return
 
+        # site stock quantity entry (number while awaiting items)
+        if self.on_site_stock_quantity_text(message, text):
+            return
+
+        # catalog item pick (number/id while awaiting)
+        if self.on_catalog_pick_text(message, text):
+            return
+
         # keyboard buttons
         if text == kb.BTN_HELP:
             self.cmd_help(message)
@@ -1074,7 +1496,11 @@ class BotApp:
         if text == kb.BTN_BACK_MAIN:
             user = self._user_or_deny(message)
             if user:
-                self._clear_analysis_pending(user["bale_user_id"])
+                uid = str(user["bale_user_id"])
+                self._clear_analysis_pending(uid)
+                self._clear_site_stock_pending(uid)
+                self._clear_catalog_pending(uid)
+                self._await_category_code.discard(uid)
                 self._reply(message, "منوی اصلی:", kb.main_menu(user))
             return
         if text == kb.BTN_BACK_ANALYTICS:
@@ -1122,6 +1548,46 @@ class BotApp:
             return
         if text == kb.BTN_INV_LIST_CATEGORIES:
             self.on_list_categories(message)
+            return
+
+        # --- موجودی روزانه سایت ---
+        if text == kb.BTN_SITE_STOCK or text == kb.BTN_TANK:
+            self.on_site_stock_menu(message)
+            return
+        if text in kb.SITE_GROUP_BUTTONS:
+            self.on_site_stock_group(message, kb.SITE_GROUP_BUTTONS[text])
+            return
+        if text == kb.BTN_SITE_SKIP:
+            self.on_site_stock_skip(message)
+            return
+        if text == kb.BTN_SITE_CANCEL:
+            self.on_site_stock_cancel(message)
+            return
+        if text == kb.BTN_BACK_SITE:
+            self.on_site_stock_menu(message)
+            return
+
+        # --- تنظیمات اقلام سایت ---
+        if text == kb.BTN_CATALOG_SETTINGS:
+            self.on_catalog_settings_menu(message)
+            return
+        if text == kb.BTN_CATALOG_LIST:
+            self.on_catalog_list(message, unassigned_only=False)
+            return
+        if text == kb.BTN_CATALOG_UNASSIGNED:
+            self.on_catalog_list(message, unassigned_only=True)
+            return
+        if text == kb.BTN_CATALOG_SEED:
+            self.on_catalog_seed(message)
+            return
+        if text == kb.BTN_BACK_CATALOG:
+            self.on_catalog_settings_menu(message)
+            return
+        if text in kb.ASSIGN_GROUP_BUTTONS:
+            self.on_catalog_assign_group(message, kb.ASSIGN_GROUP_BUTTONS[text])
+            return
+        if text == kb.BTN_CATALOG_UNASSIGN:
+            self.on_catalog_assign_group(message, None)
             return
 
         file_type = kb.button_to_file_type(text)

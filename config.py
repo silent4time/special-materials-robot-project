@@ -66,6 +66,16 @@ TUNDISH_TYPES = {
 }
 TUNDISH_TYPE_LABELS = list(TUNDISH_TYPES.values())
 
+# Daily site stock groups (موجودی روزانه سایت) — technician entry sections
+SITE_STOCK_GROUPS = {
+    "slab": "موجودی مواد اسلب",
+    "bloom": "موجودی مواد بلوم",
+    "billet": "موجودی مواد بیلت",
+}
+SITE_STOCK_GROUP_KEYS = frozenset(SITE_STOCK_GROUPS.keys())
+# Roles that may configure catalog / group assignments (not technicians)
+CATALOG_ADMIN_ROLES = frozenset({"owner", "manager", "responsible_officer"})
+
 # Files that still require domain/assignee for RBAC row filtering
 RBAC_SCOPED_FILE_TYPES = frozenset({"tank_consumption", "monthly_consumption"})
 

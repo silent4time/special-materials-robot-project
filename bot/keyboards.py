@@ -1,7 +1,7 @@
-"""Persian reply keyboards for upload flow, warehouse inventory submenu, and analytics."""
+"""Persian reply keyboards for upload flow, warehouse inventory submenu, site stock, and analytics."""
 from __future__ import annotations
 
-from config import FILE_TYPES, TUNDISH_TYPES
+from config import FILE_TYPES, SITE_STOCK_GROUPS, TUNDISH_TYPES
 from bot.bale_api import BaleClient
 
 
@@ -20,6 +20,26 @@ BTN_INV_MENU = "📦 موجودی انبار"
 BTN_INV_UPLOAD = "📥 ورود فایل اکسل"
 BTN_INV_ADD_CATEGORY = "➕ اضافه کردن کد دسته بندی"
 BTN_INV_LIST_CATEGORIES = "📋 لیست کدهای دسته بندی"
+
+# موجودی روزانه سایت — interactive entry (not Excel primary path)
+BTN_SITE_STOCK = BTN_TANK  # «📥 موجودی روزانه سایت»
+BTN_SITE_SLAB = SITE_STOCK_GROUPS["slab"]  # موجودی مواد اسلب
+BTN_SITE_BLOOM = SITE_STOCK_GROUPS["bloom"]  # موجودی مواد بلوم
+BTN_SITE_BILLET = SITE_STOCK_GROUPS["billet"]  # موجودی مواد بیلت
+BTN_SITE_SKIP = "⏭ رد کردن این قلم"
+BTN_SITE_CANCEL = "✖️ انصراف از ورود موجودی"
+BTN_BACK_SITE = "⬅️ بازگشت به گروه‌های سایت"
+
+# تنظیمات اقلام سایت / تخصیص به گروه (non-technician)
+BTN_CATALOG_SETTINGS = "⚙️ تنظیمات اقلام سایت / تخصیص به گروه"
+BTN_CATALOG_LIST = "📋 لیست اقلام و تخصیص‌ها"
+BTN_CATALOG_UNASSIGNED = "📭 اقلام بدون گروه"
+BTN_CATALOG_SEED = "🔄 همگام‌سازی از موجودی انبار"
+BTN_CATALOG_ASSIGN_SLAB = "تخصیص به اسلب"
+BTN_CATALOG_ASSIGN_BLOOM = "تخصیص به بلوم"
+BTN_CATALOG_ASSIGN_BILLET = "تخصیص به بیلت"
+BTN_CATALOG_UNASSIGN = "حذف تخصیص"
+BTN_BACK_CATALOG = "⬅️ بازگشت به تنظیمات اقلام"
 
 # Analytics / reports submenu
 BTN_ANALYTICS = "📊 گزارش‌ها / تحلیل تاندیش"
@@ -44,19 +64,36 @@ BTN_RANGE_30 = "۳۰ روز"
 BTN_RANGE_CUSTOM = "بازه سفارشی"
 BTN_BACK_ANALYTICS = "⬅️ بازگشت به تحلیل"
 
+# Map site-stock group button label → internal key
+SITE_GROUP_BUTTONS = {
+    BTN_SITE_SLAB: "slab",
+    BTN_SITE_BLOOM: "bloom",
+    BTN_SITE_BILLET: "billet",
+}
+
+ASSIGN_GROUP_BUTTONS = {
+    BTN_CATALOG_ASSIGN_SLAB: "slab",
+    BTN_CATALOG_ASSIGN_BLOOM: "bloom",
+    BTN_CATALOG_ASSIGN_BILLET: "billet",
+}
+
 
 def button_to_file_type(text: str) -> str | None:
+    """Map upload buttons to file types.
+
+    Note: BTN_TANK / موجودی روزانه سایت is **interactive entry** now and is
+    intentionally NOT mapped here (handled by site-stock submenu).
+    """
     mapping = {
-        BTN_TANK: "tank_consumption",
         BTN_INV_UPLOAD: "product_inventory",
         BTN_MONTHLY: "monthly_consumption",
-        FILE_TYPES["tank_consumption"]["label_fa"]: "tank_consumption",
         FILE_TYPES["product_inventory"]["label_fa"]: "product_inventory",
         FILE_TYPES["monthly_consumption"]["label_fa"]: "monthly_consumption",
-        # legacy button texts (pre-redesign)
+        # legacy button texts (pre-redesign) — monthly / warehouse only
         "📥 موجودی محصولات": "product_inventory",
-        "📥 مقدار مصرفی هر تاندیش": "tank_consumption",
         "📥 مصرف ماهانه مواد": "monthly_consumption",
+        # legacy tank Excel button text kept for rare old clients wanting file path:
+        # intentionally omitted so «موجودی روزانه سایت» opens interactive flow
     }
     return mapping.get((text or "").strip())
 
@@ -69,13 +106,14 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
     """
     role = user.get("role") if isinstance(user, dict) else user if isinstance(user, str) else None
     if role == "technician":
-        return BaleClient.reply_keyboard([[BTN_TANK], [BTN_HELP]])
+        return BaleClient.reply_keyboard([[BTN_SITE_STOCK], [BTN_HELP]])
 
     is_manager = bool(user) if isinstance(user, bool) else role in {"owner", "manager"}
     rows = [
         [BTN_INV_MENU],
         [BTN_MONTHLY],
-        [BTN_TANK],
+        [BTN_SITE_STOCK],
+        [BTN_CATALOG_SETTINGS],
         [BTN_STATUS, BTN_GENERATE],
         [BTN_ANALYTICS],
         [BTN_RESET, BTN_HELP],
@@ -94,6 +132,54 @@ def inventory_menu() -> dict:
         [BTN_BACK_MAIN],
     ]
     return BaleClient.reply_keyboard(rows)
+
+
+def site_stock_menu() -> dict:
+    """Submenu: three site-stock groups under موجودی روزانه سایت."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_SITE_SLAB],
+            [BTN_SITE_BLOOM],
+            [BTN_SITE_BILLET],
+            [BTN_BACK_MAIN],
+        ]
+    )
+
+
+def site_stock_entry_menu() -> dict:
+    """While entering quantities one-by-one."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_SITE_SKIP],
+            [BTN_SITE_CANCEL],
+            [BTN_BACK_SITE],
+        ]
+    )
+
+
+def catalog_settings_menu() -> dict:
+    """Settings for catalog assignment (non-technician)."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_CATALOG_LIST],
+            [BTN_CATALOG_UNASSIGNED],
+            [BTN_CATALOG_SEED],
+            [BTN_BACK_MAIN],
+        ]
+    )
+
+
+def catalog_assign_menu() -> dict:
+    """Choose group after picking an item."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_CATALOG_ASSIGN_SLAB],
+            [BTN_CATALOG_ASSIGN_BLOOM],
+            [BTN_CATALOG_ASSIGN_BILLET],
+            [BTN_CATALOG_UNASSIGN],
+            [BTN_BACK_CATALOG],
+        ]
+    )
 
 
 def analytics_menu() -> dict:
