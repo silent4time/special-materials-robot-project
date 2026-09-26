@@ -581,6 +581,15 @@ def main() -> int:
     assert kb.BTN_SITE_CONFIRM in rows[-2][0]["text"]
     assert rows[-1][0]["callback_data"] == "ss|x"
 
+    # site stock entry reply keyboard includes skip during guided entry
+    entry_menu = menu_texts(kb.site_stock_entry_menu())
+    assert kb.BTN_SITE_SKIP in entry_menu
+    assert kb.BTN_SITE_CANCEL in entry_menu
+
+    # display name strips leading catalog id
+    assert kb.item_display_name({"id": "37812L", "name_desc": "37812L - پودر قالب"}) == "پودر قالب"
+    assert kb.item_display_name(name_desc="اسید کوتاه") == "اسید کوتاه"
+
     # RBAC: technician cannot configure catalog; others can
     assert not can_configure_catalog(db.get_user("1001"))
     assert can_configure_catalog(db.get_user("998"))

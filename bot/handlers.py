@@ -154,7 +154,7 @@ class BotApp:
         self._analysis_tundish_filter: dict[str, str | None] = {}
         # awaiting plain text for category code entry
         self._await_category_code: set[str] = set()
-        # site stock interactive entry: uid -> {group, items, values, awaiting_idx, chat_id, message_id}
+        # site stock interactive entry: uid -> {group, items, values, awaiting_idx, walk_idx, guided, chat_id, message_id}
         self._site_stock_pending: dict[str, dict[str, Any]] = {}
         # catalog assignment: uid -> {item_id} while choosing group
         self._catalog_assign_pending: dict[str, dict[str, Any]] = {}
@@ -2629,7 +2629,7 @@ class BotApp:
         self._reply(
             message,
             "موجودی روزانه سایت\n"
-            "یکی از گروه‌های زیر را انتخاب کنید؛ سپس با دکمه‌های تعداد، مقادیر را وارد کنید.\n"
+            "یکی از گروه‌های زیر را انتخاب کنید؛ سپس مقادیر را یکی‌یکی وارد کنید.\n"
             f"تاریخ ورود: {format_date(day)}"
             f"{actor_note}",
             kb.site_stock_menu(),
@@ -2683,22 +2683,24 @@ class BotApp:
             "items": items,
             "values": values,
             "awaiting_idx": None,
+            "walk_idx": 0,
+            "guided": True,
             "chat_id": chat_id,
             "message_id": None,
         }
         self._site_stock_pending[uid] = pending
-        # Keep a reply keyboard for back/cancel while the inline editor is open.
+        # Keep a reply keyboard for skip/back/cancel while the inline editor is open.
         self._reply(
             message,
             f"📋 {label}\n"
-            "روی دکمه «تعداد» هر قلم بزنید و عدد را بفرستید (هر ترتیبی مجاز است).\n"
-            f"در پایان «{kb.BTN_SITE_CONFIRM}» را بزنید.",
+            "مقادیر را یکی‌یکی بفرستید؛ فهرست به‌صورت زنده به‌روز می‌شود.\n"
+            f"پس از اتمام، یا هر زمان، با دکمه تعداد اصلاح کنید و در پایان «{kb.BTN_SITE_CONFIRM}» را بزنید.",
             kb.site_stock_entry_menu(),
         )
         try:
             sent = self.client.send_message(
                 chat_id,
-                f"اقلام ({len(items)}) — مقدار را از دکمه‌ها تنظیم کنید:",
+                f"اقلام ({len(items)}) — ورود هدایت‌شده:",
                 reply_markup=self._site_stock_inline_markup(pending),
             )
             if isinstance(sent, dict) and sent.get("message_id") is not None:
@@ -2711,8 +2713,19 @@ class BotApp:
                 f"ارسال صفحه ورود موجودی ناموفق بود: {exc.description}",
                 kb.site_stock_menu(),
             )
+            return
+        # Start guided walk at the first item.
+        self._prompt_site_stock_qty(message, user, 0, from_walk=True)
 
-    def _prompt_site_stock_qty(self, message: dict, user: dict, idx: int) -> None:
+    def _prompt_site_stock_qty(
+        self,
+        message: dict,
+        user: dict,
+        idx: int,
+        *,
+        from_walk: bool = False,
+        prefix: str = "",
+    ) -> None:
         uid = str(user["bale_user_id"])
         pending = self._site_stock_pending.get(uid)
         if not pending:
@@ -2721,18 +2734,86 @@ class BotApp:
         if idx < 0 or idx >= len(items):
             return
         pending["awaiting_idx"] = idx
+        if from_walk:
+            pending["walk_idx"] = idx
+            pending["guided"] = True
         item = items[idx]
         name = kb.item_display_name(item)
         cur = pending.get("values", {}).get(item["id"])
         cur_note = f"\nمقدار فعلی: {float(cur):g}" if cur is not None else ""
+        body = f"مقدار «{name}» را به‌صورت عدد بفرستید.{cur_note}"
+        if prefix:
+            body = f"{prefix.rstrip()}\n{body}"
         self._reply(
             message,
-            f"مقدار «{name}» را به‌صورت عدد بفرستید.{cur_note}",
+            body,
+            kb.site_stock_entry_menu(),
+        )
+
+    def _site_stock_next_walk_idx(self, pending: dict, after_idx: int) -> int | None:
+        """Next index in the guided pass (sequential); None when walk is done."""
+        items = pending.get("items") or []
+        nxt = int(after_idx) + 1
+        if nxt < len(items):
+            return nxt
+        return None
+
+    def _site_stock_after_value(
+        self,
+        message: dict,
+        user: dict,
+        pending: dict,
+        answered_idx: int,
+        *,
+        confirm_line: str,
+        was_walk_prompt: bool,
+    ) -> None:
+        """Refresh keyboard and either continue guided walk or leave editor idle."""
+        self._refresh_site_stock_keyboard(pending)
+        pending["awaiting_idx"] = None
+        if pending.get("guided") and was_walk_prompt:
+            nxt = self._site_stock_next_walk_idx(pending, answered_idx)
+            if nxt is not None:
+                self._prompt_site_stock_qty(
+                    message,
+                    user,
+                    nxt,
+                    from_walk=True,
+                    prefix=confirm_line,
+                )
+                return
+            pending["guided"] = False
+            pending["walk_idx"] = None
+            self._reply(
+                message,
+                f"{confirm_line}\n"
+                f"همه اقلام یک‌بار پرسیده شد. در صورت نیاز با دکمه تعداد اصلاح کنید "
+                f"یا «{kb.BTN_SITE_CONFIRM}» را بزنید.",
+                kb.site_stock_entry_menu(),
+            )
+            return
+        if pending.get("guided") and not was_walk_prompt:
+            # Mid-walk edit of another row — resume the current walk item.
+            walk_idx = pending.get("walk_idx")
+            items = pending.get("items") or []
+            if isinstance(walk_idx, int) and 0 <= walk_idx < len(items):
+                self._prompt_site_stock_qty(
+                    message,
+                    user,
+                    walk_idx,
+                    from_walk=True,
+                    prefix=confirm_line,
+                )
+                return
+        self._reply(
+            message,
+            f"{confirm_line}\n"
+            f"می‌توانید با دکمه تعداد اصلاح کنید یا «{kb.BTN_SITE_CONFIRM}» را بزنید.",
             kb.site_stock_entry_menu(),
         )
 
     def on_site_stock_quantity_text(self, message: dict, text: str) -> bool:
-        """Consume numeric quantity while awaiting a tapped site-stock item."""
+        """Consume numeric quantity while awaiting a guided/edit site-stock item."""
         uid = str(self._uid(message))
         pending = self._site_stock_pending.get(uid)
         if not pending:
@@ -2764,18 +2845,20 @@ class BotApp:
             return True
         item = items[idx]
         pending.setdefault("values", {})[item["id"]] = qty
-        pending["awaiting_idx"] = None
-        self._refresh_site_stock_keyboard(pending)
         name = kb.item_display_name(item)
-        self._reply(
+        was_walk = bool(pending.get("guided")) and pending.get("walk_idx") == idx
+        self._site_stock_after_value(
             message,
-            f"✓ {name}: {qty:g}\nقلم بعدی را از دکمه‌ها انتخاب کنید یا «{kb.BTN_SITE_CONFIRM}» را بزنید.",
-            kb.site_stock_entry_menu(),
+            user,
+            pending,
+            idx,
+            confirm_line=f"✓ {name}: {qty:g}",
+            was_walk_prompt=was_walk,
         )
         return True
 
     def on_site_stock_skip(self, message: dict) -> None:
-        """Legacy skip button — clear awaiting and keep the inline editor."""
+        """Skip current prompted item (leave empty) and advance guided walk."""
         user = self._user_or_deny(message)
         if not user:
             return
@@ -2784,11 +2867,35 @@ class BotApp:
         if not pending:
             self._reply(message, "ورود موجودی فعالی نیست.", kb.site_stock_menu())
             return
-        pending["awaiting_idx"] = None
-        self._reply(
+        awaiting = pending.get("awaiting_idx")
+        if awaiting is None:
+            self._reply(
+                message,
+                "قلم فعالی برای رد کردن نیست. از دکمه‌های تعداد استفاده کنید یا تأیید/انصراف را بزنید.",
+                kb.site_stock_entry_menu(),
+            )
+            return
+        items = pending["items"]
+        idx = int(awaiting)
+        if idx < 0 or idx >= len(items):
+            pending["awaiting_idx"] = None
+            self._reply(
+                message,
+                "از دکمه‌های تعداد استفاده کنید یا تأیید/انصراف را بزنید.",
+                kb.site_stock_entry_menu(),
+            )
+            return
+        item = items[idx]
+        name = kb.item_display_name(item)
+        was_walk = bool(pending.get("guided")) and pending.get("walk_idx") == idx
+        # Leave value unchanged (empty stays empty; prefill kept unless user edits later).
+        self._site_stock_after_value(
             message,
-            "از دکمه‌های تعداد برای ورود استفاده کنید یا تأیید/انصراف را بزنید.",
-            kb.site_stock_entry_menu(),
+            user,
+            pending,
+            idx,
+            confirm_line=f"⏭ «{name}» رد شد",
+            was_walk_prompt=was_walk,
         )
 
     def on_site_stock_cancel(self, message: dict) -> None:

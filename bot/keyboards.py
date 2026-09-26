@@ -58,7 +58,7 @@ BTN_SITE_STOCK = BTN_TANK  # «📥 موجودی روزانه سایت»
 BTN_SITE_SLAB = SITE_STOCK_GROUPS["slab"]  # موجودی مواد اسلب
 BTN_SITE_BLOOM = SITE_STOCK_GROUPS["bloom"]  # موجودی مواد بلوم
 BTN_SITE_BILLET = SITE_STOCK_GROUPS["billet"]  # موجودی مواد بیلت
-BTN_SITE_SKIP = "⏭ رد کردن این قلم"  # legacy; unused in inline UX
+BTN_SITE_SKIP = "⏭ رد کردن این قلم"
 BTN_SITE_CANCEL = "✖️ انصراف از ورود موجودی"
 BTN_SITE_CONFIRM = "تأیید و ثبت"
 BTN_BACK_SITE = "⬅️ بازگشت به گروه‌های سایت"
@@ -237,9 +237,10 @@ def site_stock_menu() -> dict:
 
 
 def site_stock_entry_menu() -> dict:
-    """Reply keyboard while the inline site-stock editor is open."""
+    """Reply keyboard while the inline site-stock editor is open (guided + edits)."""
     return BaleClient.reply_keyboard(
         [
+            [BTN_SITE_SKIP],
             [BTN_SITE_CANCEL],
             [BTN_BACK_SITE],
         ]
