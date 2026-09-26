@@ -221,5 +221,53 @@ class BaleClient:
         }
 
     @staticmethod
+    def inline_keyboard(rows: list[list[dict[str, str]]]) -> dict:
+        """Inline keyboard from rows of button dicts (text + callback_data and/or url)."""
+        return {"inline_keyboard": rows}
+
+    def answer_callback_query(
+        self,
+        callback_query_id: str,
+        text: str | None = None,
+        show_alert: bool = False,
+    ) -> bool:
+        data: dict[str, Any] = {"callback_query_id": str(callback_query_id)}
+        if text:
+            data["text"] = text[:200]
+        if show_alert:
+            data["show_alert"] = True
+        return bool(self._call("answerCallbackQuery", data))
+
+    def edit_message_text(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        text: str,
+        reply_markup: dict | None = None,
+    ) -> dict:
+        data: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+        }
+        if reply_markup is not None:
+            data["reply_markup"] = reply_markup
+        return self._call("editMessageText", data)
+
+    def edit_message_reply_markup(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        reply_markup: dict | None = None,
+    ) -> dict:
+        data: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+        }
+        if reply_markup is not None:
+            data["reply_markup"] = reply_markup
+        return self._call("editMessageReplyMarkup", data)
+
+    @staticmethod
     def remove_keyboard() -> dict:
         return {"remove_keyboard": True}

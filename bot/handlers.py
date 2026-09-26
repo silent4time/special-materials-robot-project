@@ -40,6 +40,7 @@ from bot import keyboards as kb
 from bot.activity import log_activity
 from bot.report_assistant import build_report_context, chat as report_assistant_chat
 from bot.jalali import (
+    TEHRAN,
     format_date,
     format_datetime,
     format_month_year_range,
@@ -49,7 +50,7 @@ from bot.jalali import (
     year_choices_around,
     PERSIAN_MONTH_NAME_TO_NUM,
 )
-from bot.bale_api import BaleClient
+from bot.bale_api import BaleAPIError, BaleClient
 from bot.settings_text import (
     DEFAULT_INVITE_TEXT,
     PLACEHOLDER_HINT_INVITE,
@@ -153,7 +154,7 @@ class BotApp:
         self._analysis_tundish_filter: dict[str, str | None] = {}
         # awaiting plain text for category code entry
         self._await_category_code: set[str] = set()
-        # site stock interactive entry: uid -> {group, items, index, values}
+        # site stock interactive entry: uid -> {group, items, values, awaiting_idx, chat_id, message_id}
         self._site_stock_pending: dict[str, dict[str, Any]] = {}
         # catalog assignment: uid -> {item_id} while choosing group
         self._catalog_assign_pending: dict[str, dict[str, Any]] = {}
@@ -2557,6 +2558,51 @@ class BotApp:
         self._catalog_assign_pending.pop(str(uid), None)
 
     # ---------- موجودی روزانه سایت (interactive) ----------
+    def _actor_full_name(self, user: dict | None = None, *, actor_display_name: str | None = None) -> str:
+        """Display name only (no Bale id) for registrar stamps."""
+        user = user or {}
+        uid = str(user.get("bale_user_id") or "").strip()
+
+        def meaningful(value: object) -> str:
+            value = str(value or "").strip()
+            return value if value and value != uid else ""
+
+        name = meaningful(user.get("display_name"))
+        if not name:
+            name = meaningful(actor_display_name)
+        if not name and uid:
+            stored = self.db.get_user(uid)
+            name = meaningful((stored or {}).get("display_name"))
+        if not name:
+            name = meaningful(user.get("username"))
+        return name or "کاربر بدون نام"
+
+    def _site_stock_stamp(self, user: dict) -> str:
+        """ثبت شده توسط {name} در {jalali_date} ساعت {HH:MM} (Asia/Tehran)."""
+        now = datetime.now(TEHRAN)
+        return (
+            f"ثبت شده توسط {self._actor_full_name(user)} "
+            f"در {format_date(now)} ساعت {now.hour:02d}:{now.minute:02d}"
+        )
+
+    def _site_stock_inline_markup(self, pending: dict) -> dict:
+        return kb.site_stock_inline_keyboard(
+            pending["items"],
+            pending.get("values") or {},
+            group_key=pending["group"],
+        )
+
+    def _refresh_site_stock_keyboard(self, pending: dict) -> None:
+        chat_id = pending.get("chat_id")
+        message_id = pending.get("message_id")
+        if chat_id is None or message_id is None:
+            return
+        markup = self._site_stock_inline_markup(pending)
+        try:
+            self.client.edit_message_reply_markup(chat_id, int(message_id), markup)
+        except BaleAPIError as exc:
+            logger.warning("edit site-stock markup failed: %s", exc)
+
     def on_site_stock_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
@@ -2583,7 +2629,7 @@ class BotApp:
         self._reply(
             message,
             "موجودی روزانه سایت\n"
-            "یکی از گروه‌های زیر را انتخاب کنید؛ سپس مقادیر اقلام را یکی‌یکی بفرستید.\n"
+            "یکی از گروه‌های زیر را انتخاب کنید؛ سپس با دکمه‌های تعداد، مقادیر را وارد کنید.\n"
             f"تاریخ ورود: {format_date(day)}"
             f"{actor_note}",
             kb.site_stock_menu(),
@@ -2600,7 +2646,6 @@ class BotApp:
             return
         items = self.db.list_items_for_group(group_key, active_only=True)
         if not items:
-            # Soft-sync from latest monthly work_order so the three menus fill automatically
             try:
                 self.db.sync_catalog_groups_from_latest_monthly()
             except Exception as exc:  # noqa: BLE001
@@ -2620,56 +2665,87 @@ class BotApp:
             )
             return
         uid = str(user["bale_user_id"])
-        self._site_stock_pending[uid] = {
+        # Prefill today's existing quantities for this group (editable before confirm).
+        day = self.db.tehran_today()
+        existing = {
+            e["item_id"]: float(e["quantity"])
+            for e in self.db.list_site_stock_entries(entry_date=day, tundish_group=group_key)
+            if e.get("item_id") is not None
+        }
+        values = {
+            it["id"]: existing[it["id"]]
+            for it in items
+            if it["id"] in existing
+        }
+        chat_id = self._chat_id(message)
+        pending = {
             "group": group_key,
             "items": items,
-            "index": 0,
-            "values": {},  # item_id -> quantity
+            "values": values,
+            "awaiting_idx": None,
+            "chat_id": chat_id,
+            "message_id": None,
         }
-        lines = [f"📋 {label} — اقلام تخصیص‌یافته ({len(items)}):", ""]
-        lines.append("نام و شرح کالا")
-        lines.append("─" * 12)
-        for i, it in enumerate(items, 1):
-            lines.append(f"{i}. {it.get('name_desc') or it['id']}")
-        lines.append("")
-        lines.append("حالا مقدار هر قلم را به‌صورت عدد بفرستید.")
-        self._reply(message, "\n".join(lines), kb.site_stock_entry_menu())
-        self._prompt_site_stock_item(message, user)
+        self._site_stock_pending[uid] = pending
+        # Keep a reply keyboard for back/cancel while the inline editor is open.
+        self._reply(
+            message,
+            f"📋 {label}\n"
+            "روی دکمه «تعداد» هر قلم بزنید و عدد را بفرستید (هر ترتیبی مجاز است).\n"
+            f"در پایان «{kb.BTN_SITE_CONFIRM}» را بزنید.",
+            kb.site_stock_entry_menu(),
+        )
+        try:
+            sent = self.client.send_message(
+                chat_id,
+                f"اقلام ({len(items)}) — مقدار را از دکمه‌ها تنظیم کنید:",
+                reply_markup=self._site_stock_inline_markup(pending),
+            )
+            if isinstance(sent, dict) and sent.get("message_id") is not None:
+                pending["message_id"] = sent["message_id"]
+        except BaleAPIError as exc:
+            logger.exception("send site-stock inline keyboard failed")
+            self._clear_site_stock_pending(uid)
+            self._reply(
+                message,
+                f"ارسال صفحه ورود موجودی ناموفق بود: {exc.description}",
+                kb.site_stock_menu(),
+            )
 
-    def _prompt_site_stock_item(self, message: dict, user: dict) -> None:
+    def _prompt_site_stock_qty(self, message: dict, user: dict, idx: int) -> None:
         uid = str(user["bale_user_id"])
         pending = self._site_stock_pending.get(uid)
         if not pending:
             return
         items = pending["items"]
-        idx = pending["index"]
-        if idx >= len(items):
-            self._finish_site_stock_entry(message, user)
+        if idx < 0 or idx >= len(items):
             return
+        pending["awaiting_idx"] = idx
         item = items[idx]
-        label = SITE_STOCK_GROUPS.get(pending["group"], pending["group"])
+        name = item.get("name_desc") or item["id"]
+        cur = pending.get("values", {}).get(item["id"])
+        cur_note = f"\nمقدار فعلی: {float(cur):g}" if cur is not None else ""
         self._reply(
             message,
-            f"قلم {idx + 1} از {len(items)} — {label}\n"
-            f"نام: {item.get('name_desc') or item['id']}\n"
-            f"شناسه: {item['id']}\n"
-            "مقدار عددی را بفرستید "
-            f"(یا «{kb.BTN_SITE_SKIP}» برای رد کردن).",
+            f"مقدار «{name}» را به‌صورت عدد بفرستید.{cur_note}",
             kb.site_stock_entry_menu(),
         )
 
     def on_site_stock_quantity_text(self, message: dict, text: str) -> bool:
-        """Consume numeric quantity while site-stock entry is pending."""
+        """Consume numeric quantity while awaiting a tapped site-stock item."""
         uid = str(self._uid(message))
         pending = self._site_stock_pending.get(uid)
         if not pending:
+            return False
+        awaiting = pending.get("awaiting_idx")
+        if awaiting is None:
+            # Inline editor open but no item selected yet — don't steal unrelated numbers.
             return False
         user = self._user_or_deny(message)
         if not user:
             self._clear_site_stock_pending(uid)
             return True
         raw = (text or "").strip().replace(",", "٫").replace("٫", ".")
-        # Persian digits → English
         trans = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
         raw = raw.translate(trans)
         try:
@@ -2682,32 +2758,24 @@ class BotApp:
             )
             return True
         items = pending["items"]
-        idx = pending["index"]
-        if idx >= len(items):
-            self._finish_site_stock_entry(message, user)
+        idx = int(awaiting)
+        if idx < 0 or idx >= len(items):
+            pending["awaiting_idx"] = None
             return True
         item = items[idx]
-        try:
-            self.db.upsert_site_stock_entry(
-                bale_user_id=user["bale_user_id"],
-                tundish_group=pending["group"],
-                item_id=item["id"],
-                quantity=qty,
-                item_name_snapshot=item.get("name_desc"),
-                actor_display_name=user.get("display_name"),
-            )
-        except (ValueError, KeyError) as exc:
-            self._reply(message, f"خطا در ذخیره: {exc}", kb.site_stock_entry_menu())
-            return True
-        pending["values"][item["id"]] = qty
-        pending["index"] = idx + 1
-        if pending["index"] >= len(items):
-            self._finish_site_stock_entry(message, user)
-        else:
-            self._prompt_site_stock_item(message, user)
+        pending.setdefault("values", {})[item["id"]] = qty
+        pending["awaiting_idx"] = None
+        self._refresh_site_stock_keyboard(pending)
+        name = item.get("name_desc") or item["id"]
+        self._reply(
+            message,
+            f"✓ {name}: {qty:g}\nقلم بعدی را از دکمه‌ها انتخاب کنید یا «{kb.BTN_SITE_CONFIRM}» را بزنید.",
+            kb.site_stock_entry_menu(),
+        )
         return True
 
     def on_site_stock_skip(self, message: dict) -> None:
+        """Legacy skip button — clear awaiting and keep the inline editor."""
         user = self._user_or_deny(message)
         if not user:
             return
@@ -2716,20 +2784,30 @@ class BotApp:
         if not pending:
             self._reply(message, "ورود موجودی فعالی نیست.", kb.site_stock_menu())
             return
-        pending["index"] = pending["index"] + 1
-        if pending["index"] >= len(pending["items"]):
-            self._finish_site_stock_entry(message, user)
-        else:
-            self._prompt_site_stock_item(message, user)
+        pending["awaiting_idx"] = None
+        self._reply(
+            message,
+            "از دکمه‌های تعداد برای ورود استفاده کنید یا تأیید/انصراف را بزنید.",
+            kb.site_stock_entry_menu(),
+        )
 
     def on_site_stock_cancel(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
-        self._clear_site_stock_pending(str(user["bale_user_id"]))
+        uid = str(user["bale_user_id"])
+        pending = self._site_stock_pending.pop(uid, None)
+        if pending and pending.get("chat_id") is not None and pending.get("message_id") is not None:
+            try:
+                self.client.edit_message_reply_markup(
+                    pending["chat_id"], int(pending["message_id"]), {"inline_keyboard": []}
+                )
+            except BaleAPIError:
+                pass
         self._reply(message, "ورود موجودی لغو شد.", kb.site_stock_menu())
 
     def _finish_site_stock_entry(self, message: dict, user: dict) -> None:
+        """Persist filled quantities and show summary + registrar stamp."""
         uid = str(user["bale_user_id"])
         pending = self._site_stock_pending.pop(uid, None)
         if not pending:
@@ -2739,22 +2817,148 @@ class BotApp:
         label = SITE_STOCK_GROUPS.get(group, group)
         day = self.db.tehran_today()
         values = pending.get("values") or {}
+        items = pending.get("items") or []
+        id_to_item = {it["id"]: it for it in items}
+        saved = 0
+        errors: list[str] = []
+        for iid, qty in values.items():
+            it = id_to_item.get(iid) or {"id": iid, "name_desc": iid}
+            try:
+                self.db.upsert_site_stock_entry(
+                    bale_user_id=user["bale_user_id"],
+                    tundish_group=group,
+                    item_id=iid,
+                    quantity=qty,
+                    item_name_snapshot=it.get("name_desc"),
+                    actor_display_name=user.get("display_name"),
+                )
+                saved += 1
+            except (ValueError, KeyError) as exc:
+                errors.append(f"{it.get('name_desc') or iid}: {exc}")
+        if pending.get("chat_id") is not None and pending.get("message_id") is not None:
+            try:
+                self.client.edit_message_text(
+                    pending["chat_id"],
+                    int(pending["message_id"]),
+                    f"✅ ثبت «{label}» انجام شد.",
+                    reply_markup={"inline_keyboard": []},
+                )
+            except BaleAPIError:
+                try:
+                    self.client.edit_message_reply_markup(
+                        pending["chat_id"],
+                        int(pending["message_id"]),
+                        {"inline_keyboard": []},
+                    )
+                except BaleAPIError:
+                    pass
         lines = [
             f"✅ ثبت موجودی «{label}» برای تاریخ {format_date(day)}",
-            f"تعداد اقلام ثبت‌شده: {len(values)} از {len(pending['items'])}",
+            f"تعداد اقلام ثبت‌شده: {saved} از {len(items)}",
             "",
         ]
         if values:
-            id_to_name = {it["id"]: it.get("name_desc") or it["id"] for it in pending["items"]}
             for iid, qty in values.items():
-                lines.append(f"• {id_to_name.get(iid, iid)}: {qty:g}")
+                name = (id_to_item.get(iid) or {}).get("name_desc") or iid
+                lines.append(f"• {name}: {float(qty):g}")
         else:
             lines.append("(هیچ مقداری ثبت نشد)")
+        if errors:
+            lines.append("")
+            lines.append("خطاها:")
+            lines.extend(f"• {e}" for e in errors)
         lines.append("")
-        lines.append(f"ثبت‌کننده: {self._format_actor(user)}")
-        lines.append("داده‌ها در پایگاه‌داده ذخیره شدند.")
+        lines.append(self._site_stock_stamp(user))
         log_activity(self.db, user, "site_stock_saved", tundish_group=group)
         self._reply(message, "\n".join(lines), kb.site_stock_menu())
+
+    def handle_callback_query(self, cq: dict) -> None:
+        """Dispatch inline-button callbacks (site-stock editor)."""
+        cq_id = str(cq.get("id") or "")
+        data = (cq.get("data") or "").strip()
+        from_user = cq.get("from") or {}
+        msg = cq.get("message") or {}
+        uid = str(from_user.get("id") or "")
+        # Synthetic message for helpers that expect message["from"] / chat.
+        message = {
+            "message_id": msg.get("message_id"),
+            "chat": msg.get("chat") or {},
+            "from": from_user,
+            "text": "",
+        }
+
+        def answer(text: str | None = None, alert: bool = False) -> None:
+            if not cq_id:
+                return
+            try:
+                self.client.answer_callback_query(cq_id, text=text, show_alert=alert)
+            except BaleAPIError as exc:
+                logger.warning("answerCallbackQuery failed: %s", exc)
+
+        if not data.startswith("ss|"):
+            answer()
+            return
+
+        user = ensure_registered(self.db, uid, self._display_name(message))
+        if not user:
+            answer("شما در سیستم ثبت نشده‌اید.", alert=True)
+            return
+
+        pending = self._site_stock_pending.get(uid)
+
+        if data == "ss|ok":
+            if not pending:
+                answer("ورود موجودی فعالی نیست.", alert=True)
+                return
+            answer("در حال ثبت…")
+            # Keep message ids for cleanup inside finish.
+            if msg.get("message_id") is not None:
+                pending["message_id"] = msg.get("message_id")
+            if (msg.get("chat") or {}).get("id") is not None:
+                pending["chat_id"] = msg["chat"]["id"]
+            self._finish_site_stock_entry(message, user)
+            return
+
+        if data == "ss|x":
+            answer("لغو شد")
+            self.on_site_stock_cancel(message)
+            return
+
+        # ss|{group}|{idx}|q  or  ss|{group}|{idx}|n
+        parts = data.split("|")
+        if len(parts) != 4 or parts[0] != "ss":
+            answer()
+            return
+        _prefix, group, idx_s, action = parts
+        try:
+            idx = int(idx_s)
+        except ValueError:
+            answer()
+            return
+        if not pending or pending.get("group") != group:
+            answer("این فهرست منقضی شده؛ دوباره گروه را انتخاب کنید.", alert=True)
+            return
+        items = pending.get("items") or []
+        if idx < 0 or idx >= len(items):
+            answer()
+            return
+        # Sync message identity from the callback source.
+        if msg.get("message_id") is not None:
+            pending["message_id"] = msg.get("message_id")
+        if (msg.get("chat") or {}).get("id") is not None:
+            pending["chat_id"] = msg["chat"]["id"]
+
+        item = items[idx]
+        full_name = item.get("name_desc") or item.get("id") or "—"
+        if action == "n":
+            # Description button: toast full name (useful when truncated).
+            answer(full_name[:200])
+            return
+        if action == "q":
+            answer()
+            self._prompt_site_stock_qty(message, user, idx)
+            return
+        answer()
 
     # ---------- تنظیمات اقلام سایت / تخصیص ----------
     def _deny_catalog_settings(self, message: dict, user: dict) -> bool:
@@ -4808,7 +5012,9 @@ class BotApp:
 
     def handle_update(self, update: dict) -> None:
         try:
-            if "message" in update:
+            if "callback_query" in update:
+                self.handle_callback_query(update["callback_query"])
+            elif "message" in update:
                 self.handle_message(update["message"])
         except Exception:  # noqa: BLE001
             logger.exception("update failed: %s", update.get("update_id"))

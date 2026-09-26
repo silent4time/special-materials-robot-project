@@ -58,8 +58,9 @@ BTN_SITE_STOCK = BTN_TANK  # «📥 موجودی روزانه سایت»
 BTN_SITE_SLAB = SITE_STOCK_GROUPS["slab"]  # موجودی مواد اسلب
 BTN_SITE_BLOOM = SITE_STOCK_GROUPS["bloom"]  # موجودی مواد بلوم
 BTN_SITE_BILLET = SITE_STOCK_GROUPS["billet"]  # موجودی مواد بیلت
-BTN_SITE_SKIP = "⏭ رد کردن این قلم"
+BTN_SITE_SKIP = "⏭ رد کردن این قلم"  # legacy; unused in inline UX
 BTN_SITE_CANCEL = "✖️ انصراف از ورود موجودی"
+BTN_SITE_CONFIRM = "تأیید و ثبت"
 BTN_BACK_SITE = "⬅️ بازگشت به گروه‌های سایت"
 
 # تنظیمات اقلام سایت / تخصیص به گروه (non-technician)
@@ -236,14 +237,61 @@ def site_stock_menu() -> dict:
 
 
 def site_stock_entry_menu() -> dict:
-    """While entering quantities one-by-one."""
+    """Reply keyboard while the inline site-stock editor is open."""
     return BaleClient.reply_keyboard(
         [
-            [BTN_SITE_SKIP],
             [BTN_SITE_CANCEL],
             [BTN_BACK_SITE],
         ]
     )
+
+
+_BTN_TEXT_LIMIT = 60
+_QTY_PLACEHOLDER = "…"
+
+
+def _truncate_btn(text: str, limit: int = _BTN_TEXT_LIMIT) -> str:
+    s = (text or "").strip() or "—"
+    if len(s) <= limit:
+        return s
+    return s[: max(1, limit - 1)] + "…"
+
+
+def site_stock_inline_keyboard(
+    items: list[dict],
+    values: dict | None = None,
+    *,
+    group_key: str,
+) -> dict:
+    """Two-column inline keyboard: شرح کالا | تعداد, plus confirm/cancel.
+
+    ``callback_data`` is compact: ``ss|{group}|{idx}|q`` / ``ss|{group}|{idx}|n`` /
+    ``ss|ok`` / ``ss|x``.
+    """
+    values = values or {}
+    group = (group_key or "").strip().lower()
+    rows: list[list[dict[str, str]]] = []
+    for idx, it in enumerate(items):
+        name = _truncate_btn(it.get("name_desc") or it.get("id") or "—")
+        iid = it.get("id")
+        qty = values.get(iid) if iid is not None else None
+        if qty is None:
+            qty_label = _QTY_PLACEHOLDER
+        else:
+            try:
+                qty_label = f"{float(qty):g}"
+            except (TypeError, ValueError):
+                qty_label = str(qty)
+            qty_label = _truncate_btn(qty_label, 16)
+        rows.append(
+            [
+                {"text": name, "callback_data": f"ss|{group}|{idx}|n"},
+                {"text": qty_label, "callback_data": f"ss|{group}|{idx}|q"},
+            ]
+        )
+    rows.append([{"text": f"✅ {BTN_SITE_CONFIRM}", "callback_data": "ss|ok"}])
+    rows.append([{"text": BTN_SITE_CANCEL, "callback_data": "ss|x"}])
+    return BaleClient.inline_keyboard(rows)
 
 
 def catalog_settings_menu() -> dict:

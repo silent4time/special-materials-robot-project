@@ -563,6 +563,24 @@ def main() -> int:
     assert SITE_STOCK_GROUPS["billet"] == "موجودی مواد بیلت"
     assert kb.SITE_GROUP_BUTTONS[kb.BTN_SITE_BILLET] == "billet"
 
+    # site stock inline 2-col keyboard (شرح | تعداد) + confirm
+    items_fake = [
+        {"id": "A1", "name_desc": "اسید کوتاه"},
+        {"id": "A2", "name_desc": "نام خیلی خیلی خیلی خیلی خیلی خیلی خیلی خیلی خیلی خیلی خیلی خیلی خیلی طولانی برای دکمه"},
+    ]
+    ik = kb.site_stock_inline_keyboard(items_fake, {"A1": 12.5}, group_key="slab")
+    assert "inline_keyboard" in ik
+    rows = ik["inline_keyboard"]
+    assert len(rows[0]) == 2
+    assert rows[0][0]["callback_data"] == "ss|slab|0|n"
+    assert rows[0][1]["callback_data"] == "ss|slab|0|q"
+    assert rows[0][1]["text"] == "12.5"
+    assert rows[1][1]["text"] == "…"
+    assert len(rows[1][0]["text"]) <= 60
+    assert rows[-2][0]["callback_data"] == "ss|ok"
+    assert kb.BTN_SITE_CONFIRM in rows[-2][0]["text"]
+    assert rows[-1][0]["callback_data"] == "ss|x"
+
     # RBAC: technician cannot configure catalog; others can
     assert not can_configure_catalog(db.get_user("1001"))
     assert can_configure_catalog(db.get_user("998"))
