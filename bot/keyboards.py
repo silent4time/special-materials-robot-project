@@ -249,6 +249,28 @@ def site_stock_entry_menu() -> dict:
 _BTN_TEXT_LIMIT = 60
 _QTY_PLACEHOLDER = "…"
 
+def item_display_name(item: dict | None = None, *, name_desc: str | None = None, item_id: str | None = None) -> str:
+    """شرح کالا without leading catalog id (e.g. ``378…L - شرح`` → ``شرح``)."""
+    if item:
+        name_desc = item.get("name_desc") if name_desc is None else name_desc
+        item_id = item.get("id") if item_id is None else item_id
+    s = (name_desc or "").strip()
+    iid = (item_id or "").strip()
+    if not s:
+        return iid or "—"
+    if iid and s.startswith(iid):
+        rest = s[len(iid):].lstrip(" \t-–—:")
+        if rest:
+            return rest.strip()
+    # Generic leading code + separator
+    import re
+    m = re.match(r"^[A-Za-z0-9._]+\s*[-–—:]\s*(.+)$", s)
+    if m:
+        return m.group(1).strip() or s
+    return s
+
+
+
 
 def _truncate_btn(text: str, limit: int = _BTN_TEXT_LIMIT) -> str:
     s = (text or "").strip() or "—"
@@ -272,7 +294,7 @@ def site_stock_inline_keyboard(
     group = (group_key or "").strip().lower()
     rows: list[list[dict[str, str]]] = []
     for idx, it in enumerate(items):
-        name = _truncate_btn(it.get("name_desc") or it.get("id") or "—")
+        name = _truncate_btn(item_display_name(it))
         iid = it.get("id")
         qty = values.get(iid) if iid is not None else None
         if qty is None:

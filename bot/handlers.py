@@ -2722,7 +2722,7 @@ class BotApp:
             return
         pending["awaiting_idx"] = idx
         item = items[idx]
-        name = item.get("name_desc") or item["id"]
+        name = kb.item_display_name(item)
         cur = pending.get("values", {}).get(item["id"])
         cur_note = f"\nمقدار فعلی: {float(cur):g}" if cur is not None else ""
         self._reply(
@@ -2766,7 +2766,7 @@ class BotApp:
         pending.setdefault("values", {})[item["id"]] = qty
         pending["awaiting_idx"] = None
         self._refresh_site_stock_keyboard(pending)
-        name = item.get("name_desc") or item["id"]
+        name = kb.item_display_name(item)
         self._reply(
             message,
             f"✓ {name}: {qty:g}\nقلم بعدی را از دکمه‌ها انتخاب کنید یا «{kb.BTN_SITE_CONFIRM}» را بزنید.",
@@ -2859,7 +2859,7 @@ class BotApp:
         ]
         if values:
             for iid, qty in values.items():
-                name = (id_to_item.get(iid) or {}).get("name_desc") or iid
+                name = kb.item_display_name(id_to_item.get(iid) or {"id": iid, "name_desc": iid})
                 lines.append(f"• {name}: {float(qty):g}")
         else:
             lines.append("(هیچ مقداری ثبت نشد)")
@@ -2949,7 +2949,7 @@ class BotApp:
             pending["chat_id"] = msg["chat"]["id"]
 
         item = items[idx]
-        full_name = item.get("name_desc") or item.get("id") or "—"
+        full_name = kb.item_display_name(item)
         if action == "n":
             # Description button: toast full name (useful when truncated).
             answer(full_name[:200])
