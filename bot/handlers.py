@@ -66,7 +66,8 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 
 نقش‌ها:
 • مالک / مدیر — همه ردیف‌ها + مدیریت کاربران
-• کاردان مسئول / تکنسین — فیلتر حوزه/تخصیص روی فایل‌های دارای domain؛ موجودی انبار بدون domain برای همه کاربران مجاز قابل مشاهده است
+• کاردان مسئول — فیلتر حوزه/تخصیص روی فایل‌های دارای domain؛ موجودی انبار بدون domain برای همه کاربران مجاز قابل مشاهده است
+• تکنسین — فقط ورود «موجودی روزانه سایت» فعال است و سایر منوها/گزارش‌ها دسترسی ندارند
 
 دستورات مدیر:
 /users
@@ -118,6 +119,20 @@ class BotApp:
             return None
         return user
 
+    def _deny_technician(self, message: dict, user: dict) -> bool:
+        """Deny non-upload features and restore the technician-only menu."""
+        if user.get("role") != "technician":
+            return False
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._await_category_code.discard(uid)
+        self._reply(
+            message,
+            "دسترسی ندارید؛ فقط ورود موجودی روزانه سایت برای نقش تکنسین فعال است.",
+            kb.main_menu(user),
+        )
+        return True
+
     def _status_text(self, session: dict) -> str:
         done = self.db.session_completeness(session)
         lines = ["وضعیت فایل‌های جلسه جاری:"]
@@ -166,6 +181,8 @@ class BotApp:
         return self._analysis_tundish_filter.get(uid) or kb.BTN_ALL_TUNDISHES
 
     def _require_files(self, message: dict, user: dict, goal: str) -> tuple[dict, dict, dict] | None:
+        if self._deny_technician(message, user):
+            return None
         session = self.db.get_or_create_session(user["bale_user_id"])
         completeness = self.db.session_completeness(session)
         missing = missing_files_for_goal(goal, completeness)
@@ -192,28 +209,37 @@ class BotApp:
             "سلام! به بازوی «گزارش مواد / تاندیش» خوش آمدید.\n\n"
             f"نقش شما: {role_label(user['role'])}\n"
             f"حوزه: {user.get('scope') or '—'}\n\n"
-            "از منو: موجودی انبار / مصرف ماهیانه / موجودی روزانه سایت را انتخاب کنید.\n"
-            "برای موجودی انبار ابتدا کدهای دسته بندی ۴ رقمی را اضافه کنید، سپس Excel بفرستید.\n"
-            "از «گزارش‌ها / تحلیل تاندیش» برای تحلیل‌ها و گزارش مواد مازاد استفاده کنید."
+            + (
+                "برای نقش تکنسین فقط ورود «موجودی روزانه سایت» فعال است.\n"
+                "فایل Excel موجودی روزانه سایت را از منو انتخاب و ارسال کنید."
+                if user.get('role') == 'technician'
+                else
+                "از منو: موجودی انبار / مصرف ماهیانه / موجودی روزانه سایت را انتخاب کنید.\n"
+                "برای موجودی انبار ابتدا کدهای دسته بندی ۴ رقمی را اضافه کنید، سپس Excel بفرستید.\n"
+                "از «گزارش‌ها / تحلیل تاندیش» برای تحلیل‌ها و گزارش مواد مازاد استفاده کنید."
+            )
         )
-        self._reply(message, text, kb.main_menu(require_manager(user)))
+        self._reply(message, text, kb.main_menu(user))
 
     def cmd_help(self, message: dict) -> None:
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))
         self._reply(
             message,
             HELP_TEXT,
-            kb.main_menu(require_manager(user)) if user else None,
+            kb.main_menu(user) if user else None,
         )
 
     def cmd_users(self, message: dict) -> None:
         user = self._user_or_deny(message)
-        if not user or not require_manager(user):
-            self._reply(message, "فقط مدیر می‌تواند لیست کاربران را ببیند.")
+        if not user:
+            return
+        if self._deny_technician(message, user) or not require_manager(user):
+            if not require_manager(user) and user.get("role") != "technician":
+                self._reply(message, "فقط مدیر می‌تواند لیست کاربران را ببیند.")
             return
         rows = self.db.list_users()
         if not rows:
-            self._reply(message, "هیچ کاربری ثبت نشده.", kb.main_menu(True))
+            self._reply(message, "هیچ کاربری ثبت نشده.", kb.main_menu(user))
             return
         lines = ["لیست کاربران:"]
         for r in rows:
@@ -222,12 +248,15 @@ class BotApp:
                 f"{flag} {r['bale_user_id']} | {r.get('display_name')} | "
                 f"{role_label(r['role'])} | حوزه={r.get('scope') or '—'}"
             )
-        self._reply(message, "\n".join(lines), kb.main_menu(True))
+        self._reply(message, "\n".join(lines), kb.main_menu(user))
 
     def cmd_adduser(self, message: dict, args: list[str]) -> None:
         user = self._user_or_deny(message)
-        if not user or not require_manager(user):
-            self._reply(message, "فقط مالک یا مدیر می‌تواند کاربر اضافه کند.")
+        if not user:
+            return
+        if self._deny_technician(message, user) or not require_manager(user):
+            if not require_manager(user) and user.get("role") != "technician":
+                self._reply(message, "فقط مالک یا مدیر می‌تواند کاربر اضافه کند.")
             return
         if len(args) < 2:
             self._reply(
@@ -264,13 +293,16 @@ class BotApp:
             message,
             f"کاربر ذخیره شد:\n{created['bale_user_id']} | {created['display_name']} | "
             f"{role_label(created['role'])} | حوزه={created.get('scope') or '—'}",
-            kb.main_menu(True),
+            kb.main_menu(user),
         )
 
     def cmd_setrole(self, message: dict, args: list[str]) -> None:
         user = self._user_or_deny(message)
-        if not user or not require_manager(user):
-            self._reply(message, "فقط مالک یا مدیر.")
+        if not user:
+            return
+        if self._deny_technician(message, user) or not require_manager(user):
+            if not require_manager(user) and user.get("role") != "technician":
+                self._reply(message, "فقط مالک یا مدیر.")
             return
         if len(args) < 2 or args[1] not in ROLES:
             self._reply(message, "فرمت: /setrole <bale_id> <owner|manager|responsible_officer|technician>")
@@ -286,13 +318,16 @@ class BotApp:
         self._reply(
             message,
             f"نقش به‌روز شد: {updated['bale_user_id']} → {role_label(updated['role'])}",
-            kb.main_menu(True),
+            kb.main_menu(user),
         )
 
     def cmd_setscope(self, message: dict, args: list[str]) -> None:
         user = self._user_or_deny(message)
-        if not user or not require_manager(user):
-            self._reply(message, "فقط مالک یا مدیر.")
+        if not user:
+            return
+        if self._deny_technician(message, user) or not require_manager(user):
+            if not require_manager(user) and user.get("role") != "technician":
+                self._reply(message, "فقط مالک یا مدیر.")
             return
         if len(args) < 2:
             self._reply(message, "فرمت: /setscope <bale_id> <scope>")
@@ -305,7 +340,7 @@ class BotApp:
         self._reply(
             message,
             f"حوزه به‌روز شد: {updated['bale_user_id']} → {updated.get('scope')}",
-            kb.main_menu(True),
+            kb.main_menu(user),
         )
 
     def cmd_reset(self, message: dict) -> None:
@@ -316,12 +351,15 @@ class BotApp:
         self._analysis_tundish_filter.pop(str(user["bale_user_id"]), None)
         self._await_category_code.discard(str(user["bale_user_id"]))
         self.db.reset_session(user["bale_user_id"])
-        self._reply(message, "جلسه آپلود پاک شد. از منو دوباره شروع کنید.", kb.main_menu(require_manager(user)))
+        self._reply(message, "جلسه آپلود پاک شد. از منو دوباره شروع کنید.", kb.main_menu(user))
 
     # ---------- request-driven flow ----------
     def on_pick_file_type(self, message: dict, file_type: str) -> None:
         user = self._user_or_deny(message)
         if not user:
+            return
+        if user.get("role") == "technician" and file_type != "tank_consumption":
+            self._deny_technician(message, user)
             return
         self._clear_analysis_pending(user["bale_user_id"])
         self._await_category_code.discard(str(user["bale_user_id"]))
@@ -342,14 +380,14 @@ class BotApp:
         self.db.set_pending_file_type(user["bale_user_id"], None)
         self._await_category_code.discard(str(user["bale_user_id"]))
         session = self.db.get_or_create_session(user["bale_user_id"])
-        self._reply(message, "عملیات لغو شد.\n" + self._status_text(session), kb.main_menu(require_manager(user)))
+        self._reply(message, "عملیات لغو شد.\n" + self._status_text(session), kb.main_menu(user))
 
     def on_status(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
         session = self.db.get_or_create_session(user["bale_user_id"])
-        self._reply(message, self._status_text(session), kb.main_menu(require_manager(user)))
+        self._reply(message, self._status_text(session), kb.main_menu(user))
 
     def on_document(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -357,11 +395,16 @@ class BotApp:
             return
         session = self.db.get_or_create_session(user["bale_user_id"])
         pending = session.get("pending_file_type")
+        if user.get("role") == "technician" and pending != "tank_consumption":
+            if pending:
+                self.db.set_pending_file_type(user["bale_user_id"], None)
+            self._deny_technician(message, user)
+            return
         if not pending:
             self._reply(
                 message,
                 "ابتدا از منو نوع فایل را انتخاب کنید، سپس Excel را بفرستید.",
-                kb.main_menu(require_manager(user)),
+                kb.main_menu(user),
             )
             return
 
@@ -453,7 +496,7 @@ class BotApp:
         reply_menu = (
             kb.inventory_menu()
             if pending == "product_inventory"
-            else kb.main_menu(require_manager(user))
+            else kb.main_menu(user)
         )
         self._reply(
             message,
@@ -471,11 +514,13 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
+        if self._deny_technician(message, user):
+            return
         session = self.db.get_or_create_session(user["bale_user_id"])
         completeness = self.db.session_completeness(session)
         ok, err = can_generate_report(user, session, completeness)
         if not ok:
-            self._reply(message, err + "\n\n" + self._status_text(session), kb.main_menu(require_manager(user)))
+            self._reply(message, err + "\n\n" + self._status_text(session), kb.main_menu(user))
             return
 
         paths = self._session_paths(session)
@@ -506,16 +551,18 @@ class BotApp:
                 message,
                 "گزارش ارسال شد. فایل‌های جلسه برای تحلیل بعدی نگه داشته شدند.\n"
                 "از «گزارش‌ها / تحلیل تاندیش» استفاده کنید یا با /reset جلسه را پاک کنید.",
-                kb.main_menu(require_manager(user)),
+                kb.main_menu(user),
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("generate failed")
-            self._reply(message, f"خطا در تولید گزارش: {exc}", kb.main_menu(require_manager(user)))
+            self._reply(message, f"خطا در تولید گزارش: {exc}", kb.main_menu(user))
 
     # ---------- موجودی انبار submenu ----------
     def on_inventory_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
+            return
+        if self._deny_technician(message, user):
             return
         self._clear_analysis_pending(user["bale_user_id"])
         self._await_category_code.discard(str(user["bale_user_id"]))
@@ -533,6 +580,8 @@ class BotApp:
     def on_add_category_prompt(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
+            return
+        if self._deny_technician(message, user):
             return
         self._await_category_code.add(str(user["bale_user_id"]))
         self._clear_analysis_pending(user["bale_user_id"])
@@ -552,6 +601,8 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             self._await_category_code.discard(uid)
+            return True
+        if self._deny_technician(message, user):
             return True
         try:
             row = self.db.add_category_code(
@@ -573,6 +624,8 @@ class BotApp:
     def on_list_categories(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
+            return
+        if self._deny_technician(message, user):
             return
         rows = self.db.list_category_codes(active_only=False)
         if not rows:
@@ -630,6 +683,8 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
+        if self._deny_technician(message, user):
+            return
         self._reply(
             message,
             "فیلتر نوع تاندیش را برای تحلیل‌ها و PDF انتخاب کنید:\n"
@@ -641,6 +696,8 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
+        if self._deny_technician(message, user):
+            return
         uid = str(user["bale_user_id"])
         self._analysis_tundish_filter[uid] = label
         self._clear_analysis_pending(uid)
@@ -650,6 +707,8 @@ class BotApp:
     def on_analytics_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
+            return
+        if self._deny_technician(message, user):
             return
         self._clear_analysis_pending(user["bale_user_id"])
         session = self.db.get_or_create_session(user["bale_user_id"])
@@ -790,6 +849,8 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return True
+        if self._deny_technician(message, user):
+            return True
         uid = user["bale_user_id"]
         pending = self._analysis_pending.get(uid)
         if not pending or pending.get("await") != "range":
@@ -899,6 +960,8 @@ class BotApp:
     def on_analytics_pdf(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
+            return
+        if self._deny_technician(message, user):
             return
         loaded = self._require_files(message, user, "full")
         if not loaded:
@@ -1012,7 +1075,7 @@ class BotApp:
             user = self._user_or_deny(message)
             if user:
                 self._clear_analysis_pending(user["bale_user_id"])
-                self._reply(message, "منوی اصلی:", kb.main_menu(require_manager(user)))
+                self._reply(message, "منوی اصلی:", kb.main_menu(user))
             return
         if text == kb.BTN_BACK_ANALYTICS:
             self.on_analytics_menu(message)
@@ -1070,7 +1133,7 @@ class BotApp:
         self._reply(
             message,
             "لطفاً از دکمه‌های منو استفاده کنید یا /help را بزنید.",
-            kb.main_menu(require_manager(user)) if user else None,
+            kb.main_menu(user) if user else None,
         )
 
     def handle_update(self, update: dict) -> None:

@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 import pandas as pd
 from openpyxl import Workbook
 
+from bot import keyboards as kb
 from analytics.tundish import (
     critical_materials,
     daily_rates,
@@ -66,6 +67,20 @@ def main() -> int:
     db.upsert_user("999", role="manager", display_name="مدیر تست")
     db.upsert_user("1001", role="technician", display_name="علی رضایی", scope="خط-A")
     db.upsert_user("1002", role="responsible_officer", display_name="مریم احمدی", scope="خط-B")
+
+    # --- role-specific main menus ---
+    def menu_texts(menu: dict) -> set[str]:
+        return {button["text"] for row in menu["keyboard"] for button in row}
+
+    tech_menu = menu_texts(kb.main_menu(db.get_user("1001")))
+    owner_menu = menu_texts(kb.main_menu(db.get_user("998")))
+    manager_menu = menu_texts(kb.main_menu(db.get_user("999")))
+    assert kb.BTN_TANK in tech_menu
+    assert kb.BTN_INV_MENU not in tech_menu
+    assert kb.BTN_ANALYTICS not in tech_menu
+    assert kb.BTN_MONTHLY not in tech_menu
+    for full_menu in (owner_menu, manager_menu):
+        assert {kb.BTN_INV_MENU, kb.BTN_ANALYTICS, kb.BTN_MONTHLY, kb.BTN_TANK}.issubset(full_menu)
 
     # --- category allowlist (defaults seeded on DB init) ---
     assert db.active_category_code_set() == set(DEFAULT_CATEGORY_CODES)

@@ -61,7 +61,17 @@ def button_to_file_type(text: str) -> str | None:
     return mapping.get((text or "").strip())
 
 
-def main_menu(is_manager: bool = False) -> dict:
+def main_menu(user: dict | str | bool | None = None) -> dict:
+    """Return the main menu for a role (technicians only enter daily site stock).
+
+    ``bool`` is accepted for compatibility with older callers where ``True``
+    meant manager access. New callers should pass the user record.
+    """
+    role = user.get("role") if isinstance(user, dict) else user if isinstance(user, str) else None
+    if role == "technician":
+        return BaleClient.reply_keyboard([[BTN_TANK], [BTN_HELP]])
+
+    is_manager = bool(user) if isinstance(user, bool) else role in {"owner", "manager"}
     rows = [
         [BTN_INV_MENU],
         [BTN_MONTHLY],
