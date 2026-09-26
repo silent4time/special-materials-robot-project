@@ -1,4 +1,4 @@
-"""SQLite persistence for users, roles, scopes, sessions, extracts, and reports."""
+"""SQLite persistence for users, roles, scopes, sessions, extracts, category codes, and reports."""
 from __future__ import annotations
 
 import json
@@ -85,12 +85,22 @@ class Database:
                     FOREIGN KEY(session_id) REFERENCES upload_sessions(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS category_codes (
+                    code TEXT NOT NULL UNIQUE,
+                    label TEXT,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    created_by TEXT
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_users_bale ON users(bale_user_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_user ON upload_sessions(bale_user_id);
                 CREATE INDEX IF NOT EXISTS idx_extracted_user_type
                     ON extracted_datasets(bale_user_id, file_type, created_at);
                 CREATE INDEX IF NOT EXISTS idx_extracted_session
                     ON extracted_datasets(session_id);
+                CREATE INDEX IF NOT EXISTS idx_category_codes_active
+                    ON category_codes(active);
                 """
             )
             self._migrate_users_role_check(conn)
@@ -378,6 +388,93 @@ class Database:
                 (session_id,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # --- category codes (warehouse inventory allowlist) ---
+    @staticmethod
+    def validate_category_code(code: str | int) -> str:
+        """Require exactly 4 digits (Excel floats like 1201.0 → 1201 OK; short codes rejected)."""
+        text = str(code).strip()
+        if text.endswith(".0") and text[:-2].isdigit():
+            text = text[:-2]
+        if len(text) != 4 or not text.isdigit():
+            raise ValueError("کد دسته بندی باید دقیقاً ۴ رقم باشد.")
+        return text
+
+    def add_category_code(
+        self,
+        code: str | int,
+        *,
+        label: str | None = None,
+        created_by: str | int | None = None,
+        active: bool = True,
+    ) -> dict[str, Any]:
+        normalized = self.validate_category_code(code)
+        now = _utcnow()
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT * FROM category_codes WHERE code = ?", (normalized,)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE category_codes
+                    SET label = COALESCE(?, label),
+                        active = ?,
+                        created_by = COALESCE(?, created_by)
+                    WHERE code = ?
+                    """,
+                    (
+                        label,
+                        1 if active else 0,
+                        str(created_by) if created_by is not None else None,
+                        normalized,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO category_codes (code, label, active, created_at, created_by)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        normalized,
+                        label,
+                        1 if active else 0,
+                        now,
+                        str(created_by) if created_by is not None else None,
+                    ),
+                )
+        return self.get_category_code(normalized)  # type: ignore[return-value]
+
+    def get_category_code(self, code: str | int) -> Optional[dict[str, Any]]:
+        try:
+            normalized = self.validate_category_code(code)
+        except ValueError:
+            return None
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM category_codes WHERE code = ?", (normalized,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_category_codes(self, active_only: bool = True) -> list[dict[str, Any]]:
+        q = "SELECT * FROM category_codes"
+        if active_only:
+            q += " WHERE active = 1"
+        q += " ORDER BY code"
+        with self.connect() as conn:
+            return [dict(r) for r in conn.execute(q).fetchall()]
+
+    def active_category_code_set(self) -> set[str]:
+        return {r["code"] for r in self.list_category_codes(active_only=True)}
+
+    def deactivate_category_code(self, code: str | int) -> None:
+        normalized = self.validate_category_code(code)
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE category_codes SET active = 0 WHERE code = ?",
+                (normalized,),
+            )
 
     def save_report(
 

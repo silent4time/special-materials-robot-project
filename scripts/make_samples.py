@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create three sample Excel templates under samples/ (tundish-focused)."""
+"""Create three sample Excel templates under samples/."""
 from __future__ import annotations
 
 import sys
@@ -26,20 +26,17 @@ def write_sheet(path: Path, headers: list[str], rows: list[list]) -> None:
 
 
 def main() -> None:
-    # Every sample row carries one of the three plant-standard tundish labels.
+    # موجودی روزانه سایت — keeps tundish analytics fields (former tank_consumption).
     # Keep exactly 4 rows for علی رضایی (tech 1001) and 4 for خط-B (officer scope).
     tank_rows = [
-        # خط-A / علی رضایی — 4 rows across dates and tundish kinds
         ["خط-A", "تاندیش اسلب", "1001", "علی رضایی", "T-01", "اسید سولفوریک", 12.5, "لیتر", "2026-09-01", "نوبت صبح"],
         ["خط-A", "تاندیش اسلب", "1001", "علی رضایی", "T-01", "اسید سولفوریک", 11.0, "لیتر", "2026-09-02", ""],
         ["خط-A", "تاندیش بلوم", "1001", "علی رضایی", "T-02", "سود سوزآور", 8.0, "کیلو", "2026-09-01", ""],
         ["خط-A", "تاندیش بیلت", "1001", "علی رضایی", "T-02", "سود سوزآور", 7.5, "کیلو", "2026-09-03", ""],
-        # خط-B — 4 rows (مریم + حسین) for officer scope tests
         ["خط-B", "تاندیش بلوم", "1002", "مریم احمدی", "T-05", "آب اکسیژنه", 20.0, "لیتر", "2026-09-02", ""],
         ["خط-B", "تاندیش بیلت", "1002", "مریم احمدی", "T-05", "آب اکسیژنه", 18.0, "لیتر", "2026-09-04", ""],
         ["خط-B", "تاندیش اسلب", "1003", "حسین کریمی", "T-06", "کلر", 5.5, "کیلو", "2026-09-02", "اضطراری"],
         ["خط-B", "تاندیش بلوم", "1003", "حسین کریمی", "T-06", "کلر", 6.0, "کیلو", "2026-09-05", ""],
-        # انبار
         ["انبار", "تاندیش بیلت", "1002", "مریم احمدی", "T-10", "روغن صنعتی", 3.0, "لیتر", "2026-09-03", ""],
         ["انبار", "تاندیش اسلب", "1002", "مریم احمدی", "T-10", "روغن صنعتی", 2.5, "لیتر", "2026-09-06", ""],
     ]
@@ -52,20 +49,19 @@ def main() -> None:
         tank_rows,
     )
 
-    # Inventory product_name matches consumption material_name for analytics join.
+    # موجودی انبار — raw 3 Persian columns. product_name for analytics is parsed
+    # from text after " - " so it matches material_name in daily/monthly files.
     # Low stock on اسید / کلر so they appear critical (CRITICAL_DAYS=3).
+    # High stock on روغن for surplus demo. Category 1201 is the sample allowlist.
     write_sheet(
         SAMPLES / "02_product_inventory.xlsx",
+        ["کد دسته بندی", "کد و شرح کالا", "موجودی"],
         [
-            "domain", "tundish_type", "assignee_id", "assignee_name", "product_name",
-            "quantity", "unit", "location", "date", "notes",
-        ],
-        [
-            ["خط-A", "تاندیش اسلب", "1001", "علی رضایی", "اسید سولفوریک", 20, "لیتر", "قفسه ۱", "2026-09-06", "کم"],
-            ["خط-A", "تاندیش بلوم", "1001", "علی رضایی", "سود سوزآور", 80, "کیلو", "قفسه ۲", "2026-09-06", ""],
-            ["خط-B", "تاندیش بلوم", "1002", "مریم احمدی", "آب اکسیژنه", 100, "لیتر", "سالن B", "2026-09-06", ""],
-            ["خط-B", "تاندیش اسلب", "1003", "حسین کریمی", "کلر", 8, "کیلو", "سالن B", "2026-09-06", "بحرانی"],
-            ["انبار", "تاندیش بیلت", "1002", "مریم احمدی", "روغن صنعتی", 50, "لیتر", "انبار مرکزی", "2026-09-06", ""],
+            ["1201", "ACID01 - اسید سولفوریک", 20],
+            ["1201", "CAUST02 - سود سوزآور", 80],
+            ["1201", "H2O203 - آب اکسیژنه", 100],
+            ["1201", "CL04 - کلر", 8],
+            ["1201", "OIL05 - روغن صنعتی", 500],
         ],
     )
 

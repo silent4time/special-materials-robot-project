@@ -11,6 +11,7 @@ from analytics.tundish import (
     filter_by_tundish_type,
     forecast,
     format_suggest_list_fa,
+    format_surplus_list_fa,
     missing_files_for_goal,
     parse_custom_range_message,
     period_consumption,
@@ -18,6 +19,7 @@ from analytics.tundish import (
     remaining,
     resolve_preset_range,
     suggest_requests,
+    surplus_materials,
 )
 from auth.rbac import (
     can_generate_report,
@@ -28,45 +30,43 @@ from auth.rbac import (
 )
 from bot import keyboards as kb
 from bot.bale_api import BaleClient
-from config import CRITICAL_DAYS, FILE_TYPES, ROLES, UPLOAD_DIR, ensure_dirs
+from config import CRITICAL_DAYS, FILE_TYPES, ROLES, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
 from db.models import Database
 from excel.processor import ExcelValidationError, extract_and_save_clean, process_session_files
 from pdf.generator import generate_report
 
 logger = logging.getLogger(__name__)
 
-HELP_TEXT = """راهنمای بازوی گزارش تاندیش
+HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 
 این بازو به‌صورت درخواست‌محور کار می‌کند:
 ۱) از منو نوع فایل را انتخاب کنید
 ۲) فایل Excel مربوطه (.xlsx) را پیوست کنید
 ۳) همین کار را برای هر سه نوع انجام دهید
 ۴) دکمه «تولید گزارش PDF» را بزنید
-۵) از «گزارش‌ها / تحلیل تاندیش» برای مصرف روزانه، پیشنهاد درخواست، گزارش بازه‌ای، مواد بحرانی و پیش‌بینی استفاده کنید
+۵) از «گزارش‌ها / تحلیل تاندیش» برای مصرف روزانه، پیشنهاد درخواست، گزارش بازه‌ای، مواد بحرانی، مواد مازاد و پیش‌بینی استفاده کنید
 
 انواع فایل:
-• مقدار مصرفی هر تاندیش
-• موجودی محصولات
-• مصرف ماهانه مواد
+• موجودی انبار — ۳ ستون: کد دسته بندی، کد و شرح کالا، موجودی
+  (شناسه از «کد و شرح کالا» استخراج می‌شود؛ فقط دسته‌های مجاز در پایگاه‌داده نگه داشته می‌شوند؛ اولویت ۰ حذف می‌شود)
+• مصرف ماهیانه مواد
+• موجودی روزانه سایت (فیلدهای تاندیش برای تحلیل حفظ شده‌اند)
 
-تحلیل تاندیش (نیاز به فایل مرتبط):
-• مصرف روزانه — فایل مصرف تاندیش (ماهانه اختیاری)
+منوی موجودی انبار:
+• ورود فایل اکسل
+• اضافه کردن کد دسته بندی (دقیقاً ۴ رقم)
+
+تحلیل (نیاز به فایل مرتبط):
+• مصرف روزانه — موجودی روزانه سایت (ماهانه اختیاری)
 • پیشنهاد درخواست = max(0, نیاز پیش‌بینی − موجودی)
-• گزارش بازه‌ای — دکمه‌های امروز / ۷ روز / ۳۰ روز یا پیام «از YYYY-MM-DD تا YYYY-MM-DD»
+• گزارش بازه‌ای — امروز / ۷ روز / ۳۰ روز یا «از YYYY-MM-DD تا YYYY-MM-DD»
 • مواد بحرانی — پوشش کمتر از CRITICAL_DAYS={critical} روز
+• مواد مازاد — پوشش > max(CRITICAL_DAYS×3، {surplus_cover}) روز یا موجودی بیش از نیاز {surplus_forecast} روز؛ بدون مصرف = مازاد/بدون مصرف
 • پیش‌بینی = میانگین روزانه × تعداد روز بازه
-• فیلتر اختیاری نوع تاندیش: همه تاندیش‌ها / تاندیش اسلب / تاندیش بلوم / تاندیش بیلت
-  فیلتر پیش از تحلیل‌ها و PDF تحلیل اعمال می‌شود.
-
-استانداردهای کارخانه برای نوع تاندیش:
-• تاندیش اسلب
-• تاندیش بلوم
-• تاندیش بیلت
 
 نقش‌ها:
 • مالک / مدیر — همه ردیف‌ها + مدیریت کاربران
-• کاردان مسئول — فقط حوزه/دامنه خودش
-• تکنسین — فقط ردیف‌های تخصیص‌یافته به خودش
+• کاردان مسئول / تکنسین — فیلتر حوزه/تخصیص روی فایل‌های دارای domain؛ موجودی انبار بدون domain برای همه کاربران مجاز قابل مشاهده است
 
 دستورات مدیر:
 /users
@@ -74,7 +74,11 @@ HELP_TEXT = """راهنمای بازوی گزارش تاندیش
 /setrole <bale_id> <role>
 /setscope <bale_id> <scope>
 /reset — پاک کردن جلسه آپلود جاری
-""".format(critical=int(CRITICAL_DAYS) if CRITICAL_DAYS == int(CRITICAL_DAYS) else CRITICAL_DAYS)
+""".format(
+    critical=int(CRITICAL_DAYS) if CRITICAL_DAYS == int(CRITICAL_DAYS) else CRITICAL_DAYS,
+    surplus_cover=int(SURPLUS_COVER_DAYS) if SURPLUS_COVER_DAYS == int(SURPLUS_COVER_DAYS) else SURPLUS_COVER_DAYS,
+    surplus_forecast=int(SURPLUS_FORECAST_DAYS) if SURPLUS_FORECAST_DAYS == int(SURPLUS_FORECAST_DAYS) else SURPLUS_FORECAST_DAYS,
+)
 
 
 class BotApp:
@@ -84,6 +88,8 @@ class BotApp:
         # pending analytics interaction per user: {"mode": "period"|"forecast"|"suggest", "await": "range"|"days"}
         self._analysis_pending: dict[str, dict[str, Any]] = {}
         self._analysis_tundish_filter: dict[str, str | None] = {}
+        # awaiting plain text for category code entry
+        self._await_category_code: set[str] = set()
         ensure_dirs()
 
     # ---------- helpers ----------
@@ -183,12 +189,12 @@ class BotApp:
             return
         self.db.get_or_create_session(user["bale_user_id"])
         text = (
-            "سلام! به بازوی «گزارش تاندیش» خوش آمدید.\n\n"
+            "سلام! به بازوی «گزارش مواد / تاندیش» خوش آمدید.\n\n"
             f"نقش شما: {role_label(user['role'])}\n"
             f"حوزه: {user.get('scope') or '—'}\n\n"
-            "از منو نوع فایل Excel را انتخاب کنید، سپس همان فایل را ارسال کنید.\n"
-            "پس از بارگذاری، از «گزارش‌ها / تحلیل تاندیش» برای مصرف روزانه، "
-            "پیشنهاد درخواست، گزارش بازه‌ای، مواد بحرانی و پیش‌بینی استفاده کنید."
+            "از منو: موجودی انبار / مصرف ماهیانه / موجودی روزانه سایت را انتخاب کنید.\n"
+            "برای موجودی انبار ابتدا کدهای دسته بندی ۴ رقمی را اضافه کنید، سپس Excel بفرستید.\n"
+            "از «گزارش‌ها / تحلیل تاندیش» برای تحلیل‌ها و گزارش مواد مازاد استفاده کنید."
         )
         self._reply(message, text, kb.main_menu(require_manager(user)))
 
@@ -308,6 +314,7 @@ class BotApp:
             return
         self._clear_analysis_pending(user["bale_user_id"])
         self._analysis_tundish_filter.pop(str(user["bale_user_id"]), None)
+        self._await_category_code.discard(str(user["bale_user_id"]))
         self.db.reset_session(user["bale_user_id"])
         self._reply(message, "جلسه آپلود پاک شد. از منو دوباره شروع کنید.", kb.main_menu(require_manager(user)))
 
@@ -317,6 +324,7 @@ class BotApp:
         if not user:
             return
         self._clear_analysis_pending(user["bale_user_id"])
+        self._await_category_code.discard(str(user["bale_user_id"]))
         self.db.set_pending_file_type(user["bale_user_id"], file_type)
         label = FILE_TYPES[file_type]["label_fa"]
         self._reply(
@@ -332,8 +340,9 @@ class BotApp:
         if not user:
             return
         self.db.set_pending_file_type(user["bale_user_id"], None)
+        self._await_category_code.discard(str(user["bale_user_id"]))
         session = self.db.get_or_create_session(user["bale_user_id"])
-        self._reply(message, "آپلود لغو شد.\n" + self._status_text(session), kb.main_menu(require_manager(user)))
+        self._reply(message, "عملیات لغو شد.\n" + self._status_text(session), kb.main_menu(require_manager(user)))
 
     def on_status(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -381,11 +390,28 @@ class BotApp:
             self._reply(message, f"دانلود فایل از بله ناموفق بود: {exc}")
             return
 
+        allowlist = None
+        if pending == "product_inventory":
+            allowlist = self.db.active_category_code_set()
+            if not allowlist:
+                dest.unlink(missing_ok=True)
+                self._reply(
+                    message,
+                    "لیست کدهای دسته‌بندی خالی است.\n"
+                    "ابتدا از منوی «موجودی انبار» → «اضافه کردن کد دسته بندی» "
+                    "حداقل یک کد ۴ رقمی ثبت کنید، سپس دوباره فایل را بفرستید.",
+                    kb.inventory_menu(),
+                )
+                return
+
         try:
-            result = extract_and_save_clean(dest, pending)
+            result = extract_and_save_clean(
+                dest, pending, category_allowlist=allowlist
+            )
         except ExcelValidationError as exc:
             dest.unlink(missing_ok=True)
-            self._reply(message, str(exc), kb.cancel_pending_menu())
+            menu = kb.inventory_menu() if pending == "product_inventory" else kb.cancel_pending_menu()
+            self._reply(message, str(exc), menu)
             return
         except Exception as exc:  # noqa: BLE001
             logger.exception("extract failed")
@@ -408,24 +434,37 @@ class BotApp:
         )
 
         label = FILE_TYPES[pending]["label_fa"]
-        dropped_note = ""
-        if result.dropped_row_count > 0:
+        reasons = result.drop_reasons or {}
+        if pending == "product_inventory" and reasons:
             dropped_note = (
-                f" ({result.dropped_row_count} ردیف اضافی/نامعتبر حذف شد)"
+                f"\nحذف‌شده‌ها: دسته نامجاز={reasons.get('wrong_category', 0)}، "
+                f"اولویت ۰={reasons.get('priority_0', 0)}، "
+                f"شناسه نامعتبر={reasons.get('bad_id', 0)}، "
+                f"دسته خالی={reasons.get('bad_category', 0)}، "
+                f"موجودی نامعتبر={reasons.get('bad_quantity', 0)}"
             )
+        elif result.dropped_row_count > 0:
+            dropped_note = f"\n({result.dropped_row_count} ردیف اضافی/نامعتبر حذف شد)"
+        else:
+            dropped_note = ""
         extra_cols_note = ""
         if result.extra_columns_dropped:
-            extra_cols_note = "؛ ستون‌های اضافی هم کنار گذاشته شد"
+            extra_cols_note = "\nستون‌های اضافی کنار گذاشته شد."
+        reply_menu = (
+            kb.inventory_menu()
+            if pending == "product_inventory"
+            else kb.main_menu(require_manager(user))
+        )
         self._reply(
             message,
             (
                 f"✅ فایل «{label}» دریافت شد.\n"
-                f"از {result.raw_row_count} ردیف خام، {result.kept_row_count} ردیف استخراج شد"
-                f"{dropped_note}{extra_cols_note}.\n"
+                f"از {result.raw_row_count} ردیف خام، {result.kept_row_count} ردیف نگه داشته شد."
+                f"{dropped_note}{extra_cols_note}\n"
                 f"نسخه تمیز ذخیره و در پایگاه‌داده ثبت شد.\n\n"
             )
             + self._status_text(session),
-            kb.main_menu(require_manager(user)),
+            reply_menu,
         )
 
     def on_generate(self, message: dict) -> None:
@@ -473,7 +512,85 @@ class BotApp:
             logger.exception("generate failed")
             self._reply(message, f"خطا در تولید گزارش: {exc}", kb.main_menu(require_manager(user)))
 
+    # ---------- موجودی انبار submenu ----------
+    def on_inventory_menu(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        self._clear_analysis_pending(user["bale_user_id"])
+        self._await_category_code.discard(str(user["bale_user_id"]))
+        codes = self.db.list_category_codes(active_only=True)
+        hint = (
+            f"تعداد کدهای فعال دسته‌بندی: {len(codes)}\n"
+            "اگر لیست خالی است، قبل از آپلود Excel حداقل یک کد ۴ رقمی اضافه کنید."
+        )
+        self._reply(
+            message,
+            "منوی موجودی انبار\n" + hint,
+            kb.inventory_menu(),
+        )
+
+    def on_add_category_prompt(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        self._await_category_code.add(str(user["bale_user_id"]))
+        self._clear_analysis_pending(user["bale_user_id"])
+        self.db.set_pending_file_type(user["bale_user_id"], None)
+        self._reply(
+            message,
+            "کد دسته بندی ۴ رقمی را ارسال کنید (مثال: 1201).\n"
+            f"برای انصراف «{kb.BTN_CANCEL_PENDING}» یا بازگشت به منو را بزنید.",
+            kb.cancel_pending_menu(),
+        )
+
+    def on_category_code_text(self, message: dict, text: str) -> bool:
+        """Handle pending category-code entry. Returns True if consumed."""
+        uid = str(self._uid(message))
+        if uid not in self._await_category_code:
+            return False
+        user = self._user_or_deny(message)
+        if not user:
+            self._await_category_code.discard(uid)
+            return True
+        try:
+            row = self.db.add_category_code(
+                text.strip(), created_by=user["bale_user_id"]
+            )
+        except ValueError as exc:
+            self._reply(message, str(exc), kb.cancel_pending_menu())
+            return True
+        self._await_category_code.discard(uid)
+        self._reply(
+            message,
+            f"✅ کد دسته بندی «{row['code']}» ذخیره شد"
+            + (f" ({row.get('label')})" if row.get("label") else "")
+            + f".\nتعداد کدهای فعال: {len(self.db.list_category_codes(active_only=True))}",
+            kb.inventory_menu(),
+        )
+        return True
+
+    def on_list_categories(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        rows = self.db.list_category_codes(active_only=False)
+        if not rows:
+            self._reply(
+                message,
+                "هنوز هیچ کد دسته‌بندی ثبت نشده است.",
+                kb.inventory_menu(),
+            )
+            return
+        lines = ["کدهای دسته بندی:"]
+        for r in rows:
+            flag = "🟢" if r.get("active") else "🔴"
+            label = f" — {r['label']}" if r.get("label") else ""
+            lines.append(f"{flag} {r['code']}{label}")
+        self._reply(message, "\n".join(lines), kb.inventory_menu())
+
     # ---------- analytics ----------
+
     def _build_analytics_bundle(
         self,
         frames: dict,
@@ -609,7 +726,29 @@ class BotApp:
                 )
         self._reply(message, "\n".join(lines), kb.analytics_menu())
 
+    def on_surplus_report(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        loaded = self._require_files(message, user, "surplus")
+        if not loaded:
+            return
+        _, frames, _ = loaded
+        rates = daily_rates(frames.get("tank_consumption"), frames.get("monthly_consumption"))
+        rem = remaining(frames.get("product_inventory"))
+        surplus = surplus_materials(rates, rem)
+        cover_th = max(float(CRITICAL_DAYS) * 3.0, float(SURPLUS_COVER_DAYS))
+        lines = [
+            "📦 گزارش مواد مازاد",
+            f"تعریف: پوشش > {cover_th:g} روز، یا موجودی بیش از نیاز {SURPLUS_FORECAST_DAYS:g} روز؛",
+            "مواد با موجودی ولی بدون مصرف ثبت‌شده = «مازاد/بدون مصرف».",
+            "",
+            format_surplus_list_fa(surplus),
+        ]
+        self._reply(message, "\n".join(lines), kb.analytics_menu())
+
     def _ask_date_range(self, message: dict, user: dict, mode: str) -> None:
+
         self._analysis_pending[user["bale_user_id"]] = {"mode": mode, "await": "range"}
         hint = (
             "بازه زمانی را انتخاب کنید:\n"
@@ -828,6 +967,10 @@ class BotApp:
             if self.on_date_range_choice(message, preset=None, custom_text=text):
                 return
 
+        # category code entry (plain 4-digit text while awaiting)
+        if self.on_category_code_text(message, text):
+            return
+
         # keyboard buttons
         if text == kb.BTN_HELP:
             self.cmd_help(message)
@@ -880,6 +1023,9 @@ class BotApp:
         if text == kb.BTN_REMAINING:
             self.on_remaining_critical(message)
             return
+        if text == kb.BTN_SURPLUS:
+            self.on_surplus_report(message)
+            return
         if text == kb.BTN_PERIOD:
             self.on_period_prompt(message)
             return
@@ -904,6 +1050,16 @@ class BotApp:
         if text == kb.BTN_RANGE_CUSTOM:
             if self.on_date_range_choice(message, "custom"):
                 return
+
+        if text == kb.BTN_INV_MENU or text == kb.BTN_INV:
+            self.on_inventory_menu(message)
+            return
+        if text == kb.BTN_INV_ADD_CATEGORY:
+            self.on_add_category_prompt(message)
+            return
+        if text == kb.BTN_INV_LIST_CATEGORIES:
+            self.on_list_categories(message)
+            return
 
         file_type = kb.button_to_file_type(text)
         if file_type:

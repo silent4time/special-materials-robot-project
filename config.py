@@ -18,26 +18,30 @@ FONTS_DIR = BASE_DIR / "fonts"
 POLL_TIMEOUT = int(os.getenv("POLL_TIMEOUT", "25"))
 # Materials with days_of_cover = remaining / avg_daily below this are critical
 CRITICAL_DAYS = float(os.getenv("CRITICAL_DAYS", "3"))
+# Surplus: days_of_cover above this threshold (also max(CRITICAL_DAYS*3, 10))
+SURPLUS_COVER_DAYS = float(os.getenv("SURPLUS_COVER_DAYS", "10"))
+SURPLUS_FORECAST_DAYS = float(os.getenv("SURPLUS_FORECAST_DAYS", "30"))
 BALE_API_BASE = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}" if BALE_BOT_TOKEN else ""
 
 # File type keys used across bot / excel / pdf / db
+# Internal keys kept stable for session slots; Persian labels updated for UI.
 FILE_TYPES = {
     "tank_consumption": {
         "key": "tank_consumption",
-        "label_fa": "مقدار مصرفی هر تاندیش",
-        "button": "📥 مقدار مصرفی هر تاندیش",
-        "filename_hint": "tank_consumption",
+        "label_fa": "موجودی روزانه سایت",
+        "button": "📥 موجودی روزانه سایت",
+        "filename_hint": "daily_site_stock",
     },
     "product_inventory": {
         "key": "product_inventory",
-        "label_fa": "موجودی محصولات",
-        "button": "📥 موجودی محصولات",
-        "filename_hint": "product_inventory",
+        "label_fa": "موجودی انبار",
+        "button": "📥 موجودی انبار",
+        "filename_hint": "warehouse_inventory",
     },
     "monthly_consumption": {
         "key": "monthly_consumption",
-        "label_fa": "مصرف ماهانه مواد",
-        "button": "📥 مصرف ماهانه مواد",
+        "label_fa": "مصرف ماهیانه مواد",
+        "button": "📥 مصرف ماهیانه مواد",
         "filename_hint": "monthly_consumption",
     },
 }
@@ -62,6 +66,9 @@ TUNDISH_TYPES = {
 }
 TUNDISH_TYPE_LABELS = list(TUNDISH_TYPES.values())
 
+# Files that still require domain/assignee for RBAC row filtering
+RBAC_SCOPED_FILE_TYPES = frozenset({"tank_consumption", "monthly_consumption"})
+
 REQUIRED_COLUMNS = {
     "tank_consumption": [
         "domain",
@@ -75,17 +82,14 @@ REQUIRED_COLUMNS = {
         "date",
         "notes",
     ],
+    # Warehouse inventory (موجودی انبار): 3 raw columns + extracted id/priority
     "product_inventory": [
-        "domain",
-        "tundish_type",
-        "assignee_id",
-        "assignee_name",
+        "category_code",
+        "id",
+        "item_code_desc",
         "product_name",
         "quantity",
-        "unit",
-        "location",
-        "date",
-        "notes",
+        "priority",
     ],
     "monthly_consumption": [
         "domain",

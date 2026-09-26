@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from config import ADMIN_ROLES, FULL_DATA_ROLES, ROLES
+from config import ADMIN_ROLES, FILE_TYPES, FULL_DATA_ROLES, ROLES
 from db.models import Database
 
 
@@ -46,6 +46,8 @@ def filter_dataframe_for_user(df: pd.DataFrame, user: dict[str, Any]) -> pd.Data
     """
     Apply RBAC row filters:
     - owner / manager: all rows
+    - If domain/assignee columns are absent (e.g. موجودی انبار plant-wide):
+      all authorized users see the full inventory.
     - responsible_officer: rows where domain/scope matches user.scope
     - technician: rows where assignee_id or assignee_name matches the user
     """
@@ -57,8 +59,13 @@ def filter_dataframe_for_user(df: pd.DataFrame, user: dict[str, Any]) -> pd.Data
         return df.copy()
 
     work = df.copy()
-    # normalize column names already done in excel loader; still guard
     cols = {c.lower(): c for c in work.columns}
+    has_domain = bool(cols.get("domain") or cols.get("scope"))
+    has_assignee = bool(cols.get("assignee_id") or cols.get("assignee_name"))
+
+    # Plant-wide datasets (warehouse inventory): no domain/assignee → full view
+    if not has_domain and not has_assignee:
+        return work
 
     if role == "responsible_officer":
         scope = (user.get("scope") or "").strip()
@@ -94,11 +101,6 @@ def can_generate_report(user: dict, session: dict, completeness: dict[str, bool]
         return False, "دسترسی ندارید."
     if not all(completeness.values()):
         missing = [k for k, v in completeness.items() if not v]
-        labels = {
-            "tank_consumption": "مقدار مصرفی هر تاندیش",
-            "product_inventory": "موجودی محصولات",
-            "monthly_consumption": "مصرف ماهانه مواد",
-        }
-        names = "، ".join(labels[m] for m in missing)
+        names = "، ".join(FILE_TYPES[m]["label_fa"] for m in missing if m in FILE_TYPES)
         return False, f"هنوز این فایل‌ها دریافت نشده‌اند:\n{names}"
     return True, ""

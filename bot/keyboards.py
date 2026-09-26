@@ -1,4 +1,4 @@
-"""Persian reply keyboards for request-driven upload flow and tundish analytics."""
+"""Persian reply keyboards for upload flow, warehouse inventory submenu, and analytics."""
 from __future__ import annotations
 
 from config import FILE_TYPES, TUNDISH_TYPES
@@ -15,12 +15,19 @@ BTN_HELP = "❓ راهنما"
 BTN_USERS = "👥 لیست کاربران"
 BTN_CANCEL_PENDING = "✖️ انصراف از آپلود"
 
+# موجودی انبار submenu
+BTN_INV_MENU = "📦 موجودی انبار"
+BTN_INV_UPLOAD = "📥 ورود فایل اکسل"
+BTN_INV_ADD_CATEGORY = "➕ اضافه کردن کد دسته بندی"
+BTN_INV_LIST_CATEGORIES = "📋 لیست کدهای دسته بندی"
+
 # Analytics / reports submenu
 BTN_ANALYTICS = "📊 گزارش‌ها / تحلیل تاندیش"
 BTN_DAILY = "📈 مصرف روزانه مواد"
 BTN_SUGGEST = "🛒 پیشنهاد درخواست مواد"
 BTN_PERIOD = "📅 گزارش مصرف بازه‌ای"
 BTN_REMAINING = "⚠️ موجودی و مواد بحرانی"
+BTN_SURPLUS = "📦 گزارش مواد مازاد"
 BTN_FORECAST = "🔮 پیش‌بینی نیاز تاندیش"
 BTN_ANALYTICS_PDF = "📄 PDF کامل تحلیل"
 BTN_TUNDISH_FILTER = "🔎 فیلتر نوع تاندیش"
@@ -41,20 +48,24 @@ BTN_BACK_ANALYTICS = "⬅️ بازگشت به تحلیل"
 def button_to_file_type(text: str) -> str | None:
     mapping = {
         BTN_TANK: "tank_consumption",
-        BTN_INV: "product_inventory",
+        BTN_INV_UPLOAD: "product_inventory",
         BTN_MONTHLY: "monthly_consumption",
         FILE_TYPES["tank_consumption"]["label_fa"]: "tank_consumption",
         FILE_TYPES["product_inventory"]["label_fa"]: "product_inventory",
         FILE_TYPES["monthly_consumption"]["label_fa"]: "monthly_consumption",
+        # legacy button texts (pre-redesign)
+        "📥 موجودی محصولات": "product_inventory",
+        "📥 مقدار مصرفی هر تاندیش": "tank_consumption",
+        "📥 مصرف ماهانه مواد": "monthly_consumption",
     }
     return mapping.get((text or "").strip())
 
 
 def main_menu(is_manager: bool = False) -> dict:
     rows = [
-        [BTN_TANK],
-        [BTN_INV],
+        [BTN_INV_MENU],
         [BTN_MONTHLY],
+        [BTN_TANK],
         [BTN_STATUS, BTN_GENERATE],
         [BTN_ANALYTICS],
         [BTN_RESET, BTN_HELP],
@@ -64,12 +75,24 @@ def main_menu(is_manager: bool = False) -> dict:
     return BaleClient.reply_keyboard(rows)
 
 
+def inventory_menu() -> dict:
+    """Submenu under موجودی انبار."""
+    rows = [
+        [BTN_INV_UPLOAD],
+        [BTN_INV_ADD_CATEGORY],
+        [BTN_INV_LIST_CATEGORIES],
+        [BTN_BACK_MAIN],
+    ]
+    return BaleClient.reply_keyboard(rows)
+
+
 def analytics_menu() -> dict:
     rows = [
         [BTN_DAILY],
         [BTN_SUGGEST],
         [BTN_PERIOD],
         [BTN_REMAINING],
+        [BTN_SURPLUS],
         [BTN_FORECAST],
         [BTN_ANALYTICS_PDF],
         [BTN_TUNDISH_FILTER],

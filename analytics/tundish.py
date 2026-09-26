@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from config import CRITICAL_DAYS, TUNDISH_TYPES, TUNDISH_TYPE_LABELS
+from config import CRITICAL_DAYS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, TUNDISH_TYPES, TUNDISH_TYPE_LABELS
 
 CUSTOM_RANGE_RE = re.compile(
     r"از\s*(\d{4}-\d{2}-\d{2})\s*تا\s*(\d{4}-\d{2}-\d{2})",
@@ -264,14 +264,15 @@ def period_consumption(
 
 def remaining(inventory_df: pd.DataFrame | None) -> pd.DataFrame:
     """
-    Remaining stock from product inventory.
-    Uses product_name as material key (matched to consumption material_name).
+    Remaining stock from warehouse / product inventory.
+    Prefers product_name, then item_code_desc, then material_name as join key
+    (matched to consumption material_name).
     """
     if inventory_df is None or inventory_df.empty:
         return pd.DataFrame(columns=["material_name", "remaining_qty", "unit", "location"])
     work = inventory_df.copy()
     name_col = None
-    for candidate in ("product_name", "material_name"):
+    for candidate in ("product_name", "item_code_desc", "material_name"):
         if candidate in work.columns:
             name_col = candidate
             break
@@ -472,21 +473,137 @@ def format_suggest_list_fa(suggest_df: pd.DataFrame, limit: int = 20) -> str:
 def missing_files_for_goal(goal: str, completeness: dict[str, bool]) -> list[str]:
     """
     Which Excel slots are required for a given analytics goal.
-    goal: daily | period | remaining_critical | forecast | suggest | full
+    goal: daily | period | remaining_critical | forecast | suggest | surplus | full
     """
+    from config import FILE_TYPES
+
     need_map = {
         "daily": ["tank_consumption"],
         "period": ["tank_consumption"],
         "remaining_critical": ["tank_consumption", "product_inventory"],
         "forecast": ["tank_consumption"],
         "suggest": ["tank_consumption", "product_inventory"],
+        "surplus": ["product_inventory"],
         "full": ["tank_consumption", "product_inventory"],
     }
-    labels = {
-        "tank_consumption": "مقدار مصرفی هر تاندیش",
-        "product_inventory": "موجودی محصولات",
-        "monthly_consumption": "مصرف ماهانه مواد",
-    }
     required = need_map.get(goal, ["tank_consumption"])
-    missing = [labels[k] for k in required if not completeness.get(k)]
+    missing = [
+        FILE_TYPES[k]["label_fa"] for k in required if not completeness.get(k) and k in FILE_TYPES
+    ]
     return missing
+
+
+def surplus_materials(
+    rates_df: pd.DataFrame | None,
+    remaining_df: pd.DataFrame | None,
+    *,
+    critical_days: float | int = CRITICAL_DAYS,
+    surplus_cover_days: float | int | None = None,
+    forecast_days: float | int | None = None,
+) -> pd.DataFrame:
+    """Identify surplus (مازاد) materials.
+
+    A material is surplus when ANY of:
+      1) days_of_cover > max(CRITICAL_DAYS * 3, SURPLUS_COVER_DAYS) and avg_daily > 0
+      2) remaining_qty > forecast_need for SURPLUS_FORECAST_DAYS (default 30)
+      3) has stock but no matching consumption (avg_daily == 0) → flag «مازاد/بدون مصرف»
+
+    Documented in Persian UI as «گزارش مواد مازاد».
+    """
+    cover_threshold = float(
+        surplus_cover_days
+        if surplus_cover_days is not None
+        else max(float(critical_days) * 3.0, float(SURPLUS_COVER_DAYS))
+    )
+    days = float(forecast_days if forecast_days is not None else SURPLUS_FORECAST_DAYS)
+
+    rates_m = _material_daily_avg(rates_df if rates_df is not None else pd.DataFrame())
+    rem_m = _material_remaining(remaining_df if remaining_df is not None else pd.DataFrame())
+    cols = [
+        "material_name",
+        "remaining_qty",
+        "avg_daily",
+        "days_of_cover",
+        "forecast_need",
+        "surplus_qty",
+        "unit",
+        "surplus_reason",
+    ]
+    if rem_m.empty:
+        return pd.DataFrame(columns=cols)
+
+    merged = rem_m.merge(rates_m, on="material_name", how="left", suffixes=("", "_rate"))
+    if "unit" not in merged.columns or merged["unit"].isna().all():
+        if "unit_rate" in merged.columns:
+            merged["unit"] = merged["unit_rate"]
+    merged["avg_daily"] = pd.to_numeric(merged.get("avg_daily"), errors="coerce").fillna(0.0)
+    merged["remaining_qty"] = pd.to_numeric(merged["remaining_qty"], errors="coerce").fillna(0.0)
+    merged["forecast_need"] = merged["avg_daily"] * days
+
+    def cover(row: pd.Series) -> float:
+        avg = float(row["avg_daily"])
+        if avg <= 0:
+            return float("inf")
+        return float(row["remaining_qty"]) / avg
+
+    merged["days_of_cover"] = merged.apply(cover, axis=1)
+
+    reasons: list[str] = []
+    keep: list[bool] = []
+    surplus_qty: list[float] = []
+    for _, row in merged.iterrows():
+        rem_q = float(row["remaining_qty"])
+        avg = float(row["avg_daily"])
+        cover_d = float(row["days_of_cover"])
+        need = float(row["forecast_need"])
+        flags: list[str] = []
+        if rem_q <= 0:
+            keep.append(False)
+            reasons.append("")
+            surplus_qty.append(0.0)
+            continue
+        if avg <= 0:
+            flags.append("مازاد/بدون مصرف")
+        else:
+            if cover_d > cover_threshold:
+                flags.append(f"پوشش بالا (> {cover_threshold:g} روز)")
+            if rem_q > need:
+                flags.append(f"بیش از نیاز {days:g} روز")
+        if flags:
+            keep.append(True)
+            reasons.append("؛ ".join(flags))
+            surplus_qty.append(max(0.0, rem_q - need) if avg > 0 else rem_q)
+        else:
+            keep.append(False)
+            reasons.append("")
+            surplus_qty.append(0.0)
+
+    merged["surplus_reason"] = reasons
+    merged["surplus_qty"] = surplus_qty
+    out = merged.loc[keep].copy()
+    out = out.sort_values(by=["surplus_qty", "material_name"], ascending=[False, True], kind="stable")
+    for c in cols:
+        if c not in out.columns:
+            out[c] = None
+    return out[cols].reset_index(drop=True)
+
+
+def format_surplus_list_fa(surplus_df: pd.DataFrame, limit: int = 30) -> str:
+    """Persian bullet list for surplus materials chat reply."""
+    if surplus_df is None or surplus_df.empty:
+        return "ماده مازادی شناسایی نشد."
+    lines: list[str] = []
+    for _, row in surplus_df.head(limit).iterrows():
+        unit = row.get("unit") or ""
+        cover = row.get("days_of_cover")
+        if cover == float("inf"):
+            cover_s = "∞"
+        else:
+            cover_s = f"{float(cover):.1f}"
+        reason = row.get("surplus_reason") or ""
+        lines.append(
+            f"• {row['material_name']}: موجودی {float(row['remaining_qty']):.2f} {unit} | "
+            f"مازاد≈ {float(row['surplus_qty']):.2f} | پوشش≈ {cover_s} روز"
+            + (f" | {reason}" if reason else "")
+        )
+    return "\n".join(lines)
