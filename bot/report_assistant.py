@@ -53,7 +53,7 @@ OFF_SCOPE_HINTS = (
     "لوگوی ربات",
     "تنظیمات ربات",
     "حذف فایل",
-    "ویرایش منابع اصلی",
+    "ویرایش منبع اصلی",
     "کسر از انبار",
     "openai",
     "chatgpt",
@@ -148,7 +148,7 @@ def build_report_context(db: Any, user: dict[str, Any] | None = None) -> str:
                 elif latest and latest.get("clean_path"):
                     lines.append("ورودی انبار: پایه مقایسه (موجودی قبلی) موجود نیست.")
                 else:
-                    lines.append("ورودی انبار: منابع اصلی استخراج‌شده نیست.")
+                    lines.append("ورودی انبار: منبع اصلی استخراج نشده است.")
             except Exception:  # noqa: BLE001
                 logger.debug("assistant context: inbound failed", exc_info=True)
                 lines.append("ورودی انبار: محاسبه ممکن نشد.")
@@ -175,7 +175,7 @@ def build_report_context(db: Any, user: dict[str, Any] | None = None) -> str:
                         user or {"role": "owner", "bale_user_id": uid},
                     )
                     rem_df = remaining(inv)
-                    rem_src = "منابع اصلی"
+                    rem_src = "منبع اصلی"
             rates = pd.DataFrame()
             if uid:
                 monthly = db.get_latest_extracted(uid, "monthly_consumption")

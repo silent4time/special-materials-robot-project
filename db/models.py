@@ -1070,7 +1070,7 @@ class Database:
                     """
                 ).fetchone()
         if not row:
-            return {"ok": False, "error": "هیچ استخراج منابع اصلی یافت نشد.", "counts": {}}
+            return {"ok": False, "error": "هیچ منبع اصلی یافت نشد.", "counts": {}}
         extract = dict(row)
         counts = self.seed_catalog_from_inventory_extract(extract["clean_path"])
         return {"ok": True, "extract": extract, "counts": counts}

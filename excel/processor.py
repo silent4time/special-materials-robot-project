@@ -215,15 +215,15 @@ def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
         out["item_code_desc"] = out["product_name"]
     if "item_code_desc" not in out.columns:
         raise ExcelValidationError(
-            "ستون «کد و شرح کالا» در فایل منابع اصلی یافت نشد."
+            "ستون «کد و شرح کالا» در فایل منبع اصلی یافت نشد."
         )
     if "category_code" not in out.columns:
         raise ExcelValidationError(
-            "ستون «کد دسته بندی» در فایل منابع اصلی یافت نشد."
+            "ستون «کد دسته بندی» در فایل منبع اصلی یافت نشد."
         )
     if "quantity" not in out.columns:
         raise ExcelValidationError(
-            "ستون «موجودی» در فایل منابع اصلی یافت نشد."
+            "ستون «موجودی» در فایل منبع اصلی یافت نشد."
         )
 
     raw_desc = out["item_code_desc"]
@@ -626,7 +626,7 @@ def extract_and_save_clean(
 ) -> ExtractResult:
     """Load raw workbook, filter records, project columns, write cleaned xlsx.
 
-    For product_inventory (منابع اصلی): extract id, filter by category allowlist,
+    For product_inventory (منبع اصلی): extract id, filter by category allowlist,
     drop priority==0, default priority=1.
     For other types: standard tundish keep-rule + REQUIRED_COLUMNS projection.
     """
@@ -645,7 +645,7 @@ def extract_and_save_clean(
         if not allowlist:
             raise ExcelValidationError(
                 "لیست کدهای دسته‌بندی خالی است. "
-                "ابتدا از منوی «منابع اصلی» → «اضافه کردن کد دسته بندی» "
+                "ابتدا از منوی «منبع اصلی» → «اضافه کردن کد دسته بندی» "
                 "حداقل یک کد ۴ رقمی اضافه کنید."
             )
         enriched = enrich_warehouse_inventory(df)

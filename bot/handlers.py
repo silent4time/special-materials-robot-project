@@ -86,7 +86,7 @@ logger = logging.getLogger(__name__)
 HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 
 جریان اصلی:
-۱) منابع اصلی و مصرف ماهیانه را از منو با Excel (.xlsx) بفرستید
+۱) منبع اصلی و مصرف ماهیانه را از منو با Excel (.xlsx) بفرستید
 ۲) «موجودی روزانه سایت» را به‌صورت تعاملی وارد کنید (نه Excel تکنسین)
 ۳) دکمه «تولید گزارش PDF» یا «گزارش‌ها / تحلیل تاندیش» را بزنید
 
@@ -96,11 +96,11 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • داده در جدول site_stock_entries ذخیره می‌شود (upsert روزانه)
 
 تنظیمات اقلام سایت / تخصیص به گروه (مالک، مدیر، کاردان مسئول — نه تکنسین):
-• همگام‌سازی اقلام از آخرین استخراج منابع اصلی
+• همگام‌سازی اقلام از آخرین استخراج منبع اصلی
 • تخصیص خودکار از ستون سفارش کار مصرف ماهیانه (اسلب/بلوم/بیلت) + تخصیص دستی
 
 انواع فایل Excel:
-• منابع اصلی — ۳ ستون: کد دسته بندی، کد و شرح کالا، موجودی
+• منبع اصلی — ۳ ستون: کد دسته بندی، کد و شرح کالا، موجودی
 • مصرف ماهیانه مواد
 
 تحلیل:
@@ -114,11 +114,11 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 درخواست مواد (مالک / مدیر / کاردان مسئول):
 • دکمه «🛒 درخواست مواد» در منوی اصلی
 • انتخاب پوشش روز (۷ / ۱۴ / ۳۰)، بررسی پیشنهاد، تأیید یا اصلاح مقدار
-• پس از تأیید، از منابع اصلی (ledger) کسر می‌شود
+• پس از تأیید، از منبع اصلی (ledger) کسر می‌شود
 
 برگشت به انبار (مالک / مدیر / کاردان مسئول):
 • دکمه «↩️ برگشت به انبار» — پیشنهاد مواد مازاد سایت
-• پس از تأیید، به منابع اصلی (ledger مثبت) افزوده می‌شود
+• پس از تأیید، به منبع اصلی (ledger مثبت) افزوده می‌شود
 
 نقش‌ها:
 • مالک / مدیر — همه ردیف‌ها + مدیریت کاربران + تنظیمات اقلام
@@ -325,9 +325,9 @@ class BotApp:
         latest = self.db.get_latest_extracted(uid, "product_inventory")
         candidates: list[tuple[str, str]] = []
         if latest and latest.get("clean_path"):
-            candidates.append((str(latest["clean_path"]), "آخرین استخراج منابع اصلی"))
+            candidates.append((str(latest["clean_path"]), "آخرین استخراج منبع اصلی"))
         if session.get("inventory_path"):
-            candidates.append((str(session["inventory_path"]), "منابع اصلی جلسه جاری"))
+            candidates.append((str(session["inventory_path"]), "منبع اصلی جلسه جاری"))
 
         seen: set[str] = set()
         for raw_path, source in candidates:
@@ -1056,7 +1056,7 @@ class BotApp:
                 self._reply(
                     message,
                     "لیست کدهای دسته‌بندی خالی است.\n"
-                    "ابتدا از منوی «منابع اصلی» → «اضافه کردن کد دسته بندی» "
+                    "ابتدا از منوی «منبع اصلی» → «اضافه کردن کد دسته بندی» "
                     "حداقل یک کد ۴ رقمی ثبت کنید، سپس دوباره فایل را بفرستید.",
                     kb.inventory_menu(),
                 )
@@ -1300,7 +1300,7 @@ class BotApp:
             logger.exception("generate failed")
             self._reply(message, f"خطا در تولید گزارش: {exc}", kb.main_menu(user))
 
-    # ---------- منابع اصلی submenu ----------
+    # ---------- منبع اصلی submenu ----------
     def on_inventory_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
@@ -1316,7 +1316,7 @@ class BotApp:
         )
         self._reply(
             message,
-            "منوی منابع اصلی\n" + hint,
+            "منوی منبع اصلی\n" + hint,
             kb.inventory_menu(),
         )
 
@@ -1381,15 +1381,15 @@ class BotApp:
 
         table, has_extract, source = self._category_inventory_table(user)
         if has_extract:
-            notice = f"منبع: {source or 'آخرین منابع اصلی تمیزشده'}"
+            notice = f"منبع: {source or 'آخرین منبع اصلی تمیزشده'}"
         elif source == "کاتالوگ همگام‌شده":
             notice = (
-                "استخراج فعلی منابع اصلی در دسترس نیست؛ شرح کالا از کاتالوگ است "
-                "و مقدار تا آپلود منابع اصلی قابل نمایش نیست."
+                "استخراج فعلی منبع اصلی در دسترس نیست؛ شرح کالا از کاتالوگ است "
+                "و مقدار تا آپلود منبع اصلی قابل نمایش نیست."
             )
         else:
             notice = (
-                "هنوز استخراج منابع اصلی ندارید. برای جدول کامل، ابتدا فایل «منابع اصلی» "
+                "هنوز منبع اصلی استخراج‌شده‌ای ندارید. برای جدول کامل، ابتدا فایل «منبع اصلی» "
                 "را آپلود کنید."
             )
         chunks = format_inventory_table_fa(table)
@@ -1523,8 +1523,8 @@ class BotApp:
         if not latest or not latest.get("clean_path"):
             self._reply(
                 message,
-                "هیچ منابع اصلی برای مقایسه یافت نشد.\n"
-                "ابتدا از منوی «منابع اصلی» فایل اکسل را آپلود کنید.",
+                "هیچ منبع اصلی برای مقایسه یافت نشد.\n"
+                "ابتدا از منوی «منبع اصلی» فایل اکسل را آپلود کنید.",
                 kb.analytics_menu(),
             )
             return
@@ -1543,7 +1543,7 @@ class BotApp:
             self._reply(
                 message,
                 "فایل موجودی قبلی یا فعلی روی سرور یافت نشد.\n"
-                "لطفاً دوباره منابع اصلی را آپلود کنید.",
+                "لطفاً دوباره منبع اصلی را آپلود کنید.",
                 kb.analytics_menu(),
             )
             return
@@ -3099,7 +3099,7 @@ class BotApp:
             message,
             "⚙️ تنظیمات اقلام سایت / تخصیص به گروه\n"
             f"اقلام فعال کاتالوگ: {total} | بدون گروه: {unassigned}\n"
-            "ابتدا در صورت نیاز از منابع اصلی همگام‌سازی کنید، سپس اقلام را به اسلب/بلوم/بیلت تخصیص دهید.",
+            "ابتدا در صورت نیاز از منبع اصلی همگام‌سازی کنید، سپس اقلام را به اسلب/بلوم/بیلت تخصیص دهید.",
             kb.catalog_settings_menu(),
         )
 
@@ -3114,7 +3114,7 @@ class BotApp:
             self._reply(
                 message,
                 result.get("error")
-                or "همگام‌سازی ناموفق. ابتدا فایل منابع اصلی را آپلود کنید.",
+                or "همگام‌سازی ناموفق. ابتدا فایل منبع اصلی را آپلود کنید.",
                 kb.catalog_settings_menu(),
             )
             return
@@ -3135,7 +3135,7 @@ class BotApp:
             logger.warning("WO sync on catalog seed failed: %s", exc)
         self._reply(
             message,
-            "✅ همگام‌سازی کاتالوگ از آخرین منابع اصلی انجام شد.\n"
+            "✅ همگام‌سازی کاتالوگ از آخرین منبع اصلی انجام شد.\n"
             f"ردیف‌های فایل: {counts.get('total_rows', 0)}\n"
             f"افزوده: {counts.get('inserted', 0)} | به‌روز: {counts.get('updated', 0)} | "
             f"ردشده/موجود: {counts.get('skipped', 0)}\n"
@@ -3159,7 +3159,7 @@ class BotApp:
         if not rows:
             self._reply(
                 message,
-                title + "\nلیست خالی است. ابتدا همگام‌سازی از منابع اصلی را بزنید.",
+                title + "\nلیست خالی است. ابتدا همگام‌سازی از منبع اصلی را بزنید.",
                 kb.catalog_settings_menu(),
             )
             return
@@ -4114,7 +4114,7 @@ class BotApp:
                 f"{float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
             )
         out.append("")
-        out.append("منابع اصلی با ledger کسر شد و در گزارش‌های بعدی منعکس می‌شود.")
+        out.append("منبع اصلی با ledger کسر شد و در گزارش‌های بعدی منعکس می‌شود.")
         self._reply(message, "\n".join(out), kb.main_menu(user))
 
     def on_material_request_edit_start(self, message: dict) -> None:
@@ -4451,7 +4451,7 @@ class BotApp:
                 f"{float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
             )
         out.append("")
-        out.append("منابع اصلی با ledger مثبت افزایش یافت.")
+        out.append("منبع اصلی با ledger مثبت افزایش یافت.")
         self._reply(message, "\n".join(out), kb.main_menu(user))
 
     def on_warehouse_return_edit_start(self, message: dict) -> None:

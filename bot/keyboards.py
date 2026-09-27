@@ -47,8 +47,8 @@ ROLE_BUTTON_TO_KEY = {
     BTN_ROLE_TECH: "technician",
 }
 
-# منابع اصلی (warehouse inventory extract) submenu
-BTN_INV_MENU = "📦 منابع اصلی"
+# منبع اصلی (warehouse inventory extract) submenu
+BTN_INV_MENU = "📦 منبع اصلی"
 BTN_INV_UPLOAD = "📥 ورود فایل اکسل"
 BTN_INV_ADD_CATEGORY = "➕ اضافه کردن کد دسته بندی"
 BTN_INV_LIST_CATEGORIES = "📋 لیست کدهای دسته بندی"
@@ -67,7 +67,7 @@ BTN_BACK_SITE = "⬅️ بازگشت به گروه‌های سایت"
 BTN_CATALOG_SETTINGS = "⚙️ تنظیمات اقلام سایت / تخصیص به گروه"
 BTN_CATALOG_LIST = "📋 لیست اقلام و تخصیص‌ها"
 BTN_CATALOG_UNASSIGNED = "📭 اقلام بدون گروه"
-BTN_CATALOG_SEED = "🔄 همگام‌سازی از منابع اصلی"
+BTN_CATALOG_SEED = "🔄 همگام‌سازی از منبع اصلی"
 BTN_CATALOG_ASSIGN_SLAB = "تخصیص به اسلب"
 BTN_CATALOG_ASSIGN_BLOOM = "تخصیص به بلوم"
 BTN_CATALOG_ASSIGN_BILLET = "تخصیص به بیلت"
@@ -216,7 +216,7 @@ def role_menu(include_owner: bool = False) -> dict:
 
 
 def inventory_menu() -> dict:
-    """Submenu under منابع اصلی."""
+    """Submenu under منبع اصلی."""
     rows = [
         [BTN_INV_UPLOAD],
         [BTN_INV_ADD_CATEGORY],

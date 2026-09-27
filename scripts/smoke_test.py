@@ -740,7 +740,7 @@ def main() -> int:
     clean_df = pd.read_excel(result.clean_path, engine="openpyxl")
     import openpyxl as _ox
     _wb = _ox.load_workbook(result.clean_path, read_only=True)
-    assert _wb.sheetnames == [FILE_TYPES["product_inventory"]["label_fa"]] == ["منابع اصلی"]
+    assert _wb.sheetnames == [FILE_TYPES["product_inventory"]["label_fa"]] == ["منبع اصلی"]
     _wb.close()
     assert list(clean_df.columns) == REQUIRED_COLUMNS["product_inventory"]
     assert len(clean_df) == 4

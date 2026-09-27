@@ -55,8 +55,8 @@ FILE_TYPES = {
     },
     "product_inventory": {
         "key": "product_inventory",
-        "label_fa": "منابع اصلی",
-        "button": "📥 منابع اصلی",
+        "label_fa": "منبع اصلی",
+        "button": "📥 منبع اصلی",
         "filename_hint": "warehouse_inventory",
     },
     "monthly_consumption": {
@@ -153,7 +153,7 @@ REQUIRED_COLUMNS = {
         "date",
         "notes",
     ],
-    # Warehouse inventory (منابع اصلی): 3 raw columns + extracted id/priority
+    # Warehouse inventory (منبع اصلی): 3 raw columns + extracted id/priority
     "product_inventory": [
         "category_code",
         "id",
