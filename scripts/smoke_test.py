@@ -478,8 +478,40 @@ def _test_user_activity_log() -> None:
 
 
 
+def _test_simple_report_xlsx() -> None:
+    """Smoke: shared Excel helper writes readable xlsx with Persian header."""
+    from openpyxl import load_workbook
+    from excel.simple_report import generate_simple_report_xlsx
+
+    out = ROOT / "reports" / "smoke_simple_report.xlsx"
+    if out.exists():
+        out.unlink()
+    path = generate_simple_report_xlsx(
+        "گزارش تست",
+        subtitle="smoke",
+        columns=["material_name", "quantity"],
+        rows=[
+            {"material_name": "پودر", "quantity": 12.5},
+            {"material_name": "ماسه", "quantity": 3},
+        ],
+        output_path=out,
+        filename_stem="smoke_simple",
+    )
+    assert path.exists() and path.stat().st_size > 100
+    wb = load_workbook(path)
+    ws = wb.active
+    values = [row for row in ws.iter_rows(min_row=1, values_only=True)]
+    flat = [str(v) for row in values for v in row if v is not None]
+    assert any("ماده" in x or "material_name" in x for x in flat)
+    assert any("پودر" in x for x in flat)
+    assert any("ماسه" in x for x in flat)
+    print("simple_report_xlsx OK", path.name)
+
+
+
 def main() -> int:
     make_samples()
+    _test_simple_report_xlsx()
     _test_inbound_delta()
     _test_user_activity_log()
     _test_first_owner_claim()
@@ -512,6 +544,7 @@ def main() -> int:
         assert {kb.BTN_UPLOAD_MENU, kb.BTN_ANALYTICS, kb.BTN_SITE_STOCK}.issubset(full_menu)
         assert kb.BTN_INV_MENU not in full_menu  # moved under آپلود فایل
         assert kb.BTN_MONTHLY not in full_menu  # moved under آپلود فایل
+        assert kb.BTN_STATUS not in full_menu  # removed — use آپلود فایل
         assert kb.BTN_CATALOG_SETTINGS in full_menu
         assert kb.BTN_MATERIAL_REQUEST in full_menu
         assert kb.BTN_WAREHOUSE_RETURN in full_menu
@@ -605,12 +638,14 @@ def main() -> int:
     main_src_menu = menu_texts(kb.main_source_file_menu())
     assert {
         kb.BTN_INV_UPLOAD,
+        kb.BTN_INV_DOWNLOAD,
         kb.BTN_INV_ADD_RECORD,
         kb.BTN_INV_EDIT_RECORD,
         kb.BTN_INV_ADD_CATEGORY,
         kb.BTN_INV_LIST_CATEGORIES,
         kb.BTN_BACK_UPLOAD,
     }.issubset(main_src_menu)
+    assert kb.BTN_INV_DOWNLOAD == "📥 دانلود فایل منبع اصلی (اکسل)"
     assert kb.BTN_INV_EDIT not in main_src_menu  # flattened — no nested edit opener
     assert menu_texts(kb.inventory_menu()) == main_src_menu
     assert menu_texts(kb.inventory_edit_menu()) == main_src_menu

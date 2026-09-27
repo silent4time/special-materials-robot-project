@@ -2,8 +2,8 @@
 {% block title %}گزارش‌ها{% endblock %}
 {% block content %}
 <div class="card">
-  <h1>گزارش‌های PDF</h1>
-  <p class="muted">فرمول‌ها از <code>analytics.tundish</code> و خروجی از <code>pdf.generator</code> — بدون کپی منطق.</p>
+  <h1>گزارش‌های PDF و اکسل</h1>
+  <p class="muted">فرمول‌ها از <code>analytics.tundish</code> و خروجی از <code>pdf.generator</code> / <code>excel.simple_report</code> — بدون کپی منطق.</p>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
   <p class="muted">
@@ -13,10 +13,14 @@
     ماهیانه: {% if completeness.monthly_consumption %}✅{% else %}⏳{% endif %}
   </p>
   <div class="report-actions">
-    <a class="btn" href="/reports/remaining-critical">موجودی و مواد بحرانی</a>
-    <a class="btn" href="/reports/surplus">مواد مازاد</a>
-    <a class="btn" href="/reports/monthly-summary">خلاصه مصرف ماهیانه</a>
-    <a class="btn" href="/reports/user-activity">فعالیت کاربران</a>
+    <a class="btn" href="/reports/remaining-critical">موجودی و مواد بحرانی (PDF)</a>
+    <a class="btn" href="/reports/remaining-critical.xlsx">موجودی و مواد بحرانی (اکسل)</a>
+    <a class="btn" href="/reports/surplus">مواد مازاد (PDF)</a>
+    <a class="btn" href="/reports/surplus.xlsx">مواد مازاد (اکسل)</a>
+    <a class="btn" href="/reports/monthly-summary">خلاصه مصرف ماهیانه (PDF)</a>
+    <a class="btn" href="/reports/monthly-summary.xlsx">خلاصه مصرف ماهیانه (اکسل)</a>
+    <a class="btn" href="/reports/user-activity">فعالیت کاربران (PDF)</a>
+    <a class="btn" href="/reports/user-activity.xlsx">فعالیت کاربران (اکسل)</a>
   </div>
 </div>
 {% endblock %}

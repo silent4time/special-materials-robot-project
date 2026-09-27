@@ -13,6 +13,7 @@ from typing import Any
 from analytics.frames import (
     PRIMARY_INVENTORY_LABEL,
     PRIMARY_INVENTORY_TYPE,
+    load_primary_inventory,
     resolve_primary_inventory_path,
     resolve_remaining as shared_resolve_remaining,
     resolve_warehouse_remaining,
@@ -68,7 +69,6 @@ from db.models import Database
 from services import main_source as main_source_svc
 from excel.inbound import (
     compute_inbound_delta,
-    write_inbound_excel,
 )
 from excel.processor import (
     ExcelValidationError,
@@ -87,6 +87,12 @@ from excel.monthly_summary import (
     summary_sections_for_pdf,
 )
 from pdf.generator import generate_monthly_summary_pdf, generate_report, generate_simple_report_pdf
+from excel.simple_report import (
+    export_dataframe_xlsx,
+    generate_analytics_report_xlsx,
+    generate_simple_report_xlsx,
+)
+from services.main_source import FIELD_LABELS_FA, INVENTORY_COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +117,7 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • مصرف ماهیانه مواد
 
 تحلیل:
-• همه گزارش‌های منوی تحلیل به‌صورت PDF ارسال می‌شوند (کپشن کوتاه در چت)
+• همه گزارش‌های منوی تحلیل به‌صورت PDF و اکسل (.xlsx) ارسال می‌شوند (کپشن کوتاه در چت)
 • مصرف روزانه / بازه‌ای / پیشنهاد / بحرانی / مازاد / پیش‌بینی / ورودی انبار
 • مواد بحرانی — پوشش < CRITICAL_DAYS={critical} روز
 • اگر موجودی روزانه سایت ثبت شده باشد، برای «موجودی و مواد بحرانی» به‌عنوان منبع باقیمانده سایت استفاده می‌شود
@@ -1406,10 +1412,34 @@ class BotApp:
                 pdf_path,
                 caption="گزارش تاندیش / خلاصه داده‌های آپلود‌شده",
             )
+            excel_ok = False
+            try:
+                xlsx_path = pdf_path.with_suffix(".xlsx")
+                generate_analytics_report_xlsx(
+                    frames,
+                    metas,
+                    analytics=analytics,
+                    output_path=xlsx_path,
+                    filename_stem="report",
+                )
+                self.client.send_document(
+                    self._chat_id(message),
+                    xlsx_path,
+                    caption="نسخه اکسل — گزارش تاندیش",
+                )
+                excel_ok = True
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("analytics excel companion failed (on_generate)")
+                logger.warning("excel companion failed: %s", exc)
+            ok_msg = (
+                "گزارش PDF و اکسل ارسال شد. فایل‌های جلسه برای تحلیل بعدی نگه داشته شدند.\n"
+                if excel_ok
+                else "گزارش PDF ارسال شد. فایل‌های جلسه برای تحلیل بعدی نگه داشته شدند.\n"
+            )
             self._reply(
                 message,
-                "گزارش ارسال شد. فایل‌های جلسه برای تحلیل بعدی نگه داشته شدند.\n"
-                "از «گزارش‌ها / تحلیل تاندیش» استفاده کنید یا با /reset جلسه را پاک کنید.",
+                ok_msg
+                + "از «گزارش‌ها / تحلیل تاندیش» استفاده کنید یا با /reset جلسه را پاک کنید.",
                 kb.main_menu(user),
             )
             log_activity(self.db, user, "report_generate_pdf")
@@ -1580,6 +1610,54 @@ class BotApp:
     def on_inventory_edit_menu(self, message: dict) -> None:
         """Legacy nested edit menu — now flattened into main_source_file_menu."""
         self.on_main_source_file_menu(message)
+
+
+    def on_inv_download(self, message: dict) -> None:
+        """Send current cleaned منبع اصلی (product_inventory) as Excel with Persian headers."""
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        menu = kb.main_source_file_menu()
+        try:
+            frame = load_primary_inventory(self.db, user)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("load primary inventory for download failed")
+            self._reply(message, f"خطا در خواندن منبع اصلی: {exc}", menu)
+            return
+        if frame is None or getattr(frame, "empty", True):
+            self._reply(
+                message,
+                "هنوز فایل منبع اصلی آپلود نشده است.\n"
+                "ابتدا از «ورود فایل اکسل منبع اصلی» یا «موجودی انبار» فایل را بفرستید.",
+                menu,
+            )
+            return
+        try:
+            out = REPORT_DIR / "منبع_اصلی.xlsx"
+            export_dataframe_xlsx(
+                frame,
+                out,
+                columns=list(INVENTORY_COLUMNS),
+                header_map=FIELD_LABELS_FA,
+                sheet_name="منبع اصلی",
+            )
+            self.client.send_document(
+                self._chat_id(message),
+                out,
+                caption="فایل منبع اصلی (اکسل — نسخه تمیز فعلی)",
+            )
+            self._reply(
+                message,
+                f"✅ فایل منبع اصلی ارسال شد ({len(frame)} ردیف).",
+                menu,
+            )
+            log_activity(self.db, user, "download_primary_inventory")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("inv download failed")
+            self._reply(message, f"خطا در ساخت اکسل منبع اصلی: {exc}", menu)
+
 
     def on_inv_edit_record_start(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -1994,21 +2072,9 @@ class BotApp:
             filename_stem="inbound",
             output_name="گزارش_ورودی_به_انبار.pdf",
             caption=f"گزارش ورودی به انبار — {n} قلم",
-            reply_ok="گزارش ارسال شد.",
             log_user=user,
             log_action="report_inbound",
         )
-        if n > 0:
-            try:
-                excel_path = REPORT_DIR / "گزارش_ورودی_به_انبار.xlsx"
-                write_inbound_excel(inbound, excel_path)
-                self.client.send_document(
-                    self._chat_id(message),
-                    excel_path,
-                    caption=f"اکسل گزارش ورودی به انبار — {n} قلم",
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("inbound excel send failed: %s", exc)
 
     def _ask_month_year_range(self, message: dict, user: dict, mode: str) -> None:
         """Central prompt: every time-based report asks Jalali month+year from–to first."""
@@ -2409,10 +2475,13 @@ class BotApp:
         reply_markup: dict | None = None,
         log_user: dict | None = None,
         log_action: str | None = None,
+        also_excel: bool = True,
     ) -> Path | None:
         """Build a simple RTL PDF under REPORT_DIR and sendDocument to the user.
 
-        If there is no data, only a short Persian text reply is sent (no empty PDF).
+        After a successful PDF send, also builds and sends a sibling .xlsx with the
+        same title/columns/rows (shared ``excel.simple_report``). Empty data →
+        text-only (no empty PDF and no empty Excel).
         """
         markup = reply_markup if reply_markup is not None else kb.analytics_menu()
         if not self._report_has_rows(sections=sections, rows=rows):
@@ -2440,18 +2509,45 @@ class BotApp:
                 pdf_path,
                 caption=caption or title,
             )
-            self._reply(
-                message,
-                reply_ok or "گزارش ارسال شد.",
-                markup,
-            )
-            if log_user and log_action:
-                log_activity(self.db, log_user, log_action)
-            return pdf_path
         except Exception as exc:  # noqa: BLE001
             logger.exception("simple pdf report failed: %s", title)
             self._reply(message, f"خطا در تولید PDF گزارش: {exc}", markup)
             return None
+
+        excel_ok = False
+        if also_excel:
+            try:
+                xlsx_path = pdf_path.with_suffix(".xlsx")
+                generate_simple_report_xlsx(
+                    title,
+                    subtitle=subtitle,
+                    sections=sections,
+                    columns=columns,
+                    rows=rows,
+                    empty_message=empty_message,
+                    output_path=xlsx_path,
+                    filename_stem=filename_stem,
+                )
+                self.client.send_document(
+                    self._chat_id(message),
+                    xlsx_path,
+                    caption=f"نسخه اکسل — {title}",
+                )
+                excel_ok = True
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("simple excel report failed after PDF: %s", title)
+                logger.warning("excel companion failed for %s: %s", title, exc)
+
+        if reply_ok is not None:
+            ok_msg = reply_ok
+        elif excel_ok:
+            ok_msg = "گزارش PDF و اکسل ارسال شد."
+        else:
+            ok_msg = "گزارش PDF ارسال شد."
+        self._reply(message, ok_msg, markup)
+        if log_user and log_action:
+            log_activity(self.db, log_user, log_action)
+        return pdf_path
 
     def _empty_range_reply(
         self,
@@ -2830,7 +2926,30 @@ class BotApp:
                 pdf_path,
                 caption=f"گزارش تحلیل تاندیش — {range_label}",
             )
-            self._reply(message, "PDF تحلیل ارسال شد.", kb.analytics_menu())
+            excel_ok = False
+            try:
+                xlsx_path = pdf_path.with_suffix(".xlsx")
+                generate_analytics_report_xlsx(
+                    frames,
+                    metas,
+                    analytics=analytics,
+                    output_path=xlsx_path,
+                    filename_stem="analytics",
+                )
+                self.client.send_document(
+                    self._chat_id(message),
+                    xlsx_path,
+                    caption=f"نسخه اکسل — گزارش تحلیل تاندیش — {range_label}",
+                )
+                excel_ok = True
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("analytics excel companion failed")
+                logger.warning("excel companion failed: %s", exc)
+            self._reply(
+                message,
+                "گزارش PDF و اکسل ارسال شد." if excel_ok else "PDF تحلیل ارسال شد.",
+                kb.analytics_menu(),
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("analytics pdf failed")
             self._reply(message, f"خطا در تولید PDF: {exc}", kb.analytics_menu())
@@ -5219,7 +5338,6 @@ class BotApp:
             kb.BTN_TUNDISH_FILTER,
             kb.BTN_HELP,
             kb.BTN_RESET,
-            kb.BTN_STATUS,
             kb.BTN_GENERATE,
             kb.BTN_REPORT_ASSISTANT,
         }
@@ -5357,9 +5475,6 @@ class BotApp:
         # keyboard buttons
         if text == kb.BTN_HELP:
             self.cmd_help(message)
-            return
-        if text == kb.BTN_STATUS:
-            self.on_status(message)
             return
         if text == kb.BTN_GENERATE:
             self.on_generate(message)
@@ -5610,6 +5725,9 @@ class BotApp:
             return
         if text == kb.BTN_INV_LIST_CATEGORIES:
             self.on_list_categories(message)
+            return
+        if text == kb.BTN_INV_DOWNLOAD:
+            self.on_inv_download(message)
             return
 
         # --- تنظیمات اقلام سایت ---

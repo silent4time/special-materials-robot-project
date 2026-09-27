@@ -61,6 +61,7 @@ BTN_INV_EDIT_RECORD = "✏️ ویرایش رکورد"
 BTN_INV_ADD_RECORD = "➕ اضافه کردن رکورد"
 BTN_INV_ADD_CATEGORY = "➕ اضافه کردن کد دسته بندی"
 BTN_INV_LIST_CATEGORIES = "📋 لیست کدهای دسته بندی"
+BTN_INV_DOWNLOAD = "📥 دانلود فایل منبع اصلی (اکسل)"
 BTN_BACK_INV_EDIT = "⬅️ بازگشت به ویرایش منبع اصلی"  # legacy → main_source_file_menu
 
 # موجودی روزانه سایت — interactive entry (not Excel primary path)
@@ -211,7 +212,7 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
         [BTN_SITE_STOCK],
         [BTN_CATALOG_SETTINGS],
         [BTN_MATERIAL_REQUEST, BTN_WAREHOUSE_RETURN],
-        [BTN_STATUS, BTN_GENERATE],
+        [BTN_GENERATE],
         [BTN_ANALYTICS],
         [BTN_RESET, BTN_HELP],
     ]
@@ -264,10 +265,11 @@ def upload_files_menu() -> dict:
 
 
 def main_source_file_menu() -> dict:
-    """Flattened «فایل منبع اصلی» submenu (Excel + add/edit record + categories)."""
+    """Flattened «فایل منبع اصلی» submenu (Excel + download + add/edit + categories)."""
     return BaleClient.reply_keyboard(
         [
             [BTN_INV_UPLOAD],
+            [BTN_INV_DOWNLOAD],
             [BTN_INV_ADD_RECORD],
             [BTN_INV_EDIT_RECORD],
             [BTN_INV_ADD_CATEGORY],
@@ -283,7 +285,7 @@ def inventory_menu() -> dict:
 
 
 def file_entry_menu() -> dict:
-    """Upload picker after وضعیت فایل‌ها / document-without-pending (no site stock)."""
+    """Upload picker after document-without-pending (no site stock)."""
     return upload_files_menu()
 
 
