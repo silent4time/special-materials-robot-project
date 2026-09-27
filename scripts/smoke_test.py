@@ -262,6 +262,9 @@ def _test_merge_and_monthly_summary() -> None:
         assert pdf_out.exists() and pdf_out.stat().st_size > 1000
         assert kb.BTN_MONTHLY_SUMMARY in str(kb.analytics_menu())
         assert kb.BTN_INBOUND in str(kb.analytics_menu())
+        assert kb.BTN_GENERATE == "📊 گزارش کلی مواد"
+        assert kb.BTN_GENERATE in str(kb.analytics_menu())
+        assert kb.BTN_GENERATE not in str(kb.main_menu({"role": "owner", "active": 1}))
         assert kb.BTN_MY_CURRENT in str(kb.month_year_range_menu())
         # Month/year filter: Farvardin–Ordibehesht only
         filt = filter_summary_by_month_range(data, start=(1405, 1), end=(1405, 2))

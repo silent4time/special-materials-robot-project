@@ -101,7 +101,7 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 جریان اصلی:
 ۱) از «آپلود فایل» موجودی انبار / مصرف ماهیانه / فایل منبع اصلی را با Excel (.xlsx) بفرستید
 ۲) «موجودی روزانه سایت» را به‌صورت تعاملی وارد کنید (نه Excel تکنسین)
-۳) دکمه «تولید گزارش PDF» یا «گزارش‌ها / تحلیل تاندیش» را بزنید
+۳) از «گزارش‌ها / تحلیل تاندیش» گزارش‌ها و «گزارش کلی مواد» را بگیرید
 
 موجودی روزانه سایت (ورود تعاملی در SQLite):
 • سه بخش: موجودی مواد اسلب / بلوم / بیلت
@@ -280,7 +280,7 @@ class BotApp:
         else:
             lines.append("\nنوع ورود اطلاعات را از دکمه‌های زیر انتخاب کنید.")
         if all(done.values()):
-            lines.append("\nهمه فایل‌ها آماده‌اند — می‌توانید «تولید گزارش PDF» یا «گزارش‌ها / تحلیل تاندیش» را بزنید.")
+            lines.append("\nهمه فایل‌ها آماده‌اند — از «گزارش‌ها / تحلیل تاندیش» می‌توانید «گزارش کلی مواد» را بگیرید.")
         elif done.get("tank_consumption") or done.get("product_inventory"):
             lines.append("\nبا فایل‌های موجود می‌توانید بخشی از تحلیل تاندیش را اجرا کنید.")
         return "\n".join(lines)
@@ -1385,7 +1385,7 @@ class BotApp:
         completeness = self.db.session_completeness(session)
         ok, err = can_generate_report(user, session, completeness)
         if not ok:
-            self._reply(message, err + "\n\n" + self._status_text(session), kb.main_menu(user))
+            self._reply(message, err + "\n\n" + self._status_text(session), kb.analytics_menu())
             return
 
         paths = self._session_paths(session)
@@ -1410,7 +1410,7 @@ class BotApp:
             self.client.send_document(
                 self._chat_id(message),
                 pdf_path,
-                caption="گزارش تاندیش / خلاصه داده‌های آپلود‌شده",
+                caption="گزارش کلی مواد",
             )
             excel_ok = False
             try:
@@ -1425,7 +1425,7 @@ class BotApp:
                 self.client.send_document(
                     self._chat_id(message),
                     xlsx_path,
-                    caption="نسخه اکسل — گزارش تاندیش",
+                    caption="نسخه اکسل — گزارش کلی مواد",
                 )
                 excel_ok = True
             except Exception as exc:  # noqa: BLE001
@@ -1440,12 +1440,12 @@ class BotApp:
                 message,
                 ok_msg
                 + "از «گزارش‌ها / تحلیل تاندیش» استفاده کنید یا با /reset جلسه را پاک کنید.",
-                kb.main_menu(user),
+                kb.analytics_menu(),
             )
             log_activity(self.db, user, "report_generate_pdf")
         except Exception as exc:  # noqa: BLE001
             logger.exception("generate failed")
-            self._reply(message, f"خطا در تولید گزارش: {exc}", kb.main_menu(user))
+            self._reply(message, f"خطا در تولید گزارش: {exc}", kb.analytics_menu())
 
     # ---------- آپلود فایل / فایل منبع اصلی ----------
     def on_upload_menu(self, message: dict) -> None:

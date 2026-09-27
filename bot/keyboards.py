@@ -9,7 +9,7 @@ BTN_TANK = FILE_TYPES["tank_consumption"]["button"]
 BTN_INV = FILE_TYPES["product_inventory"]["button"]
 BTN_MONTHLY = FILE_TYPES["monthly_consumption"]["button"]
 BTN_STATUS = "📋 وضعیت فایل‌ها"
-BTN_GENERATE = "✅ تولید گزارش PDF"
+BTN_GENERATE = "📊 گزارش کلی مواد"
 BTN_RESET = "🔄 شروع مجدد"
 BTN_HELP = "❓ راهنما"
 BTN_USERS = "👥 کاربران"
@@ -212,7 +212,6 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
         [BTN_SITE_STOCK],
         [BTN_CATALOG_SETTINGS],
         [BTN_MATERIAL_REQUEST, BTN_WAREHOUSE_RETURN],
-        [BTN_GENERATE],
         [BTN_ANALYTICS],
         [BTN_RESET, BTN_HELP],
     ]
@@ -423,6 +422,7 @@ def analytics_menu() -> dict:
         [BTN_FORECAST],
         [BTN_MONTHLY_SUMMARY],
         [BTN_USER_ACTIVITY],
+        [BTN_GENERATE],
         [BTN_ANALYTICS_PDF],
         [BTN_TUNDISH_FILTER],
         [BTN_BACK_MAIN],

@@ -32,7 +32,7 @@ ACTION_PHRASES: dict[str, str] = {
     "report_monthly_summary": "گزارش خلاصه مصرف ماهیانه را گرفت",
     "report_inbound": "گزارش ورودی به انبار را گرفت",
     "report_full_pdf": "PDF کامل تحلیل را گرفت",
-    "report_generate_pdf": "گزارش PDF تاندیش را تولید کرد",
+    "report_generate_pdf": "گزارش کلی مواد را گرفت",
     "report_user_activity": "گزارش فعالیت کاربران را گرفت",
     "report_assistant_asked": "از دستیار هوشمند پرسش کرد",
     "settings_letterhead": "سربرگ PDF را تغییر داد",
