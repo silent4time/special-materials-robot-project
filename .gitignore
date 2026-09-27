@@ -24,3 +24,6 @@ data/ollama.pid
 data/ollama.log
 
 data/web_admin_credentials.txt
+
+data/web.pid
+data/web.log
