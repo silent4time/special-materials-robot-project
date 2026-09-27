@@ -7,8 +7,10 @@ Copied from production-style attachments for loader regression tests.
 - Prefer sheet **«ریز اطلاعات»** (workbook also has Sheet1 / کل موجودی / Sheet3).
 - Columns (Arabic yeh `ي` U+064A often appears instead of Persian `ی` U+06CC):
   - `کد دسته بندي` → `category_code`
-  - `کد و شرح کالا` → `item_code_desc` (id parsed before first ` - ` / `–` / `—`)
+  - `کد و شرح کالا` → parsed into `id` + `product_name` (not kept in cleaned extract)
   - `موجودي` → `quantity`
+  - optional `کلید واژه` / `کليد واژه` → `keyword` (else empty in clean)
+- Cleaned columns: `category_code`, `id`, `product_name`, `keyword`, `quantity`, `priority`
 - ~357 detail rows, **122** distinct category codes.
 - Smoke: `allowlist=['1203','1206']` keeps 8 rows (3 + 5); ids filled; `priority=1`.
 

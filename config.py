@@ -153,12 +153,13 @@ REQUIRED_COLUMNS = {
         "date",
         "notes",
     ],
-    # Warehouse inventory (منبع اصلی): 3 raw columns + extracted id/priority
+    # Warehouse inventory (منبع اصلی): cleaned cols; raw upload still has
+    # کد دسته بندی / کد و شرح کالا / موجودی (id+product_name parsed from شرح).
     "product_inventory": [
         "category_code",
         "id",
-        "item_code_desc",
         "product_name",
+        "keyword",
         "quantity",
         "priority",
     ],

@@ -64,6 +64,14 @@ COLUMN_ALIASES = {
     ],
     "id": ["id", "کد کالا", "کد_کالا", "شناسه کالا"],
     "priority": ["priority", "اولویت", "اولويت"],
+    "keyword": [
+        "keyword",
+        "کلید واژه",
+        "کليد واژه",  # Arabic yeh variant
+        "کلیدواژه",
+        "کليدواژه",
+        "کلید_واژه",
+    ],
     "coefficient": [
         "coefficient",
         "coeff",
@@ -209,7 +217,11 @@ def _normalize_category_code(value: object) -> str | None:
 
 
 def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
-    """Add id / product_name / priority columns from raw warehouse columns."""
+    """Parse id/product_name from raw «کد و شرح کالا»; add keyword / priority.
+
+    ``item_code_desc`` is required on the *raw* upload for parsing, but is not
+    written into the cleaned extract (see REQUIRED_COLUMNS).
+    """
     out = df.copy()
     if "item_code_desc" not in out.columns and "product_name" in out.columns:
         out["item_code_desc"] = out["product_name"]
@@ -239,8 +251,20 @@ def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
         ]
 
     out["product_name"] = raw_desc.map(extract_product_name)
-    out["item_code_desc"] = raw_desc.map(lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v).strip())
     out["category_code"] = out["category_code"].map(_normalize_category_code)
+
+    def _keyword_cell(v: object) -> str:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return ""
+        text = str(v).strip()
+        if not text or text.lower() == "nan":
+            return ""
+        return text
+
+    if "keyword" in out.columns:
+        out["keyword"] = out["keyword"].map(_keyword_cell)
+    else:
+        out["keyword"] = ""
 
     if "priority" not in out.columns:
         out["priority"] = 1
@@ -524,7 +548,7 @@ def merge_row_key(row: pd.Series, file_type: str) -> tuple[str, ...]:
         if _is_blank(item_id):
             return (
                 _normalize_key_part(row.get("category_code")),
-                _normalize_key_part(row.get("item_code_desc") or row.get("product_name")),
+                _normalize_key_part(row.get("product_name")),
             )
         return (_normalize_key_part(item_id),)
     if file_type == "monthly_consumption":
@@ -734,14 +758,17 @@ def _display_inventory_value(value: object, *, empty: str = "—") -> str:
 
 def _inventory_description(row: pd.Series) -> str:
     """Choose the most useful item description for an inventory row."""
-    item_code_desc = _display_inventory_value(row.get("item_code_desc"), empty="")
-    if item_code_desc:
-        return item_code_desc
     product_name = _display_inventory_value(row.get("product_name"), empty="")
     item_id = _display_inventory_value(row.get("id"), empty="")
     if item_id and product_name:
         return f"{item_id} - {product_name}"
-    return product_name or item_id or "—"
+    if product_name:
+        return product_name
+    if item_id:
+        return item_id
+    # Legacy fallback for older cleans / catalog rows that still carry the combined string
+    item_code_desc = _display_inventory_value(row.get("item_code_desc"), empty="")
+    return item_code_desc or "—"
 
 
 def _format_inventory_quantity(value: object) -> str:

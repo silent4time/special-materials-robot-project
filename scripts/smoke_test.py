@@ -68,21 +68,21 @@ def _write_wide_inventory(path: Path) -> None:
     wb = Workbook()
     ws = wb.active
     ws.title = "data"
-    ws.append(["کد دسته بندی", "کد و شرح کالا", "موجودی", "اولویت", "extra_col_a"])
+    ws.append(["کد دسته بندی", "کد و شرح کالا", "موجودی", "اولویت", "کلید واژه", "extra_col_a"])
     rows = [
         # keep — category 1201, priority default/1
-        ["1201", "ACID01 - اسید سولفوریک", 20, 1, "X"],
-        ["1201", "CAUST02 - سود سوزآور", 80, 1, "Y"],
-        ["1201", "CL04 - کلر", 8, 1, "S"],
+        ["1201", "ACID01 - اسید سولفوریک", 20, 1, "اسید", "X"],
+        ["1201", "CAUST02 - سود سوزآور", 80, 1, "سود", "Y"],
+        ["1201", "CL04 - کلر", 8, 1, "", "S"],
         # drop — wrong category
-        ["9999", "OTHER99 - ماده خارجی", 10, 1, "Z"],
-        ["8888", "DROP88 - حذف دسته", 5, 1, "Q"],
+        ["9999", "OTHER99 - ماده خارجی", 10, 1, "", "Z"],
+        ["8888", "DROP88 - حذف دسته", 5, 1, "", "Q"],
         # drop — priority 0
-        ["1201", "ZERO00 - حذف اولویت", 50, 0, "P"],
+        ["1201", "ZERO00 - حذف اولویت", 50, 0, "", "P"],
         # drop — bad id (no digit token)
-        ["1201", "بدون‌شناسه ماده", 3, 1, "B"],
+        ["1201", "بدون‌شناسه ماده", 3, 1, "", "B"],
         # keep — high surplus candidate
-        ["1201", "OIL05 - روغن صنعتی", 500, 1, "O"],
+        ["1201", "OIL05 - روغن صنعتی", 500, 1, "روغن", "O"],
     ]
     for r in rows:
         ws.append(r)
@@ -130,17 +130,17 @@ def _test_merge_and_monthly_summary() -> None:
             {
                 "id": "A1",
                 "product_name": "old-only",
+                "keyword": "",
                 "quantity": 10,
                 "category_code": "1201",
-                "item_code_desc": "A1 - old",
                 "priority": 1,
             },
             {
                 "id": "B2",
                 "product_name": "shared",
+                "keyword": "shared-kw",
                 "quantity": 5,
                 "category_code": "1201",
-                "item_code_desc": "B2 - shared",
                 "priority": 1,
             },
         ]
@@ -150,17 +150,17 @@ def _test_merge_and_monthly_summary() -> None:
             {
                 "id": "B2",
                 "product_name": "shared-new",
+                "keyword": "shared-kw-new",
                 "quantity": 99,
                 "category_code": "1201",
-                "item_code_desc": "B2 - shared-new",
                 "priority": 1,
             },
             {
                 "id": "C3",
                 "product_name": "new-only",
+                "keyword": "",
                 "quantity": 7,
                 "category_code": "1201",
-                "item_code_desc": "C3 - new",
                 "priority": 1,
             },
         ]
@@ -255,7 +255,7 @@ def _test_inbound_delta() -> None:
         [
             {
                 "id": "A1",
-                "item_code_desc": "A1 - اسید",
+                "keyword": "",
                 "product_name": "اسید",
                 "category_code": "1201",
                 "quantity": 10,
@@ -263,7 +263,7 @@ def _test_inbound_delta() -> None:
             },
             {
                 "id": "B2",
-                "item_code_desc": "B2 - روغن",
+                "keyword": "",
                 "product_name": "روغن",
                 "category_code": "1201",
                 "quantity": 50,
@@ -271,7 +271,7 @@ def _test_inbound_delta() -> None:
             },
             {
                 "id": "D4",
-                "item_code_desc": "D4 - کاهش",
+                "keyword": "",
                 "product_name": "کاهش",
                 "category_code": "1201",
                 "quantity": 30,
@@ -279,7 +279,7 @@ def _test_inbound_delta() -> None:
             },
             {
                 "id": "E5",
-                "item_code_desc": "E5 - ثابت",
+                "keyword": "",
                 "product_name": "ثابت",
                 "category_code": "1201",
                 "quantity": 7,
@@ -292,7 +292,7 @@ def _test_inbound_delta() -> None:
             # increase
             {
                 "id": "A1",
-                "item_code_desc": "A1 - اسید",
+                "keyword": "",
                 "product_name": "اسید",
                 "category_code": "1201",
                 "quantity": 25,
@@ -301,7 +301,7 @@ def _test_inbound_delta() -> None:
             # decrease — omit
             {
                 "id": "D4",
-                "item_code_desc": "D4 - کاهش",
+                "keyword": "",
                 "product_name": "کاهش",
                 "category_code": "1201",
                 "quantity": 10,
@@ -310,7 +310,7 @@ def _test_inbound_delta() -> None:
             # unchanged — omit
             {
                 "id": "E5",
-                "item_code_desc": "E5 - ثابت",
+                "keyword": "",
                 "product_name": "ثابت",
                 "category_code": "1201",
                 "quantity": 7,
@@ -319,7 +319,7 @@ def _test_inbound_delta() -> None:
             # brand-new allowlisted
             {
                 "id": "C3",
-                "item_code_desc": "C3 - جدید",
+                "keyword": "",
                 "product_name": "جدید",
                 "category_code": "1201",
                 "quantity": 12,
@@ -328,7 +328,7 @@ def _test_inbound_delta() -> None:
             # brand-new NOT in allowlist — omit
             {
                 "id": "X9",
-                "item_code_desc": "X9 - خارجی",
+                "keyword": "",
                 "product_name": "خارجی",
                 "category_code": "9999",
                 "quantity": 100,
@@ -337,7 +337,7 @@ def _test_inbound_delta() -> None:
             # increase but unknown category — omit
             {
                 "id": "B2",
-                "item_code_desc": "B2 - روغن",
+                "keyword": "",
                 "product_name": "روغن",
                 "category_code": "8888",
                 "quantity": 80,
@@ -346,7 +346,7 @@ def _test_inbound_delta() -> None:
             # new with missing category — omit
             {
                 "id": "Z0",
-                "item_code_desc": "Z0 - بدون دسته",
+                "keyword": "",
                 "product_name": "بدون دسته",
                 "category_code": None,
                 "quantity": 5,
@@ -628,7 +628,8 @@ def main() -> int:
         clean_dir=ROOT / "uploads" / "_smoke_extract" / "samples_clean",
     )
     assert sample_clean.kept_row_count == 5
-    assert all(c in sample_clean.columns for c in ("id", "priority", "category_code"))
+    assert all(c in sample_clean.columns for c in ("id", "priority", "category_code", "keyword", "product_name"))
+    assert "item_code_desc" not in sample_clean.columns
 
     paths = {
         "tank_consumption": str(ROOT / "samples" / "01_tank_consumption.xlsx"),
@@ -743,10 +744,17 @@ def main() -> int:
     assert _wb.sheetnames == [FILE_TYPES["product_inventory"]["label_fa"]] == ["منبع اصلی"]
     _wb.close()
     assert list(clean_df.columns) == REQUIRED_COLUMNS["product_inventory"]
+    assert "item_code_desc" not in clean_df.columns
+    assert "keyword" in clean_df.columns
     assert len(clean_df) == 4
     assert set(clean_df["id"].astype(str)) == {"ACID01", "CAUST02", "CL04", "OIL05"}
     assert (clean_df["priority"] == 1).all()
     assert (clean_df["category_code"].astype(str) == "1201").all()
+    kw_by_id = dict(zip(clean_df["id"].astype(str), clean_df["keyword"].fillna("").astype(str)))
+    assert kw_by_id["ACID01"] == "اسید"
+    assert kw_by_id["CAUST02"] == "سود"
+    assert kw_by_id["CL04"] == ""
+    assert kw_by_id["OIL05"] == "روغن"
     table_text = "\n".join(format_inventory_table_fa(clean_df))
     assert "کد دسته" in table_text and "شرح کالا" in table_text and "موجودی" in table_text
     assert "1201" in table_text and "ACID01 - اسید سولفوریک" in table_text and "20" in table_text
@@ -984,19 +992,22 @@ def main() -> int:
     rem_site2 = remaining(pd.DataFrame(db.site_stock_as_remaining_rows(day)))
     surplus_wr = surplus_materials(rates_mr, rem_site2)
     assert not surplus_wr.empty
-    # Prefer OIL05 (seeded billet site stock 100 — classic surplus)
+    # Prefer OIL05 (seeded billet site stock 100 — classic surplus).
+    # Cover-only surplus can have surplus_qty==0 when rem < 30d forecast; still returnable.
     oil_match = surplus_wr[surplus_wr["material_name"].astype(str).str.contains("روغن|OIL05", regex=True)]
     srow = oil_match.iloc[0] if not oil_match.empty else surplus_wr.iloc[0]
     sname = str(srow["material_name"])
     sqty = float(srow["surplus_qty"])
-    assert sqty > 0
+    rem_s = float(srow.get("remaining_qty") or 0)
+    assert rem_s > 0 or sqty > 0
     sid = "OIL05"
     for rr in db.site_stock_as_remaining_rows(day):
         if str(rr.get("id")) == "OIL05" or "روغن" in str(rr.get("product_name") or ""):
             sid = str(rr.get("id"))
             sname = str(rr.get("product_name") or sname)
             break
-    ret_qty = min(sqty, 5.0)
+    ret_qty = min(sqty if sqty > 0 else rem_s, 5.0)
+    assert ret_qty > 0
     sums_before_ret = db.inventory_ledger_sums()
     oil_before = float(sums_before_ret["by_id"].get(sid, 0.0))
     ret = db.create_warehouse_return(

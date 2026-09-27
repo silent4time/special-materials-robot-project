@@ -77,14 +77,15 @@ def _display_id(row: pd.Series | dict) -> str:
 
 def _display_desc(row: pd.Series | dict) -> str:
     get = row.get if hasattr(row, "get") else lambda k, d=None: row[k] if k in row else d
-    desc = get("item_code_desc")
-    if desc is not None and not (isinstance(desc, float) and pd.isna(desc)):
-        text = str(desc).strip()
-        if text and text.lower() != "nan":
-            return text
     name = get("product_name")
     if name is not None and not (isinstance(name, float) and pd.isna(name)):
         text = str(name).strip()
+        if text and text.lower() != "nan":
+            return text
+    # Legacy combined string (older cleans) — cleaned extract no longer stores it
+    desc = get("item_code_desc")
+    if desc is not None and not (isinstance(desc, float) and pd.isna(desc)):
+        text = str(desc).strip()
         if text and text.lower() != "nan":
             return text
     return "—"

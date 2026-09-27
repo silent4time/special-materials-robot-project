@@ -998,8 +998,8 @@ class Database:
         cols = {str(c).strip().lower(): c for c in df.columns}
         id_col = cols.get("id")
         name_col = (
-            cols.get("item_code_desc")
-            or cols.get("product_name")
+            cols.get("product_name")
+            or cols.get("item_code_desc")  # legacy cleans
             or cols.get("name_desc")
             or cols.get("material_name")
         )

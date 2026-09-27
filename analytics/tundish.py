@@ -350,7 +350,7 @@ def period_consumption(
 def remaining(inventory_df: pd.DataFrame | None) -> pd.DataFrame:
     """
     Remaining stock from warehouse / product inventory.
-    Prefers product_name, then item_code_desc, then material_name as join key
+    Prefers product_name, then legacy item_code_desc, then material_name as join key
     (matched to consumption material_name).
     """
     if inventory_df is None or inventory_df.empty:
@@ -392,7 +392,7 @@ def apply_inventory_ledger(
     """
     Apply inventory_ledger deltas to a warehouse inventory DataFrame (immutable base).
 
-    Matching preference: ``id`` column first, then product_name / item_code_desc /
+    Matching preference: ``id`` column first, then product_name / legacy item_code_desc /
     material_name. Delta is added to quantity (issues are stored as negative).
     """
     if inventory_df is None or inventory_df.empty:

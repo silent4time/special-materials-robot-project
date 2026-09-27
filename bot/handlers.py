@@ -348,8 +348,8 @@ class BotApp:
                     {
                         "category_code": item.get("category_code"),
                         "id": item.get("id"),
-                        "item_code_desc": item.get("name_desc"),
                         "product_name": item.get("name_desc"),
+                        "keyword": "",
                         "quantity": None,
                     }
                     for item in catalog
@@ -376,7 +376,7 @@ class BotApp:
         active_codes = [str(row["code"]) for row in active_rows]
         frame, has_extract, source = self._load_latest_inventory_frame(user)
         if frame is None:
-            work = pd.DataFrame(columns=["category_code", "id", "item_code_desc", "quantity"])
+            work = pd.DataFrame(columns=["category_code", "id", "product_name", "keyword", "quantity"])
         else:
             work = frame.copy()
             if "category_code" in work.columns:
@@ -389,7 +389,7 @@ class BotApp:
 
         present = set(work.get("category_code", pd.Series(dtype=str)).dropna().astype(str))
         missing = [
-            {"category_code": code, "item_code_desc": "—", "quantity": None}
+            {"category_code": code, "product_name": "—", "quantity": None}
             for code in active_codes
             if code not in present
         ]
