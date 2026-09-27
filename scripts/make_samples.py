@@ -49,7 +49,7 @@ def main() -> None:
         tank_rows,
     )
 
-    # موجودی انبار — raw 3 Persian columns. product_name for analytics is parsed
+    # منابع اصلی (warehouse inventory) — raw 3 Persian columns. product_name for analytics is parsed
     # from text after " - " so it matches material_name in daily/monthly files.
     # Low stock on اسید / کلر so they appear critical (CRITICAL_DAYS=3).
     # High stock on روغن for surplus demo. Category 1201 is the sample allowlist.

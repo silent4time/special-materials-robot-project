@@ -57,7 +57,7 @@ def filter_dataframe_for_user(df: pd.DataFrame, user: dict[str, Any]) -> pd.Data
     """
     Apply RBAC row filters:
     - owner / manager / responsible_officer (FULL_DATA_ROLES): all rows
-    - If domain/assignee columns are absent (e.g. موجودی انبار plant-wide):
+    - If domain/assignee columns are absent (e.g. منابع اصلی / warehouse inventory plant-wide):
       all authorized users see the full inventory.
     - technician: rows where assignee_id or assignee_name matches the user;
       plant-wide (no domain/assignee) stays full view.

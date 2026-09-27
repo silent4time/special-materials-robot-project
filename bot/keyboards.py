@@ -47,8 +47,8 @@ ROLE_BUTTON_TO_KEY = {
     BTN_ROLE_TECH: "technician",
 }
 
-# موجودی انبار submenu
-BTN_INV_MENU = "📦 موجودی انبار"
+# منابع اصلی (warehouse inventory extract) submenu
+BTN_INV_MENU = "📦 منابع اصلی"
 BTN_INV_UPLOAD = "📥 ورود فایل اکسل"
 BTN_INV_ADD_CATEGORY = "➕ اضافه کردن کد دسته بندی"
 BTN_INV_LIST_CATEGORIES = "📋 لیست کدهای دسته بندی"
@@ -67,7 +67,7 @@ BTN_BACK_SITE = "⬅️ بازگشت به گروه‌های سایت"
 BTN_CATALOG_SETTINGS = "⚙️ تنظیمات اقلام سایت / تخصیص به گروه"
 BTN_CATALOG_LIST = "📋 لیست اقلام و تخصیص‌ها"
 BTN_CATALOG_UNASSIGNED = "📭 اقلام بدون گروه"
-BTN_CATALOG_SEED = "🔄 همگام‌سازی از موجودی انبار"
+BTN_CATALOG_SEED = "🔄 همگام‌سازی از منابع اصلی"
 BTN_CATALOG_ASSIGN_SLAB = "تخصیص به اسلب"
 BTN_CATALOG_ASSIGN_BLOOM = "تخصیص به بلوم"
 BTN_CATALOG_ASSIGN_BILLET = "تخصیص به بیلت"
@@ -147,8 +147,10 @@ def button_to_file_type(text: str) -> str | None:
         BTN_MONTHLY: "monthly_consumption",
         FILE_TYPES["product_inventory"]["label_fa"]: "product_inventory",
         FILE_TYPES["monthly_consumption"]["label_fa"]: "monthly_consumption",
-        # legacy button texts (pre-redesign) — monthly / warehouse only
+        # legacy button texts (pre-redesign / pre-rename) — monthly / warehouse only
         "📥 موجودی محصولات": "product_inventory",
+        "📥 موجودی انبار": "product_inventory",
+        "📦 موجودی انبار": "product_inventory",
         "📥 مصرف ماهانه مواد": "monthly_consumption",
         # legacy tank Excel button text kept for rare old clients wanting file path:
         # intentionally omitted so «موجودی روزانه سایت» opens interactive flow
@@ -214,7 +216,7 @@ def role_menu(include_owner: bool = False) -> dict:
 
 
 def inventory_menu() -> dict:
-    """Submenu under موجودی انبار."""
+    """Submenu under منابع اصلی."""
     rows = [
         [BTN_INV_UPLOAD],
         [BTN_INV_ADD_CATEGORY],

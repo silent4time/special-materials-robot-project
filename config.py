@@ -55,8 +55,8 @@ FILE_TYPES = {
     },
     "product_inventory": {
         "key": "product_inventory",
-        "label_fa": "موجودی انبار",
-        "button": "📥 موجودی انبار",
+        "label_fa": "منابع اصلی",
+        "button": "📥 منابع اصلی",
         "filename_hint": "warehouse_inventory",
     },
     "monthly_consumption": {
@@ -66,6 +66,12 @@ FILE_TYPES = {
         "filename_hint": "monthly_consumption",
     },
 }
+
+
+def clean_excel_sheet_name(file_type: str) -> str:
+    """User-facing Excel sheet title for cleaned extracts (max 31 chars)."""
+    label = FILE_TYPES.get(file_type, {}).get("label_fa") or "Sheet1"
+    return str(label)[:31]
 
 ROLES = {
     "owner": "مالک",
@@ -147,7 +153,7 @@ REQUIRED_COLUMNS = {
         "date",
         "notes",
     ],
-    # Warehouse inventory (موجودی انبار): 3 raw columns + extracted id/priority
+    # Warehouse inventory (منابع اصلی): 3 raw columns + extracted id/priority
     "product_inventory": [
         "category_code",
         "id",

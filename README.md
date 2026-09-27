@@ -100,7 +100,7 @@ python scripts/seed_real_samples.py
 ```text
 منوی اصلی
    │
-   ├─► «موجودی انبار»
+   ├─► «منابع اصلی»
    │      ├─ ورود فایل اکسل
    │      ├─ اضافه کردن کد دسته بندی (۴ رقم)
    │      └─ لیست کدهای دسته بندی
@@ -112,7 +112,7 @@ python scripts/seed_real_samples.py
    ├─► «تنظیمات اقلام سایت / تخصیص به گروه» (غیرتکنسین)
    │      ├─ لیست اقلام و تخصیص‌ها
    │      ├─ اقلام بدون گروه
-   │      └─ همگام‌سازی از موجودی انبار
+   │      └─ همگام‌سازی از منابع اصلی
    ├─► «وضعیت فایل‌ها» / «تولید گزارش PDF»
    └─► «گزارش‌ها / تحلیل تاندیش»
           ├─ مصرف روزانه مواد
@@ -127,7 +127,7 @@ python scripts/seed_real_samples.py
           └─ فیلتر نوع تاندیش
 ```
 
-## موجودی انبار (شکل Excel)
+## منابع اصلی (شکل Excel — موجودی انبار ورودی)
 
 فایل خام دقیقاً **۳ ستون** با سرصفحه‌های فارسی (یا معادل انگلیسی):
 
@@ -135,7 +135,7 @@ python scripts/seed_real_samples.py
 |------------|------------|--------|
 | کد دسته بندی | `category_code` | عدد ۴ رقمی |
 | کد و شرح کالا | `item_code_desc` | متن شامل شناسه + شرح |
-| موجودی | `quantity` | موجودی انبار |
+| موجودی | `quantity` | مقدار موجودی |
 
 ### استخراج شناسه (`id`)
 
@@ -187,14 +187,14 @@ python scripts/seed_real_samples.py
 
 شناسایی افراد با `bale_user_id` است. هر ورودی داده ثبت‌کننده را ذخیره می‌کند (`bale_user_id` / `created_by` / `assigned_by`). ستون `scope` برای سازگاری قدیمی نگه داشته شده و برای کاردان مسئول الزامی نیست.
 
-**موجودی انبار** ستون domain/assignee ندارد → برای همه کاربران مجاز **قابل مشاهدهٔ کامل** است (plant-wide). موجودی روزانه سایت دیگر Excel تکنسین نیست.
+**منابع اصلی** ستون domain/assignee ندارد → برای همه کاربران مجاز **قابل مشاهدهٔ کامل** است (plant-wide). موجودی روزانه سایت دیگر Excel تکنسین نیست.
 
 ## سه فایل Excel
 
 | نمونه | کلید داخلی | عنوان فارسی UI |
 |-------|------------|----------------|
 | `01_tank_consumption.xlsx` | `tank_consumption` | نمونه مصرف/موجودی تاریخی (UI تعاملی جایگزین شده) |
-| `02_product_inventory.xlsx` | `product_inventory` | موجودی انبار |
+| `02_product_inventory.xlsx` | `product_inventory` | منابع اصلی |
 | `03_monthly_consumption.xlsx` | `monthly_consumption` | مصرف ماهیانه مواد |
 
 ```bash
@@ -207,7 +207,7 @@ python scripts/make_samples.py
 
 | جدول | نقش |
 |------|-----|
-| `catalog_items` | فهرست اصلی اقلام (`id`, `name_desc`, `category_code`, `active`) — از استخراج موجودی انبار seed می‌شود |
+| `catalog_items` | فهرست اصلی اقلام (`id`, `name_desc`, `category_code`, `active`) — از استخراج منابع اصلی seed می‌شود |
 | `catalog_group_assignments` | تخصیص یک گروه به هر قلم: `slab` / `bloom` / `billet` |
 | `site_stock_entries` | موجودی روزانه؛ upsert یکتا بر `(entry_date, tundish_group, item_id)`؛ فیلدهای `quantity` + `pallet_qty`/`unit_qty`/`quantity_detail` برای توسعه بعدی |
 

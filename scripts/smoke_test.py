@@ -35,7 +35,7 @@ from analytics.tundish import (
     surplus_materials,
 )
 from auth.rbac import can_configure_catalog, can_request_materials, filter_dataframe_for_user
-from config import CRITICAL_DAYS, DEFAULT_CATEGORY_CODES, REQUIRED_COLUMNS, SITE_STOCK_GROUPS
+from config import CRITICAL_DAYS, DEFAULT_CATEGORY_CODES, REQUIRED_COLUMNS, SITE_STOCK_GROUPS, FILE_TYPES
 from db.models import Database
 from excel.id_parse import extract_item_id, extract_product_name
 from excel.inbound import (
@@ -738,6 +738,10 @@ def main() -> int:
     assert result.drop_reasons.get("bad_id", 0) == 1
 
     clean_df = pd.read_excel(result.clean_path, engine="openpyxl")
+    import openpyxl as _ox
+    _wb = _ox.load_workbook(result.clean_path, read_only=True)
+    assert _wb.sheetnames == [FILE_TYPES["product_inventory"]["label_fa"]] == ["منابع اصلی"]
+    _wb.close()
     assert list(clean_df.columns) == REQUIRED_COLUMNS["product_inventory"]
     assert len(clean_df) == 4
     assert set(clean_df["id"].astype(str)) == {"ACID01", "CAUST02", "CL04", "OIL05"}

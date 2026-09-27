@@ -14,6 +14,7 @@ from config import (
     REQUIRED_COLUMNS,
     TUNDISH_TYPES,
     TUNDISH_TYPE_LABELS,
+    clean_excel_sheet_name,
 )
 from excel.id_parse import extract_item_id, extract_product_name
 from excel.work_order import tundish_type_label_for_work_order
@@ -214,15 +215,15 @@ def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
         out["item_code_desc"] = out["product_name"]
     if "item_code_desc" not in out.columns:
         raise ExcelValidationError(
-            "ستون «کد و شرح کالا» در فایل موجودی انبار یافت نشد."
+            "ستون «کد و شرح کالا» در فایل منابع اصلی یافت نشد."
         )
     if "category_code" not in out.columns:
         raise ExcelValidationError(
-            "ستون «کد دسته بندی» در فایل موجودی انبار یافت نشد."
+            "ستون «کد دسته بندی» در فایل منابع اصلی یافت نشد."
         )
     if "quantity" not in out.columns:
         raise ExcelValidationError(
-            "ستون «موجودی» در فایل موجودی انبار یافت نشد."
+            "ستون «موجودی» در فایل منابع اصلی یافت نشد."
         )
 
     raw_desc = out["item_code_desc"]
@@ -602,6 +603,19 @@ def merge_clean_frames(
     return out.reset_index(drop=True)
 
 
+
+def write_clean_excel(df: pd.DataFrame, path: Path | str, file_type: str) -> None:
+    """Persist a cleaned extract with the user-facing sheet title."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_excel(
+        path,
+        index=False,
+        engine="openpyxl",
+        sheet_name=clean_excel_sheet_name(file_type),
+    )
+
+
 def extract_and_save_clean(
     raw_path: Path | str,
     file_type: str,
@@ -612,7 +626,7 @@ def extract_and_save_clean(
 ) -> ExtractResult:
     """Load raw workbook, filter records, project columns, write cleaned xlsx.
 
-    For product_inventory (موجودی انبار): extract id, filter by category allowlist,
+    For product_inventory (منابع اصلی): extract id, filter by category allowlist,
     drop priority==0, default priority=1.
     For other types: standard tundish keep-rule + REQUIRED_COLUMNS projection.
     """
@@ -631,7 +645,7 @@ def extract_and_save_clean(
         if not allowlist:
             raise ExcelValidationError(
                 "لیست کدهای دسته‌بندی خالی است. "
-                "ابتدا از منوی «موجودی انبار» → «اضافه کردن کد دسته بندی» "
+                "ابتدا از منوی «منابع اصلی» → «اضافه کردن کد دسته بندی» "
                 "حداقل یک کد ۴ رقمی اضافه کنید."
             )
         enriched = enrich_warehouse_inventory(df)
@@ -683,7 +697,7 @@ def extract_and_save_clean(
         out_dir = raw_path.parent / "cleaned"
     out_dir.mkdir(parents=True, exist_ok=True)
     clean_path = out_dir / f"{file_type}.xlsx"
-    clean_df.to_excel(clean_path, index=False, engine="openpyxl")
+    write_clean_excel(clean_df, clean_path, file_type)
 
     return ExtractResult(
         clean_path=clean_path,

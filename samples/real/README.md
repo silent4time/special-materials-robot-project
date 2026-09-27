@@ -2,7 +2,7 @@
 
 Copied from production-style attachments for loader regression tests.
 
-## `inventory_sample.xlsx` (موجودی انبار)
+## `inventory_sample.xlsx` (منابع اصلی / موجودی انبار ورودی)
 
 - Prefer sheet **«ریز اطلاعات»** (workbook also has Sheet1 / کل موجودی / Sheet3).
 - Columns (Arabic yeh `ي` U+064A often appears instead of Persian `ی` U+06CC):

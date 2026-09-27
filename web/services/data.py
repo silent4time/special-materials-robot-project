@@ -8,6 +8,7 @@ from typing import Any, Optional
 import pandas as pd
 
 from analytics.tundish import apply_inventory_ledger, remaining
+from config import FILE_TYPES
 from db.models import Database
 from excel.processor import process_file
 
@@ -78,7 +79,7 @@ def resolve_remaining(
         return remaining(pd.DataFrame(rows)), f"موجودی روزانه سایت ({day})"
     inv = inventory_with_ledger(db, frames.get("product_inventory"))
     rem = remaining(inv)
-    return rem, "موجودی انبار"
+    return rem, FILE_TYPES["product_inventory"]["label_fa"]
 
 
 def frames_completeness(frames: dict[str, Optional[pd.DataFrame]]) -> dict[str, bool]:

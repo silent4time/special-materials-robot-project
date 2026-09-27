@@ -16,7 +16,7 @@ TUNDISH_SHORT_FA = {
 
 # action_key → Persian phrase after «کاربر {name} با آیدی {id} »
 ACTION_PHRASES: dict[str, str] = {
-    "upload_product_inventory": "فایل موجودی انبار را آپلود کرد",
+    "upload_product_inventory": "فایل منابع اصلی را آپلود کرد",
     "upload_monthly_consumption": "فایل مصرف ماهیانه مواد را آپلود کرد",
     "site_stock_saved": "موجودی اقلام سایت ({group}) را ثبت کرد",
     "material_request_created": "درخواست مواد را ایجاد کرد",
