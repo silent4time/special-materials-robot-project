@@ -115,9 +115,7 @@ BTN_MR_EDIT = "✏️ اصلاح"
 BTN_MR_CANCEL = "✖️ انصراف"
 BTN_MR_BACK_REVIEW = "⬅️ بازگشت به بررسی"
 BTN_MR_HISTORY = "📜 تاریخچه درخواست‌ها"
-BTN_MR_DAYS_7 = "۷ روز"
-BTN_MR_DAYS_14 = "۱۴ روز"
-BTN_MR_DAYS_30 = "۳۰ روز"
+BTN_MR_DAYS_DEFAULT = "۱ روز (پیش‌فرض)"
 
 # Date-range presets (day-level — advanced for period reports)
 BTN_RANGE_TODAY = "امروز"
@@ -491,10 +489,10 @@ def month_picker_menu() -> dict:
 
 
 def material_request_days_menu() -> dict:
-    """Coverage-days presets for درخواست مواد (default ۷ روز)."""
+    """Coverage days for درخواست مواد: type a number or use default ۱ روز."""
     return BaleClient.reply_keyboard(
         [
-            [BTN_MR_DAYS_7, BTN_MR_DAYS_14, BTN_MR_DAYS_30],
+            [BTN_MR_DAYS_DEFAULT],
             [BTN_MR_HISTORY],
             [BTN_MR_CANCEL, BTN_BACK_MAIN],
         ]

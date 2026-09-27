@@ -126,7 +126,7 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 
 درخواست مواد (مالک / مدیر / کاردان مسئول):
 • دکمه «🛒 درخواست مواد» در منوی اصلی
-• انتخاب پوشش روز (۷ / ۱۴ / ۳۰)، بررسی پیشنهاد، تأیید یا اصلاح مقدار
+• ورود تعداد روز پوشش (پیش‌فرض ۱)، بررسی پیشنهاد، تأیید یا اصلاح مقدار
 • پس از تأیید، از منبع اصلی (ledger) کسر می‌شود
 
 برگشت به انبار (مالک / مدیر / کاردان مسئول):
@@ -4605,7 +4605,8 @@ class BotApp:
         self._reply(
             message,
             "🛒 درخواست مواد\n"
-            "تعداد روز پوشش را انتخاب کنید (پیش‌فرض: ۷ روز).\n"
+            "تعداد روز پوشش را وارد کنید (عدد صحیح، حداقل ۱).\n"
+            "پیش‌فرض: ۱ روز — می‌توانید دکمه «۱ روز (پیش‌فرض)» را بزنید یا عدد را تایپ کنید.\n"
             "پیشنهاد بر اساس مصرف روزانه و موجودی باقیمانده محاسبه می‌شود.",
             kb.material_request_days_menu(),
         )
@@ -4673,6 +4674,52 @@ class BotApp:
         self._send_mr_review(message, days, lines)
         return True
 
+
+    def on_material_request_days_text(self, message: dict, text: str) -> bool:
+        """Parse typed coverage days while awaiting days. Returns True if consumed."""
+        uid = self._uid(message)
+        pending = self._material_req_pending.get(uid)
+        if not pending or pending.get("await") != "days":
+            return False
+        # leave known menu buttons to their own handlers
+        if text in {
+            kb.BTN_MR_DAYS_DEFAULT,
+            kb.BTN_MR_HISTORY,
+            kb.BTN_MR_CANCEL,
+            kb.BTN_BACK_MAIN,
+            kb.BTN_MATERIAL_REQUEST,
+            kb.BTN_HELP,
+            kb.BTN_RESET,
+        }:
+            return False
+        raw = (text or "").strip().translate(
+            str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+        )
+        if not raw.isdigit():
+            self._reply(
+                message,
+                "تعداد روز باید یک عدد صحیح مثبت باشد (مثلاً ۱ یا ۵).\n"
+                "یا دکمه «۱ روز (پیش‌فرض)» را بزنید.",
+                kb.material_request_days_menu(),
+            )
+            return True
+        days = int(raw)
+        if days < 1:
+            self._reply(
+                message,
+                "تعداد روز باید حداقل ۱ باشد.",
+                kb.material_request_days_menu(),
+            )
+            return True
+        if days > 366:
+            self._reply(
+                message,
+                "حداکثر پوشش قابل قبول ۳۶۶ روز است.",
+                kb.material_request_days_menu(),
+            )
+            return True
+        return self.on_material_request_days(message, days)
+
     def on_material_request_confirm(self, message: dict) -> None:
         user = self._require_material_request_access(message)
         if not user:
@@ -4696,7 +4743,7 @@ class BotApp:
             req = self.db.create_material_request(
                 uid,
                 actor_display_name=display,
-                coverage_days=pending.get("days") or 7,
+                coverage_days=pending.get("days") or 1,
                 lines=lines,
                 status="confirmed",
             )
@@ -5462,6 +5509,10 @@ class BotApp:
         if self.on_bot_settings_flow_text(message, text):
             return
 
+        # material-request coverage days (typed number)
+        if self.on_material_request_days_text(message, text):
+            return
+
         # material-request / warehouse-return edit text (pick item / qty)
         if self.on_material_request_edit_text(message, text):
             return
@@ -5556,13 +5607,8 @@ class BotApp:
         if text == kb.BTN_MR_HISTORY:
             self.on_material_request_history(message)
             return
-        if text in {kb.BTN_MR_DAYS_7, kb.BTN_MR_DAYS_14, kb.BTN_MR_DAYS_30}:
-            days_map = {
-                kb.BTN_MR_DAYS_7: 7,
-                kb.BTN_MR_DAYS_14: 14,
-                kb.BTN_MR_DAYS_30: 30,
-            }
-            if self.on_material_request_days(message, days_map[text]):
+        if text == kb.BTN_MR_DAYS_DEFAULT:
+            if self.on_material_request_days(message, 1):
                 return
         if text == kb.BTN_MR_CONFIRM_ALL:
             uid = self._uid(message)
@@ -5692,13 +5738,9 @@ class BotApp:
             if self.on_date_range_choice(message, "today"):
                 return
         if text == kb.BTN_RANGE_7:
-            if self.on_material_request_days(message, 7):
-                return
             if self.on_date_range_choice(message, "7d"):
                 return
         if text == kb.BTN_RANGE_30:
-            if self.on_material_request_days(message, 30):
-                return
             if self.on_date_range_choice(message, "30d"):
                 return
         if text == kb.BTN_RANGE_CUSTOM:
