@@ -134,7 +134,7 @@ python scripts/seed_real_samples.py
 > (`get_latest_extracted` / مسیر clean) خوانده می‌شود — نه از مسیرهای کهنهٔ جلسه.
 >
 > - آپلود «منبع اصلی» و هر فایل «مواد مصرفی» با همین قالب
->   (`category_code, id, product_name, keyword, quantity, priority`) این جدول را به‌روز می‌کند.
+>   (`category_code, id, product_name, keyword, usage_location, quantity, priority`) این جدول را به‌روز می‌کند.
 > - گزارش‌های انبار/کارخانه (مازاد، پیشنهاد، پیش‌بینی، درخواست مواد، ورودی انبار)
 >   حقایق موجودی را از این جدول (+ ledger) می‌گیرند.
 > - «موجودی و مواد بحرانی» ترجیحاً از `site_stock_entries` (موجودی روزانه سایت)

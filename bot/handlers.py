@@ -67,6 +67,7 @@ from bot.settings_text import (
 )
 from config import ASSISTANT_ENABLED, BOT_ASSETS_DIR, BOT_USERNAME, CRITICAL_DAYS, FILE_TYPES, REPORT_DIR, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
 from db.models import Database
+from services import main_source as main_source_svc
 from excel.inbound import (
     compute_inbound_delta,
     format_inbound_list_fa,
@@ -164,6 +165,8 @@ class BotApp:
         self._analysis_tundish_filter: dict[str, str | None] = {}
         # awaiting plain text for category code entry
         self._await_category_code: set[str] = set()
+        # منبع اصلی edit/add record interactive flow
+        self._main_source_pending: dict[str, dict[str, Any]] = {}
         # site stock interactive entry: uid -> {group, items, values, awaiting_idx, walk_idx, guided, chat_id, message_id}
         self._site_stock_pending: dict[str, dict[str, Any]] = {}
         # catalog assignment: uid -> {item_id} while choosing group
@@ -244,6 +247,7 @@ class BotApp:
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(uid)
         self._await_category_code.discard(uid)
+        self._main_source_pending.pop(uid, None)
         self._site_stock_pending.pop(uid, None)
         self._catalog_assign_pending.pop(uid, None)
         self._users_pending.pop(uid, None)
@@ -988,6 +992,7 @@ class BotApp:
         self._clear_analysis_pending(uid)
         self._analysis_tundish_filter.pop(uid, None)
         self._await_category_code.discard(uid)
+        self._main_source_pending.pop(uid, None)
         self._site_stock_pending.pop(uid, None)
         self._catalog_assign_pending.pop(uid, None)
         self._users_pending.pop(uid, None)
@@ -1008,6 +1013,7 @@ class BotApp:
             return
         self._clear_analysis_pending(user["bale_user_id"])
         self._await_category_code.discard(str(user["bale_user_id"]))
+        self._main_source_pending.pop(str(user["bale_user_id"]), None)
         self.db.set_pending_file_type(user["bale_user_id"], file_type)
         label = FILE_TYPES[file_type]["label_fa"]
         self._reply(
@@ -1022,10 +1028,14 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
+        uid = str(user["bale_user_id"])
+        had_main = uid in self._main_source_pending
         self.db.set_pending_file_type(user["bale_user_id"], None)
-        self._await_category_code.discard(str(user["bale_user_id"]))
+        self._await_category_code.discard(uid)
+        self._main_source_pending.pop(uid, None)
         session = self.db.get_or_create_session(user["bale_user_id"])
-        self._reply(message, "عملیات لغو شد.\n" + self._status_text(session), kb.main_menu(user))
+        menu = kb.inventory_edit_menu() if had_main else kb.main_menu(user)
+        self._reply(message, "عملیات لغو شد.\n" + self._status_text(session), menu)
 
     def on_status(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -1266,6 +1276,25 @@ class BotApp:
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("WO group sync after monthly failed: %s", exc)
+            try:
+                monthly_clean = pd.read_excel(result.clean_path, engine="openpyxl")
+                usage_sync = main_source_svc.sync_usage_from_monthly(
+                    self.db,
+                    monthly_clean,
+                    bale_user_id=user["bale_user_id"],
+                )
+                if usage_sync.get("ok") and usage_sync.get("updated"):
+                    catalog_note += (
+                        f"\nمحل استفاده در منبع اصلی برای "
+                        f"{usage_sync.get('updated', 0)} قلم به‌روز شد "
+                        f"(از {usage_sync.get('mapped', 0)} نگاشت مصرف)."
+                    )
+                elif usage_sync.get("reason") == "no_inventory":
+                    catalog_note += (
+                        "\n(منبع اصلی برای پر کردن محل استفاده هنوز موجود نیست.)"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("usage_location sync after monthly failed: %s", exc)
 
         label = FILE_TYPES[pending]["label_fa"]
         reasons = result.drop_reasons or {}
@@ -1364,6 +1393,7 @@ class BotApp:
             return
         self._clear_analysis_pending(user["bale_user_id"])
         self._await_category_code.discard(str(user["bale_user_id"]))
+        self._main_source_pending.pop(str(user["bale_user_id"]), None)
         codes = self.db.list_category_codes(active_only=True)
         hint = (
             f"تعداد کدهای فعال دسته‌بندی: {len(codes)}\n"
@@ -1453,6 +1483,266 @@ class BotApp:
             is_last = index == len(chunks) - 1
             self._reply(message, (prefix if index == 0 else "") + chunk,
                         kb.inventory_menu() if is_last else None)
+
+
+    def _deny_main_source_edit(self, message: dict, user: dict) -> bool:
+        """Only catalog-admin roles may edit/add/upload منبع اصلی via settings."""
+        if can_configure_catalog(user):
+            return False
+        self._main_source_pending.pop(str(user["bale_user_id"]), None)
+        self._reply(
+            message,
+            "دسترسی ویرایش منبع اصلی ندارید (فقط مالک، مدیر یا کاردان مسئول).",
+            kb.inventory_menu(),
+        )
+        return True
+
+    def _clear_main_source_pending(self, uid: str) -> None:
+        self._main_source_pending.pop(str(uid), None)
+
+    def on_inventory_edit_menu(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        if self._deny_main_source_edit(message, user):
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._await_category_code.discard(uid)
+        self._main_source_pending[uid] = {"mode": "menu"}
+        frame = main_source_svc.load_primary_frame(self.db, bale_user_id=uid)
+        n = 0 if frame is None else int(len(frame))
+        self._reply(
+            message,
+            (
+                "ویرایش منبع اصلی\n"
+                f"تعداد ردیف‌های فعلی: {n}\n"
+                "می‌توانید رکورد ویرایش/اضافه کنید یا فایل اکسل با همان قالب تمیز را آپلود کنید."
+            ),
+            kb.inventory_edit_menu(),
+        )
+
+    def on_inv_edit_record_start(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user) or self._deny_main_source_edit(message, user):
+            return
+        uid = str(user["bale_user_id"])
+        frame = main_source_svc.load_primary_frame(self.db, bale_user_id=uid)
+        if frame is None or frame.empty:
+            self._reply(
+                message,
+                "منبع اصلی خالی است. ابتدا فایل را آپلود یا رکورد جدید اضافه کنید.",
+                kb.inventory_edit_menu(),
+            )
+            return
+        preview = main_source_svc.list_ids_preview(frame, limit=25)
+        self._main_source_pending[uid] = {"mode": "edit_pick_id"}
+        body = "شناسه رکورد را ارسال کنید (یا یکی از موارد زیر):\n" + "\n".join(preview)
+        if len(frame) > 25:
+            body += f"\n… و {int(len(frame)) - 25} مورد دیگر"
+        body += (
+            f"\n\nبرای انصراف «{kb.BTN_CANCEL_PENDING}» را بزنید."
+        )
+        self._reply(message, body, kb.cancel_pending_menu())
+
+    def on_inv_add_record_start(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user) or self._deny_main_source_edit(message, user):
+            return
+        uid = str(user["bale_user_id"])
+        fields = [c for c in main_source_svc.INVENTORY_COLUMNS]
+        first = fields[0]
+        self._main_source_pending[uid] = {
+            "mode": "add_fields",
+            "fields": fields,
+            "field_idx": 0,
+            "draft": {},
+        }
+        label = main_source_svc.FIELD_LABELS_FA.get(first, first)
+        self._reply(
+            message,
+            (
+                f"اضافه کردن رکورد جدید به منبع اصلی.\n"
+                f"مقدار «{label}» ({first}) را بفرستید.\n"
+                f"برای رد کردن فیلدهای اختیاری «-» بفرستید.\n"
+                f"برای انصراف «{kb.BTN_CANCEL_PENDING}» را بزنید."
+            ),
+            kb.cancel_pending_menu(),
+        )
+
+    def on_main_source_flow_text(self, message: dict, text: str) -> bool:
+        """Handle edit/add record free-text. Returns True if consumed."""
+        uid = str(self._uid(message))
+        pending = self._main_source_pending.get(uid)
+        if not pending:
+            return False
+        user = self._user_or_deny(message)
+        if not user:
+            self._clear_main_source_pending(uid)
+            return True
+        if self._deny_technician(message, user) or self._deny_main_source_edit(message, user):
+            return True
+        if text.strip() == kb.BTN_CANCEL_PENDING:
+            self._clear_main_source_pending(uid)
+            self.db.set_pending_file_type(user["bale_user_id"], None)
+            self._reply(message, "ویرایش منبع اصلی لغو شد.", kb.inventory_edit_menu())
+            return True
+
+        mode = pending.get("mode")
+        if mode == "edit_pick_id":
+            item_id = text.strip().split()[0]
+            # allow "ID — name" paste from preview
+            if "—" in item_id:
+                item_id = item_id.split("—", 1)[0].strip()
+            if " - " in item_id and len(item_id) > 20:
+                item_id = item_id.split(" - ", 1)[0].strip()
+            frame = main_source_svc.load_primary_frame(self.db, bale_user_id=uid)
+            if frame is None:
+                frame = pd.DataFrame()
+            _idx, row = main_source_svc.find_row_by_id(frame, item_id)
+            if row is None:
+                self._reply(
+                    message,
+                    f"شناسه «{item_id}» یافت نشد. دوباره شناسه را بفرستید یا انصراف بزنید.",
+                    kb.cancel_pending_menu(),
+                )
+                return True
+            self._main_source_pending[uid] = {
+                "mode": "edit_fields",
+                "item_id": str(row.get("id") or item_id),
+            }
+            fields_hint = "، ".join(
+                f"{main_source_svc.FIELD_LABELS_FA.get(c, c)} ({c})"
+                for c in main_source_svc.INVENTORY_COLUMNS
+                if c != "id"
+            )
+            self._reply(
+                message,
+                (
+                    "رکورد فعلی:\n"
+                    + main_source_svc.format_row_fa(row)
+                    + "\n\nبرای ویرایش، یک یا چند خط به صورت "
+                    "نام_فیلد=مقدار بفرستید.\n"
+                    f"فیلدها: {fields_hint}\n"
+                    "مثال:\nquantity=120\nusage_location=اسلب، بیلت\nkeyword=نسوز"
+                ),
+                kb.cancel_pending_menu(),
+            )
+            return True
+
+        if mode == "edit_fields":
+            item_id = pending.get("item_id") or ""
+            updates: dict[str, object] = {}
+            # Accept FA labels or English keys
+            label_to_key = {v: k for k, v in main_source_svc.FIELD_LABELS_FA.items()}
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or "=" not in line:
+                    continue
+                left, right = line.split("=", 1)
+                key = left.strip()
+                key = label_to_key.get(key, key)
+                if key == "id":
+                    continue
+                if key in main_source_svc.INVENTORY_COLUMNS:
+                    updates[key] = right.strip()
+            if not updates:
+                self._reply(
+                    message,
+                    "هیچ فیلد معتبری یافت نشد. قالب: نام_فیلد=مقدار",
+                    kb.cancel_pending_menu(),
+                )
+                return True
+            try:
+                result = main_source_svc.upsert_row(
+                    self.db, item_id, updates, bale_user_id=uid
+                )
+            except (KeyError, ValueError) as exc:
+                self._reply(message, str(exc), kb.cancel_pending_menu())
+                return True
+            self._clear_main_source_pending(uid)
+            log_activity(self.db, user, "edit_main_source_record")
+            self._reply(
+                message,
+                (
+                    f"✅ رکورد «{result.get('id')}» به‌روز شد.\n"
+                    + main_source_svc.format_row_fa(result.get("row") or {})
+                ),
+                kb.inventory_edit_menu(),
+            )
+            return True
+
+        if mode == "add_fields":
+            fields = list(pending.get("fields") or main_source_svc.INVENTORY_COLUMNS)
+            idx = int(pending.get("field_idx") or 0)
+            draft = dict(pending.get("draft") or {})
+            if idx >= len(fields):
+                self._clear_main_source_pending(uid)
+                self._reply(message, "وضعیت نامعتبر؛ دوباره شروع کنید.", kb.inventory_edit_menu())
+                return True
+            field = fields[idx]
+            raw = text.strip()
+            if raw == "-":
+                raw = ""
+            if field in {"id", "category_code", "product_name", "quantity"} and not raw:
+                label = main_source_svc.FIELD_LABELS_FA.get(field, field)
+                self._reply(
+                    message,
+                    f"«{label}» الزامی است. دوباره مقدار را بفرستید.",
+                    kb.cancel_pending_menu(),
+                )
+                return True
+            draft[field] = raw
+            idx += 1
+            if idx >= len(fields):
+                try:
+                    result = main_source_svc.add_row(
+                        self.db, draft, bale_user_id=uid
+                    )
+                except (KeyError, ValueError) as exc:
+                    self._reply(message, str(exc), kb.cancel_pending_menu())
+                    # keep pending so user can retry last field? reset to start
+                    self._main_source_pending[uid] = {
+                        "mode": "add_fields",
+                        "fields": fields,
+                        "field_idx": 0,
+                        "draft": {},
+                    }
+                    return True
+                self._clear_main_source_pending(uid)
+                log_activity(self.db, user, "add_main_source_record")
+                action = "به‌روز" if result.get("action") == "updated" else "اضافه"
+                self._reply(
+                    message,
+                    (
+                        f"✅ رکورد {action} شد.\n"
+                        + main_source_svc.format_row_fa(result.get("row") or {})
+                    ),
+                    kb.inventory_edit_menu(),
+                )
+                return True
+            pending["draft"] = draft
+            pending["field_idx"] = idx
+            self._main_source_pending[uid] = pending
+            nxt = fields[idx]
+            label = main_source_svc.FIELD_LABELS_FA.get(nxt, nxt)
+            optional = " (اختیاری — با «-» رد کنید)" if nxt in {"keyword", "usage_location", "priority"} else ""
+            self._reply(
+                message,
+                f"مقدار «{label}» ({nxt}){optional} را بفرستید.",
+                kb.cancel_pending_menu(),
+            )
+            return True
+
+        # menu mode — ignore stray text
+        return False
+
 
     # ---------- analytics ----------
 
@@ -4848,6 +5138,10 @@ class BotApp:
         if self.on_month_year_range_choice(message, picked=text):
             return
 
+        # منبع اصلی edit/add record free-text
+        if self.on_main_source_flow_text(message, text):
+            return
+
         # category code entry (plain 4-digit text while awaiting)
         if self.on_category_code_text(message, text):
             return
@@ -5037,6 +5331,7 @@ class BotApp:
                 self._clear_report_assistant_pending(uid)
                 self._bot_settings_pending.pop(uid, None)
                 self._await_category_code.discard(uid)
+                self._main_source_pending.pop(uid, None)
                 self._reply(message, "منوی اصلی:", kb.main_menu(user))
             return
         if text == kb.BTN_BACK_ANALYTICS:
@@ -5114,6 +5409,18 @@ class BotApp:
                 return
 
         if text == kb.BTN_INV_MENU or text == kb.BTN_INV or text in ("📦 موجودی انبار", "📥 موجودی انبار"):
+            self.on_inventory_menu(message)
+            return
+        if text == kb.BTN_INV_EDIT:
+            self.on_inventory_edit_menu(message)
+            return
+        if text == kb.BTN_INV_EDIT_RECORD:
+            self.on_inv_edit_record_start(message)
+            return
+        if text == kb.BTN_INV_ADD_RECORD:
+            self.on_inv_add_record_start(message)
+            return
+        if text == kb.BTN_BACK_INV_EDIT:
             self.on_inventory_menu(message)
             return
         if text == kb.BTN_INV_ADD_CATEGORY:

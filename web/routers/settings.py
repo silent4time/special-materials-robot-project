@@ -1,15 +1,50 @@
-"""تنظیم ورود وب — owner/manager only; links to existing users rows (bot roles)."""
+"""تنظیم ورود وب + ویرایش منبع اصلی (shared services.main_source)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Form, Request
+import shutil
+import tempfile
+from pathlib import Path
+
+import pandas as pd
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
 from auth.rbac import role_label
+from bot.activity import log_activity
 from db.models import Database
+from excel.processor import (
+    ExcelValidationError,
+    extract_and_save_clean,
+    load_excel,
+    merge_clean_frames,
+)
+from services import main_source as main_source_svc
 from web.auth_web import set_credential
-from web.deps import get_db, require_admin_web
+from web.deps import get_db, require_admin_web, require_catalog_admin
 from web.templating import render
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+
+def _main_source_context(
+    db: Database,
+    user: dict,
+    *,
+    message: str | None = None,
+    error: str | None = None,
+) -> dict:
+    frame = main_source_svc.load_primary_frame(db, bale_user_id=user["bale_user_id"])
+    preview = []
+    row_count = 0
+    if frame is not None and not frame.empty:
+        row_count = int(len(frame))
+        preview = frame.head(40).fillna("").to_dict(orient="records")
+    return {
+        "user": user,
+        "row_count": row_count,
+        "preview": preview,
+        "message": message,
+        "error": error,
+    }
 
 
 @router.get("/web-login")
@@ -70,5 +105,170 @@ async def web_login_save(
             "message": message,
             "error": error,
         },
+        status_code=400 if error else 200,
+    )
+
+
+@router.get("/main-source")
+async def main_source_settings(
+    request: Request,
+    user=Depends(require_catalog_admin),
+    db: Database = Depends(get_db),
+):
+    return render(
+        request,
+        "settings_main_source.html",
+        _main_source_context(db, user),
+    )
+
+
+@router.post("/main-source/edit")
+async def main_source_edit(
+    request: Request,
+    user=Depends(require_catalog_admin),
+    db: Database = Depends(get_db),
+    id: str = Form(...),
+    category_code: str = Form(""),
+    product_name: str = Form(""),
+    keyword: str = Form(""),
+    usage_location: str = Form(""),
+    quantity: str = Form(""),
+    priority: str = Form(""),
+):
+    updates = {}
+    for key, raw in (
+        ("category_code", category_code),
+        ("product_name", product_name),
+        ("keyword", keyword),
+        ("usage_location", usage_location),
+        ("quantity", quantity),
+        ("priority", priority),
+    ):
+        if str(raw or "").strip():
+            updates[key] = raw.strip()
+    error = None
+    message = None
+    try:
+        if not updates:
+            raise ValueError("حداقل یک فیلد برای ویرایش پر کنید.")
+        result = main_source_svc.upsert_row(
+            db, id.strip(), updates, bale_user_id=user["bale_user_id"]
+        )
+        log_activity(db, user, "web_edit_main_source_record")
+        message = f"✅ رکورد «{result.get('id')}» به‌روز شد."
+    except (KeyError, ValueError) as exc:
+        error = str(exc)
+    return render(
+        request,
+        "settings_main_source.html",
+        _main_source_context(db, user, message=message, error=error),
+        status_code=400 if error else 200,
+    )
+
+
+@router.post("/main-source/add")
+async def main_source_add(
+    request: Request,
+    user=Depends(require_catalog_admin),
+    db: Database = Depends(get_db),
+    category_code: str = Form(...),
+    id: str = Form(...),
+    product_name: str = Form(...),
+    keyword: str = Form(""),
+    usage_location: str = Form(""),
+    quantity: str = Form(...),
+    priority: str = Form("1"),
+):
+    error = None
+    message = None
+    try:
+        result = main_source_svc.add_row(
+            db,
+            {
+                "category_code": category_code,
+                "id": id,
+                "product_name": product_name,
+                "keyword": keyword,
+                "usage_location": usage_location,
+                "quantity": quantity,
+                "priority": priority or 1,
+            },
+            bale_user_id=user["bale_user_id"],
+        )
+        log_activity(db, user, "web_add_main_source_record")
+        action = "به‌روز" if result.get("action") == "updated" else "اضافه"
+        message = f"✅ رکورد {action} شد («{result.get('id')}»)."
+    except (KeyError, ValueError) as exc:
+        error = str(exc)
+    return render(
+        request,
+        "settings_main_source.html",
+        _main_source_context(db, user, message=message, error=error),
+        status_code=400 if error else 200,
+    )
+
+
+@router.post("/main-source/upload")
+async def main_source_upload(
+    request: Request,
+    user=Depends(require_catalog_admin),
+    db: Database = Depends(get_db),
+    file: UploadFile = File(...),
+):
+    error = None
+    message = None
+    try:
+        suffix = Path(file.filename or "upload.xlsx").suffix.lower() or ".xlsx"
+        if suffix not in {".xlsx", ".xlsm"}:
+            raise ValueError("فقط فایل Excel با پسوند .xlsx پذیرفته می‌شود.")
+        allowlist = db.active_category_code_set()
+        if not allowlist:
+            raise ValueError(
+                "لیست کدهای دسته‌بندی خالی است. ابتدا از ربات کد دسته اضافه کنید."
+            )
+        old = main_source_svc.load_primary_frame(db, bale_user_id=user["bale_user_id"])
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_path = Path(tmp) / f"product_inventory{suffix}"
+            content = await file.read()
+            raw_path.write_bytes(content)
+            # Peek / normalize so FA headers (محل استفاده) map correctly
+            _ = load_excel(raw_path, strict_tundish=False)
+            result = extract_and_save_clean(
+                raw_path,
+                "product_inventory",
+                category_allowlist=allowlist,
+                clean_dir=Path(tmp) / "cleaned",
+            )
+            new_df = pd.read_excel(result.clean_path, engine="openpyxl")
+            if old is not None and not old.empty:
+                merged = merge_clean_frames(old, new_df, "product_inventory")
+            else:
+                merged = new_df
+            path = main_source_svc.persist_primary_frame(
+                db,
+                merged,
+                bale_user_id=user["bale_user_id"],
+                raw_path=raw_path,
+            )
+            # Keep a copy of raw under uploads for audit
+            try:
+                session = db.get_or_create_session(user["bale_user_id"])
+                audit = Path(path).parent.parent / "product_inventory_upload.xlsx"
+                shutil.copy2(raw_path, audit)
+            except Exception:
+                pass
+        log_activity(db, user, "web_upload_main_source")
+        message = (
+            f"✅ فایل منبع اصلی دریافت و همسان‌سازی شد "
+            f"({int(len(merged))} ردیف)."
+        )
+    except (ExcelValidationError, ValueError, KeyError) as exc:
+        error = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        error = f"آپلود ناموفق بود: {exc}"
+    return render(
+        request,
+        "settings_main_source.html",
+        _main_source_context(db, user, message=message, error=error),
         status_code=400 if error else 200,
     )

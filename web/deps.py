@@ -5,7 +5,7 @@ from typing import Annotated, Any, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 
-from auth.rbac import can_request_materials, require_manager, require_owner
+from auth.rbac import can_configure_catalog, can_request_materials, require_manager, require_owner
 from config import ADMIN_ROLES, FULL_DATA_ROLES
 from db.models import Database
 
@@ -77,6 +77,16 @@ def require_materials_user(
     """Same gate as bot: can_request_materials (owner/manager/responsible_officer)."""
     if not can_request_materials(user):
         raise ForbiddenFa("دسترسی درخواست/برگشت مواد ندارید.")
+    return user
+
+
+
+def require_catalog_admin(
+    user: Annotated[dict[str, Any], Depends(current_user)],
+) -> dict[str, Any]:
+    """Owner/manager/responsible_officer — same as bot can_configure_catalog."""
+    if not can_configure_catalog(user):
+        raise ForbiddenFa("دسترسی تنظیم منبع اصلی / کاتالوگ ندارید.")
     return user
 
 

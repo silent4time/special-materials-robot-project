@@ -50,8 +50,12 @@ ROLE_BUTTON_TO_KEY = {
 # منبع اصلی (warehouse inventory extract) submenu
 BTN_INV_MENU = "📦 منبع اصلی"
 BTN_INV_UPLOAD = "📥 ورود فایل اکسل"
+BTN_INV_EDIT = "✏️ ویرایش منبع اصلی"
+BTN_INV_EDIT_RECORD = "✏️ ویرایش رکورد"
+BTN_INV_ADD_RECORD = "➕ اضافه کردن رکورد"
 BTN_INV_ADD_CATEGORY = "➕ اضافه کردن کد دسته بندی"
 BTN_INV_LIST_CATEGORIES = "📋 لیست کدهای دسته بندی"
+BTN_BACK_INV_EDIT = "⬅️ بازگشت به ویرایش منبع اصلی"
 
 # موجودی روزانه سایت — interactive entry (not Excel primary path)
 BTN_SITE_STOCK = BTN_TANK  # «📥 موجودی روزانه سایت»
@@ -224,11 +228,24 @@ def inventory_menu() -> dict:
     """Submenu under منبع اصلی."""
     rows = [
         [BTN_INV_UPLOAD],
+        [BTN_INV_EDIT],
         [BTN_INV_ADD_CATEGORY],
         [BTN_INV_LIST_CATEGORIES],
         [BTN_BACK_MAIN],
     ]
     return BaleClient.reply_keyboard(rows)
+
+
+def inventory_edit_menu() -> dict:
+    """Edit/upload submenu for منبع اصلی (catalog-admin roles)."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_INV_EDIT_RECORD],
+            [BTN_INV_ADD_RECORD],
+            [BTN_INV_UPLOAD],
+            [BTN_BACK_INV_EDIT],
+        ]
+    )
 
 
 def site_stock_menu() -> dict:

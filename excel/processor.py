@@ -72,6 +72,14 @@ COLUMN_ALIASES = {
         "کليدواژه",
         "کلید_واژه",
     ],
+    "usage_location": [
+        "usage_location",
+        "usage location",
+        "محل استفاده",
+        "محل_استفاده",
+        "محل مصرف",
+        "محل_مصرف",
+    ],
     "coefficient": [
         "coefficient",
         "coeff",
@@ -294,6 +302,11 @@ def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
     else:
         prio = pd.to_numeric(out["priority"], errors="coerce")
         out["priority"] = prio.fillna(1).astype(int)
+
+    if "usage_location" in out.columns:
+        out["usage_location"] = out["usage_location"].map(_keyword_cell)
+    else:
+        out["usage_location"] = ""
 
     out["quantity"] = pd.to_numeric(out["quantity"], errors="coerce")
     return out
@@ -641,7 +654,17 @@ def merge_clean_frames(
     for _, row in old_a.iterrows():
         merged_map[merge_row_key(row, file_type)] = row.to_dict()
     for _, row in new_a.iterrows():
-        merged_map[merge_row_key(row, file_type)] = row.to_dict()
+        key = merge_row_key(row, file_type)
+        new_dict = row.to_dict()
+        # Full inventory re-upload: keep previous usage_location when the new
+        # file omits it (or leaves it blank). Quantity still comes from new.
+        if file_type == "product_inventory" and key in merged_map:
+            old_dict = merged_map[key]
+            if _is_blank(new_dict.get("usage_location")) and not _is_blank(
+                old_dict.get("usage_location")
+            ):
+                new_dict["usage_location"] = old_dict.get("usage_location")
+        merged_map[key] = new_dict
     if not merged_map:
         return new_a.iloc[0:0].copy()
     out = pd.DataFrame(list(merged_map.values()))

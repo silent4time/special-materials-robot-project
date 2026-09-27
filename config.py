@@ -160,6 +160,7 @@ REQUIRED_COLUMNS = {
         "id",
         "product_name",
         "keyword",
+        "usage_location",
         "quantity",
         "priority",
     ],

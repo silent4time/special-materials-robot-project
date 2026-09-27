@@ -45,6 +45,7 @@ from excel.inbound import (
     format_inbound_list_fa,
     write_inbound_excel,
 )
+from services import main_source as main_source_svc
 from excel.processor import (
     extract_and_save_clean,
     format_inventory_table_fa,
@@ -131,6 +132,7 @@ def _test_merge_and_monthly_summary() -> None:
                 "id": "A1",
                 "product_name": "old-only",
                 "keyword": "",
+                "usage_location": "اسلب",
                 "quantity": 10,
                 "category_code": "1201",
                 "priority": 1,
@@ -139,6 +141,7 @@ def _test_merge_and_monthly_summary() -> None:
                 "id": "B2",
                 "product_name": "shared",
                 "keyword": "shared-kw",
+                "usage_location": "بلوم",
                 "quantity": 5,
                 "category_code": "1201",
                 "priority": 1,
@@ -151,6 +154,7 @@ def _test_merge_and_monthly_summary() -> None:
                 "id": "B2",
                 "product_name": "shared-new",
                 "keyword": "shared-kw-new",
+                "usage_location": "",  # blank → preserve بلوم
                 "quantity": 99,
                 "category_code": "1201",
                 "priority": 1,
@@ -159,6 +163,7 @@ def _test_merge_and_monthly_summary() -> None:
                 "id": "C3",
                 "product_name": "new-only",
                 "keyword": "",
+                "usage_location": "بیلت",
                 "quantity": 7,
                 "category_code": "1201",
                 "priority": 1,
@@ -169,6 +174,9 @@ def _test_merge_and_monthly_summary() -> None:
     assert set(merged["id"].astype(str)) == {"A1", "B2", "C3"}
     assert float(merged.loc[merged["id"].astype(str) == "B2", "quantity"].iloc[0]) == 99
     assert float(merged.loc[merged["id"].astype(str) == "A1", "quantity"].iloc[0]) == 10
+    assert str(merged.loc[merged["id"].astype(str) == "B2", "usage_location"].iloc[0]) == "بلوم"
+    assert str(merged.loc[merged["id"].astype(str) == "A1", "usage_location"].iloc[0]) == "اسلب"
+    assert str(merged.loc[merged["id"].astype(str) == "C3", "usage_location"].iloc[0]) == "بیلت"
 
     # work_order normalize + map
     assert normalize_work_order("1102010000") == "1102010000"
@@ -180,6 +188,20 @@ def _test_merge_and_monthly_summary() -> None:
     assert group_for_work_order("1102020000") == "bloom"
     assert group_for_work_order("1102030000") == "billet"
     assert WORK_ORDER_TO_GROUP["1102010000"] == "slab"
+
+    # usage_location from monthly consumption (work_order → اسلب/بلوم/بیلت)
+    monthly_tiny = pd.DataFrame(
+        [
+            {"id": "X1", "work_order": "1102010000", "tundish_type": "تاندیش اسلب", "quantity": 1},
+            {"id": "X1", "work_order": "1102030000", "tundish_type": "تاندیش بیلت", "quantity": 2},
+            {"id": "X2", "work_order": "1102020000", "tundish_type": "تاندیش بلوم", "quantity": 3},
+        ]
+    )
+    loc_map = main_source_svc.build_usage_location_map(monthly_tiny)
+    assert loc_map["x1"] == "اسلب، بیلت" or loc_map.get("X1") == "اسلب، بیلت" or "اسلب" in loc_map.get("x1", loc_map.get("X1", ""))
+    # normalize_key_part lowercases → keys are casefolded
+    assert "اسلب" in loc_map["x1"] and "بیلت" in loc_map["x1"]
+    assert loc_map["x2"] == "بلوم"
 
     sample = ROOT / "samples" / "real" / "monthly_consumption_sample.xlsx"
     if sample.exists():
@@ -744,8 +766,18 @@ def main() -> int:
     assert _wb.sheetnames == [FILE_TYPES["product_inventory"]["label_fa"]] == ["منبع اصلی"]
     _wb.close()
     assert list(clean_df.columns) == REQUIRED_COLUMNS["product_inventory"]
+    assert REQUIRED_COLUMNS["product_inventory"] == [
+        "category_code",
+        "id",
+        "product_name",
+        "keyword",
+        "usage_location",
+        "quantity",
+        "priority",
+    ]
     assert "item_code_desc" not in clean_df.columns
     assert "keyword" in clean_df.columns
+    assert "usage_location" in clean_df.columns
     assert len(clean_df) == 4
     assert set(clean_df["id"].astype(str)) == {"ACID01", "CAUST02", "CL04", "OIL05"}
     assert (clean_df["priority"] == 1).all()

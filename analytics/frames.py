@@ -4,7 +4,7 @@ Architectural rule (منبع اصلی):
   Cleaned ``product_inventory`` (latest extract in ``extracted_datasets``) is the
   canonical master table for warehouse / plant report facts.
 
-  Cleaned columns: category_code, id, product_name, keyword, quantity, priority.
+  Cleaned columns: category_code, id, product_name, keyword, usage_location, quantity, priority.
 
   Continuously refreshed by uploads that match this format (منوی «منبع اصلی»,
   and any consumables-path upload whose columns match the same schema).

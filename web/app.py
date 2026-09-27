@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from auth.rbac import can_request_materials, require_manager, role_label
+from auth.rbac import can_configure_catalog, can_request_materials, require_manager, role_label
 from config import ROLES, SITE_STOCK_GROUPS, WEB_SECRET_KEY
 from web.deps import (
     ForbiddenFa,
@@ -103,6 +103,7 @@ def create_app() -> FastAPI:
             "ROLES": ROLES,
             "SITE_STOCK_GROUPS": SITE_STOCK_GROUPS,
             "can_request_materials": can_request_materials,
+            "can_configure_catalog": can_configure_catalog,
             "require_manager": require_manager,
             "deny_technician": deny_technician,
             "user_can_see_reports": user_can_see_reports,

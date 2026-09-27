@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}منبع اصلی{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>منبع اصلی</h1>
+  <p class="muted">
+    جدول تمیزشدهٔ canonical برای گزارش‌ها.
+    ستون‌ها:
+    <code>category_code, id, product_name, keyword, usage_location, quantity, priority</code>
+    — هدر فارسی «محل استفاده» برای <code>usage_location</code> پذیرفته می‌شود.
+  </p>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  <p>تعداد ردیف: <strong>{{ row_count }}</strong></p>
+</div>
+
+<div class="card">
+  <h2>آپلود فایل اکسل</h2>
+  <p class="muted">همان قالب تمیز منبع اصلی (.xlsx). در صورت نبودن ستون محل استفاده، مقادیر قبلی بر اساس شناسه حفظ می‌شوند.</p>
+  <form method="post" action="/settings/main-source/upload" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".xlsx,.xlsm" required>
+    <p style="margin-top:1rem"><button type="submit">آپلود و همسان‌سازی</button></p>
+  </form>
+</div>
+
+<div class="card">
+  <h2>ویرایش رکورد</h2>
+  <form method="post" action="/settings/main-source/edit">
+    <label for="edit_id">شناسه (id)</label>
+    <input id="edit_id" name="id" type="text" required>
+    <label for="edit_category_code">کد دسته بندی</label>
+    <input id="edit_category_code" name="category_code" type="text">
+    <label for="edit_product_name">نام محصول</label>
+    <input id="edit_product_name" name="product_name" type="text">
+    <label for="edit_keyword">کلید واژه</label>
+    <input id="edit_keyword" name="keyword" type="text">
+    <label for="edit_usage_location">محل استفاده</label>
+    <input id="edit_usage_location" name="usage_location" type="text" placeholder="اسلب، بیلت">
+    <label for="edit_quantity">موجودی</label>
+    <input id="edit_quantity" name="quantity" type="text">
+    <label for="edit_priority">اولویت</label>
+    <input id="edit_priority" name="priority" type="text">
+    <p class="muted">فقط فیلدهایی که پر شوند به‌روز می‌شوند.</p>
+    <p style="margin-top:1rem"><button type="submit">ذخیره ویرایش</button></p>
+  </form>
+</div>
+
+<div class="card">
+  <h2>اضافه کردن رکورد</h2>
+  <form method="post" action="/settings/main-source/add">
+    <label for="add_category_code">کد دسته بندی *</label>
+    <input id="add_category_code" name="category_code" type="text" required>
+    <label for="add_id">شناسه *</label>
+    <input id="add_id" name="id" type="text" required>
+    <label for="add_product_name">نام محصول *</label>
+    <input id="add_product_name" name="product_name" type="text" required>
+    <label for="add_keyword">کلید واژه</label>
+    <input id="add_keyword" name="keyword" type="text">
+    <label for="add_usage_location">محل استفاده</label>
+    <input id="add_usage_location" name="usage_location" type="text">
+    <label for="add_quantity">موجودی *</label>
+    <input id="add_quantity" name="quantity" type="text" required>
+    <label for="add_priority">اولویت</label>
+    <input id="add_priority" name="priority" type="text" value="1">
+    <p style="margin-top:1rem"><button type="submit">افزودن رکورد</button></p>
+  </form>
+</div>
+
+{% if preview %}
+<div class="card">
+  <h2>پیش‌نمایش ({{ preview|length }} از {{ row_count }})</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>کد دسته</th><th>شناسه</th><th>نام</th><th>کلید واژه</th>
+        <th>محل استفاده</th><th>موجودی</th><th>اولویت</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in preview %}
+      <tr>
+        <td>{{ r.category_code }}</td>
+        <td>{{ r.id }}</td>
+        <td>{{ r.product_name }}</td>
+        <td>{{ r.keyword }}</td>
+        <td>{{ r.usage_location }}</td>
+        <td>{{ r.quantity }}</td>
+        <td>{{ r.priority }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}
