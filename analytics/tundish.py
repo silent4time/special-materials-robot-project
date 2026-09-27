@@ -7,7 +7,14 @@ from typing import Any
 
 import pandas as pd
 
-from config import CRITICAL_DAYS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, TUNDISH_TYPES, TUNDISH_TYPE_LABELS
+from config import (
+    CRITICAL_DAYS,
+    SURPLUS_CATEGORY_CODE,
+    SURPLUS_COVER_DAYS,
+    SURPLUS_FORECAST_DAYS,
+    TUNDISH_TYPES,
+    TUNDISH_TYPE_LABELS,
+)
 
 CUSTOM_RANGE_RE = re.compile(
     r"از\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})\s*تا\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})",
@@ -347,14 +354,47 @@ def period_consumption(
     )
 
 
+
+def _normalize_category_code_value(value: object) -> str | None:
+    """Normalize category to a 4-digit string (Excel floats like 1800.0 → 1800)."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return None
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    if text.isdigit() and len(text) <= 4:
+        text = text.zfill(4)
+    if len(text) == 4 and text.isdigit():
+        return text
+    return None
+
+
+def _pick_category_code(series: pd.Series) -> str | None:
+    """Prefer SURPLUS_CATEGORY_CODE when a material has multiple category codes."""
+    codes: list[str] = []
+    for value in series:
+        norm = _normalize_category_code_value(value)
+        if norm and norm not in codes:
+            codes.append(norm)
+    if SURPLUS_CATEGORY_CODE in codes:
+        return SURPLUS_CATEGORY_CODE
+    return codes[0] if codes else None
+
+
 def remaining(inventory_df: pd.DataFrame | None) -> pd.DataFrame:
     """
     Remaining stock from warehouse / product inventory.
     Prefers product_name, then legacy item_code_desc, then material_name as join key
     (matched to consumption material_name).
+
+    When ``category_code`` is present on the inventory frame it is preserved
+    (groupby: prefer SURPLUS_CATEGORY_CODE if multiple codes share a material).
     """
+    empty_cols = ["material_name", "remaining_qty", "unit", "location", "category_code"]
     if inventory_df is None or inventory_df.empty:
-        return pd.DataFrame(columns=["material_name", "remaining_qty", "unit", "location"])
+        return pd.DataFrame(columns=empty_cols)
     work = inventory_df.copy()
     name_col = None
     for candidate in ("product_name", "item_code_desc", "material_name"):
@@ -362,19 +402,32 @@ def remaining(inventory_df: pd.DataFrame | None) -> pd.DataFrame:
             name_col = candidate
             break
     if not name_col or "quantity" not in work.columns:
-        return pd.DataFrame(columns=["material_name", "remaining_qty", "unit", "location"])
+        return pd.DataFrame(columns=empty_cols)
     work["_qty"] = _qty(work["quantity"])
     group_cols = [name_col]
     if "unit" in work.columns:
         group_cols.append("unit")
     if "location" in work.columns:
         group_cols.append("location")
-    agg = (
-        work.groupby(group_cols, dropna=False)["_qty"]
-        .sum()
-        .reset_index()
-        .rename(columns={"_qty": "remaining_qty", name_col: "material_name"})
-    )
+    has_cat = "category_code" in work.columns
+    if has_cat:
+        agg = (
+            work.groupby(group_cols, dropna=False)
+            .agg(
+                remaining_qty=("_qty", "sum"),
+                category_code=("category_code", _pick_category_code),
+            )
+            .reset_index()
+            .rename(columns={name_col: "material_name"})
+        )
+    else:
+        agg = (
+            work.groupby(group_cols, dropna=False)["_qty"]
+            .sum()
+            .reset_index()
+            .rename(columns={"_qty": "remaining_qty", name_col: "material_name"})
+        )
+        agg["category_code"] = None
     if "location" not in agg.columns:
         agg["location"] = None
     if "unit" not in agg.columns:
@@ -459,15 +512,21 @@ def _material_daily_avg(rates_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _material_remaining(remaining_df: pd.DataFrame) -> pd.DataFrame:
+    empty_cols = ["material_name", "remaining_qty", "unit", "category_code"]
     if remaining_df is None or remaining_df.empty:
-        return pd.DataFrame(columns=["material_name", "remaining_qty", "unit"])
+        return pd.DataFrame(columns=empty_cols)
     work = remaining_df.copy()
     work["remaining_qty"] = pd.to_numeric(work["remaining_qty"], errors="coerce").fillna(0.0)
-    return (
-        work.groupby("material_name", dropna=False)
-        .agg(remaining_qty=("remaining_qty", "sum"), unit=("unit", "first"))
-        .reset_index()
-    )
+    agg_map: dict[str, tuple[str, Any]] = {
+        "remaining_qty": ("remaining_qty", "sum"),
+        "unit": ("unit", "first"),
+    }
+    if "category_code" in work.columns:
+        agg_map["category_code"] = ("category_code", _pick_category_code)
+    out = work.groupby("material_name", dropna=False).agg(**agg_map).reset_index()
+    if "category_code" not in out.columns:
+        out["category_code"] = None
+    return out
 
 
 def critical_materials(
@@ -642,10 +701,12 @@ def surplus_materials(
     """Identify surplus (مازاد) materials.
 
     A material is surplus when ANY of:
-      1) days_of_cover > max(CRITICAL_DAYS * 3, SURPLUS_COVER_DAYS) and avg_daily > 0
-      2) remaining_qty > forecast_need for SURPLUS_FORECAST_DAYS (default 30)
-      3) has stock but no matching consumption (avg_daily == 0) → flag «مازاد/بدون مصرف»
+      1) category_code == SURPLUS_CATEGORY_CODE (1800) → «کد دسته ۱۸۰۰ — اقلام مازاد»
+      2) days_of_cover > max(CRITICAL_DAYS * 3, SURPLUS_COVER_DAYS) and avg_daily > 0
+      3) remaining_qty > forecast_need for SURPLUS_FORECAST_DAYS (default 30)
+      4) has stock but no matching consumption (avg_daily == 0) → flag «مازاد/بدون مصرف»
 
+    Rows with rem_q <= 0 are skipped. Category-1800 reason is primary when present.
     Documented in Persian UI as «گزارش مواد مازاد».
     """
     cover_threshold = float(
@@ -689,6 +750,7 @@ def surplus_materials(
     reasons: list[str] = []
     keep: list[bool] = []
     surplus_qty: list[float] = []
+    has_cat_col = "category_code" in merged.columns
     for _, row in merged.iterrows():
         rem_q = float(row["remaining_qty"])
         avg = float(row["avg_daily"])
@@ -700,8 +762,21 @@ def surplus_materials(
             reasons.append("")
             surplus_qty.append(0.0)
             continue
+        cat = (
+            _normalize_category_code_value(row.get("category_code"))
+            if has_cat_col
+            else None
+        )
+        is_surplus_cat = cat == SURPLUS_CATEGORY_CODE
+        # Category 1800 = اقلام مازاد — always surplus (primary reason).
+        if is_surplus_cat:
+            flags.append("کد دسته ۱۸۰۰ — اقلام مازاد")
         if avg <= 0:
-            flags.append("مازاد/بدون مصرف")
+            if not is_surplus_cat:
+                flags.append("مازاد/بدون مصرف")
+            elif "مازاد/بدون مصرف" not in flags:
+                # Keep category reason primary; skip redundant no-consumption flag.
+                pass
         else:
             if cover_d > cover_threshold:
                 flags.append(f"پوشش بالا (> {cover_threshold:g} روز)")

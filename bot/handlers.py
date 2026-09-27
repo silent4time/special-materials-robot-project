@@ -2662,7 +2662,8 @@ class BotApp:
             subtitle=(
                 f"نرخ مصرف بر اساس {range_label} | "
                 f"تعریف: پوشش > {cover_th:g} روز، یا موجودی بیش از نیاز "
-                f"{SURPLUS_FORECAST_DAYS:g} روز؛ مواد با موجودی ولی بدون مصرف = مازاد/بدون مصرف"
+                f"{SURPLUS_FORECAST_DAYS:g} روز؛ مواد با موجودی ولی بدون مصرف = مازاد/بدون مصرف؛ "
+                f"کد دسته ۱۸۰۰ به‌صورت خودکار اقلام مازاد محسوب می‌شود"
             ),
             columns=cols,
             rows=self._df_to_row_dicts(surplus, cols),

@@ -9,7 +9,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Generator, Iterable, Optional
 
-from config import DATABASE_PATH, DEFAULT_CATEGORY_CODES, ROLES, SITE_STOCK_GROUP_KEYS, ensure_dirs
+from config import (
+    DATABASE_PATH,
+    DEFAULT_CATEGORY_CODES,
+    DEFAULT_CATEGORY_LABELS,
+    ROLES,
+    SITE_STOCK_GROUP_KEYS,
+    SURPLUS_CATEGORY_CODE,
+    SURPLUS_CATEGORY_LABEL,
+    ensure_dirs,
+)
 
 
 def _utcnow() -> str:
@@ -275,16 +284,35 @@ class Database:
             self._ensure_default_category_codes(conn)
 
     def _ensure_default_category_codes(self, conn: sqlite3.Connection) -> None:
-        """Insert missing DEFAULT_CATEGORY_CODES (does not overwrite or reactivate)."""
+        """Insert missing DEFAULT_CATEGORY_CODES; backfill reserved surplus label.
+
+        Does not overwrite non-empty labels or reactivate deactivated codes.
+        For code 1800 (SURPLUS_CATEGORY_CODE): if missing → INSERT with label
+        «اقلام مازاد»; if present with NULL/empty label → set the surplus label.
+        """
         now = _utcnow()
         for code in DEFAULT_CATEGORY_CODES:
+            label = DEFAULT_CATEGORY_LABELS.get(code)
             conn.execute(
                 """
                 INSERT OR IGNORE INTO category_codes (code, label, active, created_at, created_by)
                 VALUES (?, ?, 1, ?, ?)
                 """,
-                (code, None, now, "bootstrap"),
+                (code, label, now, "bootstrap"),
             )
+        # Existing DBs: backfill empty/NULL label for reserved surplus category.
+        surplus_label = DEFAULT_CATEGORY_LABELS.get(
+            SURPLUS_CATEGORY_CODE, SURPLUS_CATEGORY_LABEL
+        )
+        conn.execute(
+            """
+            UPDATE category_codes
+            SET label = ?
+            WHERE code = ?
+              AND (label IS NULL OR TRIM(label) = '')
+            """,
+            (surplus_label, SURPLUS_CATEGORY_CODE),
+        )
 
     def ensure_default_category_codes(self) -> int:
         """Public seed helper; returns number of codes newly inserted."""

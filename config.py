@@ -106,8 +106,19 @@ CATALOG_ADMIN_ROLES = frozenset({"owner", "manager", "responsible_officer"})
 # Files that still require domain/assignee for RBAC row filtering
 RBAC_SCOPED_FILE_TYPES = frozenset({"tank_consumption", "monthly_consumption"})
 
+# Reserved: warehouse category 1800 = surplus items (اقلام مازاد).
+# Always kept on inventory upload and always flagged in surplus_materials.
+SURPLUS_CATEGORY_CODE = "1800"
+SURPLUS_CATEGORY_LABEL = "اقلام مازاد"
+
+# Optional labels applied when seeding DEFAULT_CATEGORY_CODES.
+DEFAULT_CATEGORY_LABELS: dict[str, str] = {
+    SURPLUS_CATEGORY_CODE: SURPLUS_CATEGORY_LABEL,
+}
+
 # Default warehouse category allowlist (inventory ∩ monthly real samples).
 # Seeded on DB bootstrap; users can still add more via the bot menu.
+# Includes SURPLUS_CATEGORY_CODE so 1800 rows are not dropped as wrong_category.
 DEFAULT_CATEGORY_CODES: list[str] = [
     "1203",
     "1207",
@@ -138,6 +149,7 @@ DEFAULT_CATEGORY_CODES: list[str] = [
     "1712",
     "1714",
     "1716",
+    SURPLUS_CATEGORY_CODE,
 ]
 
 REQUIRED_COLUMNS = {

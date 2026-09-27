@@ -130,7 +130,8 @@ def generate_surplus_pdf(
         title=f"گزارش مواد مازاد — {range_label}",
         subtitle=(
             f"منبع موجودی: {rem_source} | نرخ مصرف بر اساس {range_label} | "
-            f"تعریف: پوشش > {cover_th:g} روز"
+            f"تعریف: پوشش > {cover_th:g} روز؛ "
+            f"کد دسته ۱۸۰۰ به‌صورت خودکار اقلام مازاد محسوب می‌شود"
         ),
         columns=cols,
         rows=_df_rows(surplus, cols),

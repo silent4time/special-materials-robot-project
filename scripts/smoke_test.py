@@ -35,7 +35,7 @@ from analytics.tundish import (
     surplus_materials,
 )
 from auth.rbac import can_configure_catalog, can_request_materials, filter_dataframe_for_user
-from config import CRITICAL_DAYS, DEFAULT_CATEGORY_CODES, REQUIRED_COLUMNS, SITE_STOCK_GROUPS, FILE_TYPES
+from config import CRITICAL_DAYS, DEFAULT_CATEGORY_CODES, REQUIRED_COLUMNS, SITE_STOCK_GROUPS, FILE_TYPES, SURPLUS_CATEGORY_CODE, SURPLUS_CATEGORY_LABEL
 from db.models import Database
 from excel.id_parse import extract_item_id, extract_product_name
 from excel.inbound import (
@@ -76,6 +76,8 @@ def _write_wide_inventory(path: Path) -> None:
         ["1201", "ACID01 - اسید سولفوریک", 20, 1, "اسید", "X"],
         ["1201", "CAUST02 - سود سوزآور", 80, 1, "سود", "Y"],
         ["1201", "CL04 - کلر", 8, 1, "", "S"],
+        # keep — category 1800 surplus (اقلام مازاد)
+        ["1800", "SURP01 - قلم مازاد نمونه", 42, 1, "مازاد", "M"],
         # drop — wrong category
         ["9999", "OTHER99 - ماده خارجی", 10, 1, "", "Z"],
         ["8888", "DROP88 - حذف دسته", 5, 1, "", "Q"],
@@ -671,6 +673,10 @@ def main() -> int:
 
     # --- category allowlist (defaults seeded on DB init) ---
     assert db.active_category_code_set() == set(DEFAULT_CATEGORY_CODES)
+    assert SURPLUS_CATEGORY_CODE in db.active_category_code_set()
+    surplus_cat = db.get_category_code(SURPLUS_CATEGORY_CODE)
+    assert surplus_cat is not None
+    assert surplus_cat["label"] == SURPLUS_CATEGORY_LABEL
     row = db.add_category_code("1201", label="مواد ویژه", created_by="999")
     assert row["code"] == "1201"
     assert "1201" in db.active_category_code_set()
@@ -803,9 +809,9 @@ def main() -> int:
         category_allowlist=db.active_category_code_set(),
     )
     assert result.clean_path.exists()
-    assert result.raw_row_count == 8
-    # keep: ACID01, CAUST02, CL04, OIL05 = 4
-    assert result.kept_row_count == 4
+    assert result.raw_row_count == 9
+    # keep: ACID01, CAUST02, CL04, OIL05, SURP01(1800) = 5
+    assert result.kept_row_count == 5
     assert result.dropped_row_count == 4
     assert result.drop_reasons.get("wrong_category", 0) == 2
     assert result.drop_reasons.get("priority_0", 0) == 1
@@ -829,15 +835,19 @@ def main() -> int:
     assert "item_code_desc" not in clean_df.columns
     assert "keyword" in clean_df.columns
     assert "usage_location" in clean_df.columns
-    assert len(clean_df) == 4
-    assert set(clean_df["id"].astype(str)) == {"ACID01", "CAUST02", "CL04", "OIL05"}
+    assert len(clean_df) == 5
+    assert set(clean_df["id"].astype(str)) == {"ACID01", "CAUST02", "CL04", "OIL05", "SURP01"}
     assert (clean_df["priority"] == 1).all()
-    assert (clean_df["category_code"].astype(str) == "1201").all()
+    assert set(clean_df["category_code"].astype(str)) == {"1201", "1800"}
+    assert "1800" in db.active_category_code_set()
+    surp_row = clean_df.loc[clean_df["id"].astype(str) == "SURP01"].iloc[0]
+    assert str(surp_row["category_code"]) == "1800"
     kw_by_id = dict(zip(clean_df["id"].astype(str), clean_df["keyword"].fillna("").astype(str)))
     assert kw_by_id["ACID01"] == "اسید"
     assert kw_by_id["CAUST02"] == "سود"
     assert kw_by_id["CL04"] == ""
     assert kw_by_id["OIL05"] == "روغن"
+    assert kw_by_id["SURP01"] == "مازاد"
     table_text = "\n".join(format_inventory_table_fa(clean_df))
     assert "کد دسته" in table_text and "شرح کالا" in table_text and "موجودی" in table_text
     assert "1201" in table_text and "ACID01 - اسید سولفوریک" in table_text and "20" in table_text
@@ -892,7 +902,7 @@ def main() -> int:
     assert eid > 0
     latest = db.get_latest_extracted("999", "product_inventory")
     assert latest and latest["clean_path"] == str(result.clean_path)
-    assert latest["row_count"] == 4
+    assert latest["row_count"] == 5
     assert str(latest["bale_user_id"]) == "999"
 
     clean_paths = {
@@ -901,22 +911,31 @@ def main() -> int:
         "monthly_consumption": paths["monthly_consumption"],
     }
     cf, cm = process_session_files(clean_paths, mgr)
-    assert cm["product_inventory"]["total_rows"] == 4
-    # surplus still callable on cleaned extract
+    assert cm["product_inventory"]["total_rows"] == 5
+    # surplus still callable on cleaned extract; 1800 row always surplus
+    rem_clean = remaining(cf["product_inventory"])
+    assert "category_code" in rem_clean.columns
     surplus2 = surplus_materials(
         daily_rates(cf["tank_consumption"], cf["monthly_consumption"]),
-        remaining(cf["product_inventory"]),
+        rem_clean,
     )
     assert isinstance(surplus2, pd.DataFrame)
+    assert not surplus2.empty
+    surplus2_names = set(surplus2["material_name"].astype(str))
+    assert "قلم مازاد نمونه" in surplus2_names
+    surp_reason = str(
+        surplus2.loc[surplus2["material_name"].astype(str) == "قلم مازاد نمونه", "surplus_reason"].iloc[0]
+    )
+    assert ("۱۸۰۰" in surp_reason) or ("اقلام مازاد" in surp_reason) or ("1800" in surp_reason)
 
     # ========== catalog assignment + technician site stock entry ==========
     seed = db.seed_catalog_from_latest_warehouse()
     assert seed["ok"] is True
-    assert seed["counts"]["inserted"] >= 4
+    assert seed["counts"]["inserted"] >= 5
     catalog = db.list_catalog_items(active_only=True)
-    assert len(catalog) >= 4
+    assert len(catalog) >= 5
     ids = {c["id"] for c in catalog}
-    assert {"ACID01", "CAUST02", "CL04", "OIL05"}.issubset(ids)
+    assert {"ACID01", "CAUST02", "CL04", "OIL05", "SURP01"}.issubset(ids)
 
     # manager assigns items to groups
     db.assign_item_to_group("ACID01", "slab", assigned_by="999")
