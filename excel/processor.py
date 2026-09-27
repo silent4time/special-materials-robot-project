@@ -826,6 +826,22 @@ def _format_inventory_quantity(value: object) -> str:
     return _display_inventory_value(value)
 
 
+def inventory_table_rows(df: pd.DataFrame | None) -> list[dict[str, str]]:
+    """Build PDF/HTML row dicts: کد دسته، شرح کالا، موجودی."""
+    if df is None or df.empty:
+        return []
+    rows: list[dict[str, str]] = []
+    for _, row in df.iterrows():
+        rows.append(
+            {
+                "کد دسته": _display_inventory_value(row.get("category_code")),
+                "شرح کالا": _inventory_description(row),
+                "موجودی": _format_inventory_quantity(row.get("quantity")),
+            }
+        )
+    return rows
+
+
 def format_inventory_table_fa(
     df: pd.DataFrame | None,
     *,

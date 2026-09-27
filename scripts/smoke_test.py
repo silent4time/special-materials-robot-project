@@ -49,6 +49,7 @@ from services import main_source as main_source_svc
 from excel.processor import (
     extract_and_save_clean,
     format_inventory_table_fa,
+    inventory_table_rows,
     merge_clean_frames,
     process_session_files,
 )
@@ -840,6 +841,43 @@ def main() -> int:
     table_text = "\n".join(format_inventory_table_fa(clean_df))
     assert "کد دسته" in table_text and "شرح کالا" in table_text and "موجودی" in table_text
     assert "1201" in table_text and "ACID01 - اسید سولفوریک" in table_text and "20" in table_text
+    inv_rows = inventory_table_rows(clean_df)
+    assert inv_rows and inv_rows[0]["کد دسته"] == "1201"
+    assert any(r["شرح کالا"].startswith("ACID01") for r in inv_rows)
+    pdf_cat = ROOT / "reports" / "smoke_category_inventory.pdf"
+    generate_simple_report_pdf(
+        "لیست کد دسته‌بندی و موجودی",
+        subtitle="smoke",
+        columns=["کد دسته", "شرح کالا", "موجودی"],
+        rows=inv_rows,
+        output_path=pdf_cat,
+        filename_stem="smoke_category_inventory",
+    )
+    assert pdf_cat.exists() and pdf_cat.stat().st_size > 500
+    # catalog-shaped PDF (same generator path as on_catalog_list)
+    catalog_pdf_rows = [
+        {
+            "ردیف": i,
+            "کد دسته": r["کد دسته"],
+            "شناسه": r["شرح کالا"].split(" - ", 1)[0],
+            "شرح": r["شرح کالا"],
+            "موجودی": r["موجودی"],
+            "گروه": "اسلب",
+        }
+        for i, r in enumerate(inv_rows, 1)
+    ]
+    pdf_catalog = ROOT / "reports" / "smoke_catalog_list.pdf"
+    generate_simple_report_pdf(
+        "لیست اقلام و تخصیص‌ها",
+        subtitle="smoke",
+        columns=["ردیف", "کد دسته", "شناسه", "شرح", "موجودی", "گروه"],
+        rows=catalog_pdf_rows,
+        output_path=pdf_catalog,
+        filename_stem="smoke_catalog_list",
+    )
+    assert pdf_catalog.exists() and pdf_catalog.stat().st_size > 500
+    # empty inventory rows → no PDF content expected by handlers (text-only)
+    assert inventory_table_rows(clean_df.iloc[0:0]) == []
 
     sess = db.get_or_create_session("999")
     eid = db.save_extracted(

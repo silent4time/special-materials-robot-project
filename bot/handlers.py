@@ -22,8 +22,6 @@ from analytics.tundish import (
     daily_rates,
     filter_by_tundish_type,
     forecast,
-    format_suggest_list_fa,
-    format_surplus_list_fa,
     missing_files_for_goal,
     parse_custom_range_message,
     period_consumption,
@@ -70,13 +68,12 @@ from db.models import Database
 from services import main_source as main_source_svc
 from excel.inbound import (
     compute_inbound_delta,
-    format_inbound_list_fa,
     write_inbound_excel,
 )
 from excel.processor import (
     ExcelValidationError,
     extract_and_save_clean,
-    format_inventory_table_fa,
+    inventory_table_rows,
     load_excel,
     looks_like_product_inventory,
     merge_clean_frames,
@@ -1540,12 +1537,29 @@ class BotApp:
                 "هنوز منبع اصلی استخراج‌شده‌ای ندارید. برای جدول کامل، ابتدا فایل «منبع اصلی» "
                 "را آپلود کنید."
             )
-        chunks = format_inventory_table_fa(table)
-        prefix = "📋 لیست کد دسته‌بندی و موجودی\n" + notice + "\n\n"
-        for index, chunk in enumerate(chunks):
-            is_last = index == len(chunks) - 1
-            self._reply(message, (prefix if index == 0 else "") + chunk,
-                        kb.inventory_menu() if is_last else None)
+        rows = inventory_table_rows(table)
+        if not rows:
+            self._reply(
+                message,
+                "📋 لیست کد دسته‌بندی و موجودی\n" + notice + "\n\nلیست خالی است.",
+                kb.inventory_menu(),
+            )
+            return
+        cols = ["کد دسته", "شرح کالا", "موجودی"]
+        self._send_simple_pdf_report(
+            message,
+            title="لیست کد دسته‌بندی و موجودی",
+            subtitle=notice,
+            columns=cols,
+            rows=rows,
+            filename_stem="category_inventory",
+            output_name="لیست_کد_دسته‌بندی_و_موجودی.pdf",
+            caption=f"📋 لیست کد دسته‌بندی و موجودی — {len(rows)} ردیف",
+            reply_ok=f"📋 جدول در PDF ارسال شد.\n{notice}",
+            reply_markup=kb.inventory_menu(),
+            log_user=user,
+            log_action="list_categories_pdf",
+        )
 
 
     def _deny_main_source_edit(self, message: dict, user: dict) -> bool:
@@ -2392,6 +2406,7 @@ class BotApp:
         output_name: str | None = None,
         caption: str | None = None,
         reply_ok: str | None = None,
+        reply_markup: dict | None = None,
         log_user: dict | None = None,
         log_action: str | None = None,
     ) -> Path | None:
@@ -2399,6 +2414,7 @@ class BotApp:
 
         If there is no data, only a short Persian text reply is sent (no empty PDF).
         """
+        markup = reply_markup if reply_markup is not None else kb.analytics_menu()
         if not self._report_has_rows(sections=sections, rows=rows):
             self._empty_range_reply(
                 message,
@@ -2427,14 +2443,14 @@ class BotApp:
             self._reply(
                 message,
                 reply_ok or "گزارش ارسال شد.",
-                kb.analytics_menu(),
+                markup,
             )
             if log_user and log_action:
                 log_activity(self.db, log_user, log_action)
             return pdf_path
         except Exception as exc:  # noqa: BLE001
             logger.exception("simple pdf report failed: %s", title)
-            self._reply(message, f"خطا در تولید PDF گزارش: {exc}", kb.analytics_menu())
+            self._reply(message, f"خطا در تولید PDF گزارش: {exc}", markup)
             return None
 
     def _empty_range_reply(
@@ -3354,24 +3370,51 @@ class BotApp:
                     )
                 except BaleAPIError:
                     pass
-        lines = [
-            f"✅ ثبت موجودی «{label}» برای تاریخ {format_date(day)}",
-            f"تعداد اقلام ثبت‌شده: {saved} از {len(items)}",
-            "",
-        ]
+        stamp = self._site_stock_stamp(user)
+        log_activity(self.db, user, "site_stock_saved", tundish_group=group)
+        header = (
+            f"✅ ثبت موجودی «{label}» برای تاریخ {format_date(day)}\n"
+            f"تعداد اقلام ثبت‌شده: {saved} از {len(items)}"
+        )
+        err_block = ""
+        if errors:
+            err_block = "\n\nخطاها:\n" + "\n".join(f"• {e}" for e in errors)
+        # Long item lists → PDF table; short lists stay as interactive text bullets
+        if values and len(values) > 8:
+            pdf_rows = []
+            for iid, qty in values.items():
+                it = id_to_item.get(iid) or {"id": iid, "name_desc": iid}
+                pdf_rows.append(
+                    {
+                        "شناسه": iid,
+                        "شرح": kb.item_display_name(it),
+                        "مقدار": f"{float(qty):g}",
+                    }
+                )
+            self._send_simple_pdf_report(
+                message,
+                title=f"ثبت موجودی سایت — {label}",
+                subtitle=f"تاریخ {format_date(day)} — {saved} از {len(items)} قلم",
+                columns=["شناسه", "شرح", "مقدار"],
+                rows=pdf_rows,
+                filename_stem="site_stock_confirm",
+                output_name=f"ثبت_موجودی_سایت_{group}.pdf",
+                caption=f"✅ ثبت موجودی «{label}» — {saved} قلم",
+                reply_ok=f"{header}{err_block}\n\nجدول اقلام در PDF.\n{stamp}",
+                reply_markup=kb.site_stock_menu(),
+            )
+            return
+        lines = [header, ""]
         if values:
             for iid, qty in values.items():
                 name = kb.item_display_name(id_to_item.get(iid) or {"id": iid, "name_desc": iid})
                 lines.append(f"• {name}: {float(qty):g}")
         else:
             lines.append("(هیچ مقداری ثبت نشد)")
-        if errors:
-            lines.append("")
-            lines.append("خطاها:")
-            lines.extend(f"• {e}" for e in errors)
+        if err_block:
+            lines.append(err_block.strip())
         lines.append("")
-        lines.append(self._site_stock_stamp(user))
-        log_activity(self.db, user, "site_stock_saved", tundish_group=group)
+        lines.append(stamp)
         self._reply(message, "\n".join(lines), kb.site_stock_menu())
 
     def handle_callback_query(self, cq: dict) -> None:
@@ -3557,11 +3600,12 @@ class BotApp:
                 kb.catalog_settings_menu(),
             )
             return
-        # Show up to 40; instruct to pick by id or number
+        # Keep up to 80 for pick-by-number; PDF uses the same window
         uid = str(user["bale_user_id"])
+        pdf_cap = 80
         self._catalog_assign_pending[uid] = {
             "mode": "pick",
-            "rows": rows[:80],
+            "rows": rows[:pdf_cap],
             "unassigned_only": unassigned_only,
         }
         inventory_frame, _, _ = self._load_latest_inventory_frame(
@@ -3573,10 +3617,8 @@ class BotApp:
                 item_id = self._inventory_cell(inv_row.get("id"), "")
                 if item_id:
                     inventory_by_id[item_id] = inv_row.to_dict()
-        lines = [title, "برای تخصیص، شماره یا شناسه قلم را بفرستید.", ""]
-        lines.append("کد دسته | شرح کالا | موجودی | گروه")
-        lines.append("───────── | ───────────── | ─────── | ────")
-        for i, r in enumerate(rows[:40], 1):
+        pdf_rows: list[dict[str, Any]] = []
+        for i, r in enumerate(rows[:pdf_cap], 1):
             group = r.get("tundish_group")
             g_label = SITE_STOCK_GROUPS.get(group, "—") if group else "—"
             inv = inventory_by_id.get(str(r["id"]).strip(), {})
@@ -3585,10 +3627,34 @@ class BotApp:
             )
             quantity = self._inventory_cell(inv.get("quantity"))
             desc = self._inventory_cell(r.get("name_desc"), str(r["id"]))
-            lines.append(f"{i}. [{r['id']}] {category} | {desc} | {quantity} | {g_label}")
-        if len(rows) > 40:
-            lines.append(f"\n… و {len(rows) - 40} قلم دیگر (با شناسه دقیق بفرستید).")
-        self._reply(message, "\n".join(lines), kb.catalog_settings_menu())
+            pdf_rows.append(
+                {
+                    "ردیف": i,
+                    "کد دسته": category,
+                    "شناسه": str(r["id"]),
+                    "شرح": desc,
+                    "موجودی": quantity,
+                    "گروه": g_label,
+                }
+            )
+        extra = ""
+        if len(rows) > pdf_cap:
+            extra = f" (نمایش {pdf_cap} از {len(rows)}؛ با شناسه دقیق بفرستید)"
+        cols = ["ردیف", "کد دسته", "شناسه", "شرح", "موجودی", "گروه"]
+        self._send_simple_pdf_report(
+            message,
+            title=title.replace("📋 ", "").replace("📭 ", ""),
+            subtitle=f"{len(pdf_rows)} قلم{extra}",
+            columns=cols,
+            rows=pdf_rows,
+            filename_stem="catalog_list",
+            output_name="لیست_اقلام_کاتالوگ.pdf",
+            caption=f"{title} — {len(pdf_rows)} قلم{extra}",
+            reply_ok="برای تخصیص، شماره یا شناسه را بفرستید",
+            reply_markup=kb.catalog_settings_menu(),
+            log_user=user,
+            log_action="catalog_list_pdf",
+        )
 
     def on_catalog_pick_text(self, message: dict, text: str) -> bool:
         """While awaiting item pick for assignment."""
@@ -4225,43 +4291,74 @@ class BotApp:
         return user
 
     def _format_mr_review(self, days: float | int, lines: list[dict]) -> str:
-        header = [
-            f"🛒 پیشنهاد درخواست مواد برای پوشش {int(days) if float(days) == int(days) else days} روز:",
-            "",
-        ]
+        days_label = int(days) if float(days) == int(days) else days
         if not lines:
-            header.append("پیشنهادی نیست — موجودی برای بازه درخواست کافی به‌نظر می‌رسد.")
-            return "\n".join(header)
+            return (
+                f"🛒 پیشنهاد درخواست مواد برای پوشش {days_label} روز:\n\n"
+                "پیشنهادی نیست — موجودی برای بازه درخواست کافی به‌نظر می‌رسد."
+            )
+        return (
+            f"🛒 پیشنهاد درخواست مواد برای پوشش {days_label} روز — "
+            f"جدول اقلام در PDF ({len(lines)} قلم).\n"
+            "تأیید همه / اصلاح / انصراف را انتخاب کنید."
+        )
+
+    def _mr_lines_to_pdf_rows(self, lines: list[dict]) -> list[dict[str, Any]]:
         from config import TUNDISH_TYPES
         from excel.work_order import GROUP_LABELS_FA
 
-        order = ["slab", "bloom", "billet", None]
-        grouped: dict[str | None, list[tuple[int, dict]]] = {k: [] for k in order}
+        rows: list[dict[str, Any]] = []
         for i, ln in enumerate(lines, 1):
             g = ln.get("tundish_group")
-            if g not in grouped:
-                g = None
-            grouped[g].append((i, ln))
-        for g in order:
-            bucket = grouped.get(g) or []
-            if not bucket:
-                continue
             if g:
-                header.append(f"—— {GROUP_LABELS_FA.get(g) or TUNDISH_TYPES.get(g) or g} ——")
+                g_label = GROUP_LABELS_FA.get(g) or TUNDISH_TYPES.get(g) or g
             else:
-                header.append("—— بدون گروه سفارش کار ——")
-            for i, ln in bucket:
-                unit = ln.get("unit") or ""
-                iid = ln.get("item_id") or "—"
-                header.append(
-                    f"{i}) {ln.get('item_name')} (شناسه: {iid})\n"
-                    f"   موجودی: {float(ln.get('remaining_qty') or 0):.2f} {unit} | "
-                    f"مصرف روز: {float(ln.get('avg_daily') or 0):.2f} | "
-                    f"پیشنهاد: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
-                )
-            header.append("")
-        header.append("تأیید همه / اصلاح / انصراف را انتخاب کنید.")
-        return "\n".join(header)
+                g_label = "—"
+            unit = ln.get("unit") or ""
+            rows.append(
+                {
+                    "ردیف": i,
+                    "شناسه": ln.get("item_id") or "—",
+                    "شرح": ln.get("item_name") or "—",
+                    "گروه": g_label,
+                    "موجودی": f"{float(ln.get('remaining_qty') or 0):.2f}",
+                    "مصرف روز": f"{float(ln.get('avg_daily') or 0):.2f}",
+                    "پیشنهاد": f"{float(ln.get('quantity') or 0):.2f}",
+                    "واحد": unit,
+                }
+            )
+        return rows
+
+    def _send_mr_review(
+        self,
+        message: dict,
+        days: float | int,
+        lines: list[dict],
+        *,
+        prefix: str | None = None,
+    ) -> None:
+        body = self._format_mr_review(days, lines)
+        if prefix:
+            body = f"{prefix}\n\n{body}"
+        markup = kb.material_request_review_menu()
+        if not lines:
+            self._reply(message, body, markup)
+            return
+        days_label = int(days) if float(days) == int(days) else days
+        cols = ["ردیف", "شناسه", "شرح", "گروه", "موجودی", "مصرف روز", "پیشنهاد", "واحد"]
+        self._send_simple_pdf_report(
+            message,
+            title=f"پیشنهاد درخواست مواد — پوشش {days_label} روز",
+            subtitle=f"{len(lines)} قلم",
+            columns=cols,
+            rows=self._mr_lines_to_pdf_rows(lines),
+            filename_stem="material_request_review",
+            output_name="پیشنهاد_درخواست_مواد.pdf",
+            caption=f"پیشنهاد درخواست مواد — {len(lines)} قلم",
+            reply_ok=body,
+            reply_markup=markup,
+        )
+
 
     def _build_mr_lines(
         self, user: dict, days: float | int
@@ -4453,11 +4550,7 @@ class BotApp:
             "lines": lines,
         }
         log_activity(self.db, user, "material_request_created")
-        self._reply(
-            message,
-            self._format_mr_review(days, lines),
-            kb.material_request_review_menu(),
-        )
+        self._send_mr_review(message, days, lines)
         return True
 
     def on_material_request_confirm(self, message: dict) -> None:
@@ -4555,11 +4648,7 @@ class BotApp:
         pending["await"] = "review"
         pending.pop("edit_index", None)
         self._material_req_pending[uid] = pending
-        self._reply(
-            message,
-            self._format_mr_review(pending.get("days") or 7, pending["lines"]),
-            kb.material_request_review_menu(),
-        )
+        self._send_mr_review(message, pending.get("days") or 7, pending["lines"])
 
     def on_material_request_edit_text(self, message: dict, text: str) -> bool:
         """Consume pick / qty text while editing. Returns True if handled."""
@@ -4660,10 +4749,11 @@ class BotApp:
                 kb.main_menu(user),
             )
             return True
-        self._reply(
+        self._send_mr_review(
             message,
-            msg + "\n\n" + self._format_mr_review(pending.get("days") or 7, lines),
-            kb.material_request_review_menu(),
+            pending.get("days") or 7,
+            lines,
+            prefix=msg,
         )
         return True
 
@@ -4672,24 +4762,62 @@ class BotApp:
     # ---------- warehouse return (برگشت به انبار) ----------
 
     def _format_wr_review(self, lines: list[dict]) -> str:
-        header = ["↩️ پیشنهاد برگشت مواد مازاد به انبار:", ""]
         if not lines:
-            header.append("ماده مازادی برای برگشت شناسایی نشد.")
-            return "\n".join(header)
+            return (
+                "↩️ پیشنهاد برگشت مواد مازاد به انبار:\n\n"
+                "ماده مازادی برای برگشت شناسایی نشد."
+            )
+        return (
+            f"↩️ پیشنهاد برگشت مواد مازاد به انبار — "
+            f"جدول اقلام در PDF ({len(lines)} قلم).\n"
+            "تأیید همه / اصلاح / انصراف را انتخاب کنید."
+        )
+
+    def _wr_lines_to_pdf_rows(self, lines: list[dict]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
         for i, ln in enumerate(lines, 1):
             unit = ln.get("unit") or ""
-            iid = ln.get("item_id") or "—"
-            reason = ln.get("surplus_reason") or ""
-            header.append(
-                f"{i}) {ln.get('item_name')} (شناسه: {iid})\n"
-                f"   موجودی سایت: {float(ln.get('site_qty') or 0):.2f} {unit} | "
-                f"مازاد≈ {float(ln.get('surplus_qty') or 0):.2f} | "
-                f"برگشت: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
-                + (f"\n   دلیل: {reason}" if reason else "")
+            rows.append(
+                {
+                    "ردیف": i,
+                    "شناسه": ln.get("item_id") or "—",
+                    "شرح": ln.get("item_name") or "—",
+                    "موجودی سایت": f"{float(ln.get('site_qty') or 0):.2f}",
+                    "مازاد": f"{float(ln.get('surplus_qty') or 0):.2f}",
+                    "برگشت": f"{float(ln.get('quantity') or 0):.2f}",
+                    "واحد": unit,
+                    "دلیل": ln.get("surplus_reason") or "—",
+                }
             )
-        header.append("")
-        header.append("تأیید همه / اصلاح / انصراف را انتخاب کنید.")
-        return "\n".join(header)
+        return rows
+
+    def _send_wr_review(
+        self,
+        message: dict,
+        lines: list[dict],
+        *,
+        prefix: str | None = None,
+    ) -> None:
+        body = self._format_wr_review(lines)
+        if prefix:
+            body = f"{prefix}\n\n{body}"
+        markup = kb.warehouse_return_review_menu()
+        if not lines:
+            self._reply(message, body, markup)
+            return
+        cols = ["ردیف", "شناسه", "شرح", "موجودی سایت", "مازاد", "برگشت", "واحد", "دلیل"]
+        self._send_simple_pdf_report(
+            message,
+            title="پیشنهاد برگشت مواد مازاد به انبار",
+            subtitle=f"{len(lines)} قلم",
+            columns=cols,
+            rows=self._wr_lines_to_pdf_rows(lines),
+            filename_stem="warehouse_return_review",
+            output_name="پیشنهاد_برگشت_به_انبار.pdf",
+            caption=f"پیشنهاد برگشت به انبار — {len(lines)} قلم",
+            reply_ok=body,
+            reply_markup=markup,
+        )
 
     def _build_wr_lines(self, user: dict) -> tuple[list[dict], str | None]:
         """Suggest surplus lines from site stock (preferred) or warehouse remaining."""
@@ -4793,11 +4921,7 @@ class BotApp:
             )
             return
         self._warehouse_ret_pending[uid] = {"await": "review", "lines": lines}
-        self._reply(
-            message,
-            self._format_wr_review(lines),
-            kb.warehouse_return_review_menu(),
-        )
+        self._send_wr_review(message, lines)
 
     def on_warehouse_return_confirm(self, message: dict) -> None:
         user = self._require_material_request_access(message)
@@ -4891,11 +5015,7 @@ class BotApp:
         pending["await"] = "review"
         pending.pop("edit_index", None)
         self._warehouse_ret_pending[uid] = pending
-        self._reply(
-            message,
-            self._format_wr_review(pending["lines"]),
-            kb.warehouse_return_review_menu(),
-        )
+        self._send_wr_review(message, pending["lines"])
 
     def on_warehouse_return_edit_text(self, message: dict, text: str) -> bool:
         uid = self._uid(message)
@@ -4992,11 +5112,7 @@ class BotApp:
                 kb.main_menu(user),
             )
             return True
-        self._reply(
-            message,
-            msg + "\n\n" + self._format_wr_review(lines),
-            kb.warehouse_return_review_menu(),
-        )
+        self._send_wr_review(message, lines, prefix=msg)
         return True
 
 
