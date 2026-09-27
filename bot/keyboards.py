@@ -49,7 +49,7 @@ ROLE_BUTTON_TO_KEY = {
 
 # منبع اصلی (warehouse inventory extract) submenu
 BTN_INV_MENU = "📦 منبع اصلی"
-BTN_INV_UPLOAD = "📥 ورود فایل اکسل"
+BTN_INV_UPLOAD = "📥 ورود فایل اکسل منبع اصلی"
 BTN_INV_EDIT = "✏️ ویرایش منبع اصلی"
 BTN_INV_EDIT_RECORD = "✏️ ویرایش رکورد"
 BTN_INV_ADD_RECORD = "➕ اضافه کردن رکورد"
@@ -145,8 +145,11 @@ def button_to_file_type(text: str) -> str | None:
 
     Note: BTN_TANK / موجودی روزانه سایت is **interactive entry** now and is
     intentionally NOT mapped here (handled by site-stock submenu).
+    BTN_INV (📥 منبع اصلی) and BTN_INV_UPLOAD both select product_inventory
+    upload — they do NOT open the inventory submenu (that is BTN_INV_MENU).
     """
     mapping = {
+        BTN_INV: "product_inventory",
         BTN_INV_UPLOAD: "product_inventory",
         BTN_MONTHLY: "monthly_consumption",
         FILE_TYPES["product_inventory"]["label_fa"]: "product_inventory",
@@ -161,6 +164,8 @@ def button_to_file_type(text: str) -> str | None:
         "📥 مواد مصرفی": "product_inventory",
         "📦 مواد مصرفی": "product_inventory",
         "مواد مصرفی": "product_inventory",
+        # legacy short upload label (pre file-entry menu wording)
+        "📥 ورود فایل اکسل": "product_inventory",
         # legacy tank Excel button text kept for rare old clients wanting file path:
         # intentionally omitted so «موجودی روزانه سایت» opens interactive flow
     }
@@ -234,6 +239,18 @@ def inventory_menu() -> dict:
         [BTN_BACK_MAIN],
     ]
     return BaleClient.reply_keyboard(rows)
+
+
+def file_entry_menu() -> dict:
+    """Picker after وضعیت فایل‌ها / document-without-pending: choose entry type."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_INV_UPLOAD],
+            [BTN_MONTHLY],
+            [BTN_SITE_STOCK],
+            [BTN_BACK_MAIN],
+        ]
+    )
 
 
 def inventory_edit_menu() -> dict:

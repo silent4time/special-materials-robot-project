@@ -585,6 +585,16 @@ def main() -> int:
     assert SITE_STOCK_GROUPS["billet"] == "موجودی مواد بیلت"
     assert kb.SITE_GROUP_BUTTONS[kb.BTN_SITE_BILLET] == "billet"
 
+    # file entry picker (after وضعیت فایل‌ها) + routing maps
+    file_entry = menu_texts(kb.file_entry_menu())
+    assert {kb.BTN_INV_UPLOAD, kb.BTN_MONTHLY, kb.BTN_SITE_STOCK, kb.BTN_BACK_MAIN}.issubset(file_entry)
+    assert kb.BTN_INV_MENU not in file_entry  # submenu opener stays on main_menu only
+    assert kb.button_to_file_type(kb.BTN_INV) == "product_inventory"
+    assert kb.button_to_file_type(kb.BTN_INV_UPLOAD) == "product_inventory"
+    assert kb.button_to_file_type(kb.BTN_MONTHLY) == "monthly_consumption"
+    assert kb.button_to_file_type(kb.BTN_SITE_STOCK) is None  # interactive, not Excel
+    assert kb.button_to_file_type(kb.BTN_INV_MENU) is None  # submenu, not upload
+
     # site stock inline 2-col keyboard (شرح | تعداد) + confirm
     items_fake = [
         {"id": "A1", "name_desc": "اسید کوتاه"},

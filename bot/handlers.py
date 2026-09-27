@@ -272,7 +272,7 @@ class BotApp:
         if pending and pending in FILE_TYPES:
             lines.append(f"\nدر انتظار آپلود: {FILE_TYPES[pending]['label_fa']}")
         else:
-            lines.append("\nبرای آپلود، ابتدا نوع فایل را از منو انتخاب کنید.")
+            lines.append("\nنوع ورود اطلاعات را از دکمه‌های زیر انتخاب کنید.")
         if all(done.values()):
             lines.append("\nهمه فایل‌ها آماده‌اند — می‌توانید «تولید گزارش PDF» یا «گزارش‌ها / تحلیل تاندیش» را بزنید.")
         elif done.get("tank_consumption") or done.get("product_inventory"):
@@ -1042,7 +1042,13 @@ class BotApp:
         if not user:
             return
         session = self.db.get_or_create_session(user["bale_user_id"])
-        self._reply(message, self._status_text(session), kb.main_menu(user))
+        # Technicians keep their limited main menu; others get a file-entry picker
+        # so status → choose type works without going through main_menu submenu.
+        if user.get("role") == "technician":
+            menu = kb.main_menu(user)
+        else:
+            menu = kb.file_entry_menu()
+        self._reply(message, self._status_text(session), menu)
 
     def on_document(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -1058,8 +1064,8 @@ class BotApp:
         if not pending:
             self._reply(
                 message,
-                "ابتدا از منو نوع فایل را انتخاب کنید، سپس Excel را بفرستید.",
-                kb.main_menu(user),
+                "ابتدا نوع ورود اطلاعات را از دکمه‌های زیر انتخاب کنید، سپس Excel را بفرستید.",
+                kb.file_entry_menu(),
             )
             return
 
@@ -5408,7 +5414,10 @@ class BotApp:
             if self.on_date_range_choice(message, "custom"):
                 return
 
-        if text == kb.BTN_INV_MENU or text == kb.BTN_INV or text in ("📦 موجودی انبار", "📥 موجودی انبار"):
+        # Only the submenu button (and legacy 📦 موجودی انبار) opens inventory submenu.
+        # BTN_INV (📥 منبع اصلی) and "📥 موجودی انبار" map to product_inventory via
+        # button_to_file_type below — they must NOT open the submenu.
+        if text == kb.BTN_INV_MENU or text == "📦 موجودی انبار":
             self.on_inventory_menu(message)
             return
         if text == kb.BTN_INV_EDIT:
