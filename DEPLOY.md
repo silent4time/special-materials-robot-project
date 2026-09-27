@@ -212,3 +212,12 @@ curl -s http://127.0.0.1:11434/api/tags
 در `.env`: `WEB_SECRET_KEY`, `WEB_HOST=0.0.0.0`, `WEB_PORT=8000`.
 
 `PRAGMA journal_mode=WAL` و `busy_timeout` در `Database.connect` برای هم‌زیستی ربات+وب فعال است. اتصال‌های جدید وب WAL را می‌گیرند؛ ربات در **ری‌استارت بعدی** همان pragma را روی اتصال‌های تازه اعمال می‌کند (نیازی به ری‌استارت فوری نیست مگر قفل‌های طولانی ببینید).
+
+## منبع اصلی (canonical inventory)
+
+Cleaned `product_inventory` extracts («منبع اصلی») are the **canonical** warehouse
+master for bot and web reports. Prefer the latest `extracted_datasets` clean path
+via shared `analytics/frames.py`. Site daily stock is separate (on-site remaining /
+critical only). Do not point plant reports at stale session slots when a newer
+extract exists. Restart Bale + web only after smoke tests pass.
+

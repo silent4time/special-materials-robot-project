@@ -10,6 +10,13 @@ from pathlib import Path
 import pandas as pd
 from typing import Any
 
+from analytics.frames import (
+    PRIMARY_INVENTORY_LABEL,
+    PRIMARY_INVENTORY_TYPE,
+    resolve_primary_inventory_path,
+    resolve_remaining as shared_resolve_remaining,
+    resolve_warehouse_remaining,
+)
 from analytics.tundish import (
     critical_materials,
     daily_rates,
@@ -69,6 +76,8 @@ from excel.processor import (
     ExcelValidationError,
     extract_and_save_clean,
     format_inventory_table_fa,
+    load_excel,
+    looks_like_product_inventory,
     merge_clean_frames,
     write_clean_excel,
     process_file,
@@ -274,10 +283,12 @@ class BotApp:
         }
 
     def _resolved_file_paths(self, user: dict, session: dict) -> dict[str, str | None]:
-        """Session slot first; fall back to latest extract clean_path if on disk.
+        """Resolve on-disk paths for analytics.
 
-        Reports must keep working after a new empty session is created while
-        extracted_datasets still hold the last successful clean Excel files.
+        Canonical rule: ``product_inventory`` (منبع اصلی) always prefers the
+        newest cleaned extract (own user, then plant-wide) over a possibly
+        stale session slot. Other types keep session-first with extract fallback
+        so empty sessions still work after reset.
         """
         uid = str(user["bale_user_id"])
         type_to_col = {
@@ -287,6 +298,15 @@ class BotApp:
         }
         resolved: dict[str, str | None] = {}
         for file_type, col in type_to_col.items():
+            if file_type == PRIMARY_INVENTORY_TYPE:
+                # Always latest cleaned منبع اصلی — never a divergent session path
+                primary = resolve_primary_inventory_path(
+                    self.db,
+                    bale_user_id=uid,
+                    session_inventory_path=session.get(col),
+                )
+                resolved[file_type] = primary
+                continue
             path = session.get(col)
             if path and Path(str(path)).exists():
                 resolved[file_type] = str(path)
@@ -296,7 +316,13 @@ class BotApp:
             if clean and Path(str(clean)).exists():
                 resolved[file_type] = str(clean)
             else:
-                resolved[file_type] = None
+                # Plant-wide fallback (same as web load_frames)
+                any_row = self.db.get_latest_extracted_any(file_type)
+                any_clean = any_row.get("clean_path") if any_row else None
+                if any_clean and Path(str(any_clean)).exists():
+                    resolved[file_type] = str(any_clean)
+                else:
+                    resolved[file_type] = None
         return resolved
 
     def _effective_completeness(self, user: dict, session: dict) -> dict[str, bool]:
@@ -322,10 +348,14 @@ class BotApp:
         """
         uid = str(user["bale_user_id"])
         session = self.db.get_or_create_session(uid)
-        latest = self.db.get_latest_extracted(uid, "product_inventory")
         candidates: list[tuple[str, str]] = []
-        if latest and latest.get("clean_path"):
-            candidates.append((str(latest["clean_path"]), "آخرین استخراج منبع اصلی"))
+        primary = resolve_primary_inventory_path(
+            self.db,
+            bale_user_id=uid,
+            session_inventory_path=session.get("inventory_path"),
+        )
+        if primary:
+            candidates.append((primary, "آخرین استخراج منبع اصلی"))
         if session.get("inventory_path"):
             candidates.append((str(session["inventory_path"]), "منبع اصلی جلسه جاری"))
 
@@ -1048,6 +1078,31 @@ class BotApp:
             self._reply(message, f"دانلود فایل از بله ناموفق بود: {exc}")
             return
 
+        # If a «مصرف ماهیانه / مواد مصرفی» upload actually matches the
+        # منبع اصلی (product_inventory) cleaned format, treat it as a primary
+        # inventory refresh so warehouse master data stays current.
+        format_redirect_note = ""
+        if pending == "monthly_consumption":
+            try:
+                peek = load_excel(dest, strict_tundish=False)
+                if looks_like_product_inventory(peek):
+                    pending = "product_inventory"
+                    # Rename raw slot file to inventory name for clarity
+                    inv_dest = dest_dir / "product_inventory.xlsx"
+                    if dest.resolve() != inv_dest.resolve():
+                        dest.replace(inv_dest)
+                        dest = inv_dest
+                    format_redirect_note = (
+                        "\n(فایل با قالب منبع اصلی شناسایی شد — "
+                        "جدول اصلی موجودی به‌روز شد.)"
+                    )
+                    logger.info(
+                        "monthly/consumables upload redirected to product_inventory for user %s",
+                        user["bale_user_id"],
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inventory-format peek failed: %s", exc)
+
         allowlist = None
         if pending == "product_inventory":
             allowlist = self.db.active_category_code_set()
@@ -1244,7 +1299,7 @@ class BotApp:
             (
                 f"✅ فایل «{label}» دریافت شد.\n"
                 f"از {result.raw_row_count} ردیف خام، {new_kept} ردیف نگه داشته شد."
-                f"{merge_note}{dropped_note}{extra_cols_note}{catalog_note}{inbound_note}\n"
+                f"{merge_note}{dropped_note}{extra_cols_note}{catalog_note}{inbound_note}{format_redirect_note}\n"
                 f"نسخه تمیز ذخیره و در پایگاه‌داده ثبت شد.\n"
                 f"{actor_line}\n\n"
             )
@@ -2235,7 +2290,7 @@ class BotApp:
             start=start,
             end=end,
         )
-        rem = remaining(self._inventory_with_ledger(frames.get("product_inventory")))
+        rem, _rem_src = resolve_warehouse_remaining(self.db, frames)
         surplus = surplus_materials(rates, rem)
         cover_th = max(float(CRITICAL_DAYS) * 3.0, float(SURPLUS_COVER_DAYS))
         title = f"گزارش مواد مازاد — {range_label}"
@@ -2541,16 +2596,18 @@ class BotApp:
 
 
     def _resolve_remaining(self, frames: dict) -> tuple[Any, str]:
-        """Prefer today's (or latest) site_stock_entries; else warehouse inventory."""
-        import pandas as pd
+        """Site stock for on-site remaining/critical; else canonical منبع اصلی.
 
-        rows = self.db.site_stock_as_remaining_rows()
-        if rows:
+        Shared with web via ``analytics.frames.resolve_remaining``. Site preference
+        is intentional product behavior; warehouse fallback always uses the latest
+        cleaned product_inventory extract (+ ledger).
+        """
+        rem, rem_source = shared_resolve_remaining(self.db, frames)
+        # Pretty-print site date with Jalali when applicable
+        if rem_source.startswith("موجودی روزانه سایت"):
             day = self.db.get_latest_site_stock_date() or "—"
-            rem = remaining(pd.DataFrame(rows))
-            return rem, f"موجودی روزانه سایت — {format_date(day)}"
-        rem = remaining(self._inventory_with_ledger(frames.get("product_inventory")))
-        return rem, FILE_TYPES["product_inventory"]["label_fa"]
+            rem_source = f"موجودی روزانه سایت — {format_date(day)}"
+        return rem, rem_source
 
     def _clear_site_stock_pending(self, uid: str) -> None:
         self._site_stock_pending.pop(str(uid), None)

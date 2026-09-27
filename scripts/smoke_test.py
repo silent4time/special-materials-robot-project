@@ -1038,6 +1038,32 @@ def main() -> int:
     assert not oil_names.empty
     print("warehouse_return OK", sname, "qty", ret_qty, "ledger", oil_after)
 
+
+    # --- منبع اصلی canonical: latest extract preferred; warehouse vs site split ---
+    from analytics.frames import (
+        PRIMARY_INVENTORY_LABEL,
+        resolve_primary_inventory_path,
+        resolve_remaining as fr_resolve_remaining,
+        resolve_warehouse_remaining,
+    )
+    from excel.processor import looks_like_product_inventory, load_excel
+
+    inv_peek = load_excel(sample_inv_raw, strict_tundish=False)
+    assert looks_like_product_inventory(inv_peek)
+    mon_peek = load_excel(ROOT / "samples" / "03_monthly_consumption.xlsx", strict_tundish=False)
+    assert not looks_like_product_inventory(mon_peek)
+
+    primary_path = resolve_primary_inventory_path(db, bale_user_id="999")
+    assert primary_path and Path(primary_path).is_file()
+    frames_wh = {"product_inventory": cf["product_inventory"], "monthly_consumption": None, "tank_consumption": None}
+    rem_wh, src_wh = resolve_warehouse_remaining(db, frames_wh)
+    assert src_wh == PRIMARY_INVENTORY_LABEL == "منبع اصلی"
+    assert rem_wh is not None and not rem_wh.empty
+    rem_site, src_site = fr_resolve_remaining(db, frames_wh)
+    assert "سایت" in src_site  # site stock was seeded earlier in this smoke
+    print("canonical منبع اصلی OK path=", primary_path)
+
+
     print("SMOKE OK CRITICAL_DAYS=", CRITICAL_DAYS, "site_stock_date=", day)
     return 0
 

@@ -152,6 +152,11 @@ def button_to_file_type(text: str) -> str | None:
         "📥 موجودی انبار": "product_inventory",
         "📦 موجودی انبار": "product_inventory",
         "📥 مصرف ماهانه مواد": "monthly_consumption",
+        # Consumable materials uploads that use the warehouse cleaned format
+        # still refresh منبع اصلی (see handlers.on_document + looks_like_product_inventory).
+        "📥 مواد مصرفی": "product_inventory",
+        "📦 مواد مصرفی": "product_inventory",
+        "مواد مصرفی": "product_inventory",
         # legacy tank Excel button text kept for rare old clients wanting file path:
         # intentionally omitted so «موجودی روزانه سایت» opens interactive flow
     }

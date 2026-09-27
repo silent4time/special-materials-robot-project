@@ -20,10 +20,10 @@ from db.models import Database
 from pdf.generator import generate_monthly_summary_pdf, generate_simple_report_pdf
 from web.services.data import (
     frames_completeness,
-    inventory_with_ledger,
     letterhead_path,
     load_frames,
     resolve_remaining,
+    resolve_warehouse_remaining,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,9 +107,9 @@ def generate_surplus_pdf(
         start=start,
         end=end,
     )
-    rem = remaining_or_site(db, frames)
+    rem, rem_source = resolve_warehouse_remaining(db, frames)
     if rem is None or rem.empty:
-        return None, "داده‌ای برای محاسبه مازاد یافت نشد."
+        return None, "داده‌ای برای محاسبه مازاد یافت نشد (منبع اصلی)."
     surplus = surplus_materials(rates, rem)
     if surplus is None or surplus.empty:
         return None, "ماده مازادی شناسایی نشد."
@@ -129,7 +129,7 @@ def generate_surplus_pdf(
     generate_simple_report_pdf(
         title=f"گزارش مواد مازاد — {range_label}",
         subtitle=(
-            f"نرخ مصرف بر اساس {range_label} | "
+            f"منبع موجودی: {rem_source} | نرخ مصرف بر اساس {range_label} | "
             f"تعریف: پوشش > {cover_th:g} روز"
         ),
         columns=cols,
@@ -145,13 +145,9 @@ def generate_surplus_pdf(
 def remaining_or_site(
     db: Database, frames: dict[str, Any]
 ) -> pd.DataFrame:
+    """Backward-compat: site preferred (remaining/critical), else منبع اصلی."""
     rem, _ = resolve_remaining(db, frames)
-    if rem is not None and not rem.empty:
-        return rem
-    inv = inventory_with_ledger(db, frames.get("product_inventory"))
-    from analytics.tundish import remaining as rem_fn
-
-    return rem_fn(inv)
+    return rem
 
 
 def generate_user_activity_pdf(

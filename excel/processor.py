@@ -216,6 +216,29 @@ def _normalize_category_code(value: object) -> str | None:
     return None
 
 
+def looks_like_product_inventory(df: pd.DataFrame) -> bool:
+    """True when columns match منبع اصلی / warehouse inventory schema.
+
+    Used so an upload on the monthly/consumables slot that is actually in the
+    cleaned-inventory format (category_code + item id/desc + quantity) refreshes
+    the canonical ``product_inventory`` extract instead of failing monthly parse.
+    """
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return False
+    work = _normalize_columns(df)
+    cols = {str(c).strip() for c in work.columns}
+    has_cat = "category_code" in cols
+    has_desc = "item_code_desc" in cols or (
+        "id" in cols and ("product_name" in cols or "material_name" in cols)
+    )
+    has_qty = "quantity" in cols
+    # Monthly ledger markers — if present, treat as monthly not inventory
+    monthly_markers = {"month", "work_order", "request_return", "assignee_id", "domain"}
+    if cols & monthly_markers:
+        return False
+    return bool(has_cat and has_desc and has_qty)
+
+
 def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
     """Parse id/product_name from raw «کد و شرح کالا»; add keyword / priority.
 
