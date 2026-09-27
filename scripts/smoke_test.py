@@ -582,6 +582,7 @@ def main() -> int:
     assert kb.BTN_SITE_SLAB in site_menu
     assert kb.BTN_SITE_BLOOM in site_menu
     assert kb.BTN_SITE_BILLET in site_menu
+    assert kb.BTN_BACK_PREV in site_menu  # clear back to previous/main
     assert SITE_STOCK_GROUPS["billet"] == "موجودی مواد بیلت"
     assert kb.SITE_GROUP_BUTTONS[kb.BTN_SITE_BILLET] == "billet"
 
@@ -617,6 +618,14 @@ def main() -> int:
     entry_menu = menu_texts(kb.site_stock_entry_menu())
     assert kb.BTN_SITE_SKIP in entry_menu
     assert kb.BTN_SITE_CANCEL in entry_menu
+    assert kb.BTN_BACK_SITE in entry_menu
+
+    # reserved nav texts must not be treated as quantities while awaiting
+    assert kb.BTN_BACK_SITE in kb.SITE_STOCK_RESERVED_TEXTS
+    assert kb.BTN_SITE_SKIP in kb.SITE_STOCK_RESERVED_TEXTS
+    assert kb.BTN_SITE_CANCEL in kb.SITE_STOCK_RESERVED_TEXTS
+    assert kb.BTN_BACK_PREV in kb.SITE_STOCK_RESERVED_TEXTS
+    assert kb.BTN_SITE_SLAB in kb.SITE_STOCK_RESERVED_TEXTS
 
     # display name strips leading catalog id
     assert kb.item_display_name({"id": "37812L", "name_desc": "37812L - پودر قالب"}) == "پودر قالب"
@@ -1105,6 +1114,38 @@ def main() -> int:
     assert "سایت" in src_site  # site stock was seeded earlier in this smoke
     print("canonical منبع اصلی OK path=", primary_path)
 
+
+
+    # unit-style: while pending awaiting, nav buttons are not treated as qty
+    from bot.handlers import BotApp
+
+    class _FakeClient:
+        def edit_message_reply_markup(self, *a, **k):
+            return {}
+        def send_message(self, *a, **k):
+            return {"message_id": 1}
+
+    app = BotApp(_FakeClient(), db)  # type: ignore[arg-type]
+    uid = "998"
+    app._site_stock_pending[uid] = {
+        "group": "slab",
+        "items": [{"id": "X1", "name_desc": "قلم تست"}],
+        "values": {},
+        "awaiting_idx": 0,
+        "walk_idx": 0,
+        "guided": True,
+        "chat_id": 1,
+        "message_id": 99,
+    }
+    msg = {"from": {"id": int(uid)}, "chat": {"id": 1}, "text": kb.BTN_BACK_SITE}
+    assert app.on_site_stock_quantity_text(msg, kb.BTN_BACK_SITE) is False
+    assert app.on_site_stock_quantity_text(msg, kb.BTN_SITE_CANCEL) is False
+    assert app.on_site_stock_quantity_text(msg, kb.BTN_SITE_SKIP) is False
+    assert app.on_site_stock_quantity_text(msg, kb.BTN_BACK_PREV) is False
+    assert app.on_site_stock_quantity_text(msg, kb.BTN_SITE_SLAB) is False
+    # pending still locked until a real nav handler clears it
+    assert uid in app._site_stock_pending and app._site_stock_pending[uid]["awaiting_idx"] == 0
+    print("site_stock qty reserved-button unlock OK")
 
     print("SMOKE OK CRITICAL_DAYS=", CRITICAL_DAYS, "site_stock_date=", day)
     return 0

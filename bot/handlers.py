@@ -2906,7 +2906,15 @@ class BotApp:
         return rem, rem_source
 
     def _clear_site_stock_pending(self, uid: str) -> None:
-        self._site_stock_pending.pop(str(uid), None)
+        """Drop pending entry and strip inline markup so the user is unlocked."""
+        pending = self._site_stock_pending.pop(str(uid), None)
+        if pending and pending.get("chat_id") is not None and pending.get("message_id") is not None:
+            try:
+                self.client.edit_message_reply_markup(
+                    pending["chat_id"], int(pending["message_id"]), {"inline_keyboard": []}
+                )
+            except BaleAPIError:
+                pass
 
     def _clear_catalog_pending(self, uid: str) -> None:
         self._catalog_assign_pending.pop(str(uid), None)
@@ -3168,6 +3176,9 @@ class BotApp:
 
     def on_site_stock_quantity_text(self, message: dict, text: str) -> bool:
         """Consume numeric quantity while awaiting a guided/edit site-stock item."""
+        # Never treat nav / site-stock keyboard labels as quantities — let later handlers run.
+        if (text or "").strip() in kb.SITE_STOCK_RESERVED_TEXTS:
+            return False
         uid = str(self._uid(message))
         pending = self._site_stock_pending.get(uid)
         if not pending:
@@ -3257,14 +3268,7 @@ class BotApp:
         if not user:
             return
         uid = str(user["bale_user_id"])
-        pending = self._site_stock_pending.pop(uid, None)
-        if pending and pending.get("chat_id") is not None and pending.get("message_id") is not None:
-            try:
-                self.client.edit_message_reply_markup(
-                    pending["chat_id"], int(pending["message_id"]), {"inline_keyboard": []}
-                )
-            except BaleAPIError:
-                pass
+        self._clear_site_stock_pending(uid)
         self._reply(message, "ورود موجودی لغو شد.", kb.site_stock_menu())
 
     def _finish_site_stock_entry(self, message: dict, user: dict) -> None:
@@ -5152,6 +5156,24 @@ class BotApp:
         if self.on_category_code_text(message, text):
             return
 
+        # --- موجودی روزانه سایت (buttons BEFORE quantity parse so nav never stuck) ---
+        if text == kb.BTN_SITE_STOCK or text == kb.BTN_TANK:
+            self.on_site_stock_menu(message)
+            return
+        if text in kb.SITE_GROUP_BUTTONS:
+            self.on_site_stock_group(message, kb.SITE_GROUP_BUTTONS[text])
+            return
+        if text == kb.BTN_SITE_SKIP:
+            self.on_site_stock_skip(message)
+            return
+        if text == kb.BTN_SITE_CANCEL:
+            self.on_site_stock_cancel(message)
+            return
+        if text == kb.BTN_BACK_SITE:
+            # clear pending (incl. markup) then group menu — on_site_stock_menu clears again
+            self.on_site_stock_menu(message)
+            return
+
         # site stock quantity entry (number while awaiting items)
         if self.on_site_stock_quantity_text(message, text):
             return
@@ -5324,7 +5346,7 @@ class BotApp:
         if text == kb.BTN_TUNDISH_BILLET:
             self.on_tundish_filter_choice(message, kb.BTN_TUNDISH_BILLET)
             return
-        if text == kb.BTN_BACK_MAIN:
+        if text == kb.BTN_BACK_MAIN or text == kb.BTN_BACK_PREV:
             user = self._user_or_deny(message)
             if user:
                 uid = str(user["bale_user_id"])
@@ -5437,23 +5459,6 @@ class BotApp:
             return
         if text == kb.BTN_INV_LIST_CATEGORIES:
             self.on_list_categories(message)
-            return
-
-        # --- موجودی روزانه سایت ---
-        if text == kb.BTN_SITE_STOCK or text == kb.BTN_TANK:
-            self.on_site_stock_menu(message)
-            return
-        if text in kb.SITE_GROUP_BUTTONS:
-            self.on_site_stock_group(message, kb.SITE_GROUP_BUTTONS[text])
-            return
-        if text == kb.BTN_SITE_SKIP:
-            self.on_site_stock_skip(message)
-            return
-        if text == kb.BTN_SITE_CANCEL:
-            self.on_site_stock_cancel(message)
-            return
-        if text == kb.BTN_BACK_SITE:
-            self.on_site_stock_menu(message)
             return
 
         # --- تنظیمات اقلام سایت ---

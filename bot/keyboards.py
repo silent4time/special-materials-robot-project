@@ -98,6 +98,7 @@ BTN_TUNDISH_SLAB = TUNDISH_TYPES["slab"]
 BTN_TUNDISH_BLOOM = TUNDISH_TYPES["bloom"]
 BTN_TUNDISH_BILLET = TUNDISH_TYPES["billet"]
 BTN_BACK_MAIN = "⬅️ بازگشت به منوی اصلی"
+BTN_BACK_PREV = "⬅️ بازگشت به منوی قبل"  # alias for site-stock menus
 
 # Material request workflow (owner / manager / officer)
 BTN_MATERIAL_REQUEST = "🛒 درخواست مواد"
@@ -132,6 +133,20 @@ SITE_GROUP_BUTTONS = {
     BTN_SITE_BLOOM: "bloom",
     BTN_SITE_BILLET: "billet",
 }
+
+# Reply/nav button labels that must NOT be parsed as quantities while awaiting site-stock entry
+SITE_STOCK_RESERVED_TEXTS = frozenset(
+    {
+        BTN_SITE_STOCK,
+        BTN_SITE_SKIP,
+        BTN_SITE_CANCEL,
+        BTN_SITE_CONFIRM,
+        BTN_BACK_SITE,
+        BTN_BACK_MAIN,
+        BTN_BACK_PREV,
+        *SITE_GROUP_BUTTONS.keys(),
+    }
+)
 
 ASSIGN_GROUP_BUTTONS = {
     BTN_CATALOG_ASSIGN_SLAB: "slab",
@@ -272,7 +287,7 @@ def site_stock_menu() -> dict:
             [BTN_SITE_SLAB],
             [BTN_SITE_BLOOM],
             [BTN_SITE_BILLET],
-            [BTN_BACK_MAIN],
+            [BTN_BACK_PREV],  # «بازگشت به منوی قبل» → main_menu
         ]
     )
 
