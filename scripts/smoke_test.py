@@ -501,11 +501,14 @@ def main() -> int:
     officer_menu = menu_texts(kb.main_menu(db.get_user("1002")))
     assert kb.BTN_SITE_STOCK in tech_menu
     assert kb.BTN_INV_MENU not in tech_menu
+    assert kb.BTN_UPLOAD_MENU not in tech_menu
     assert kb.BTN_ANALYTICS not in tech_menu
     assert kb.BTN_MONTHLY not in tech_menu
     assert kb.BTN_CATALOG_SETTINGS not in tech_menu
     for full_menu in (owner_menu, manager_menu, officer_menu):
-        assert {kb.BTN_INV_MENU, kb.BTN_ANALYTICS, kb.BTN_MONTHLY, kb.BTN_SITE_STOCK}.issubset(full_menu)
+        assert {kb.BTN_UPLOAD_MENU, kb.BTN_ANALYTICS, kb.BTN_SITE_STOCK}.issubset(full_menu)
+        assert kb.BTN_INV_MENU not in full_menu  # moved under آپلود فایل
+        assert kb.BTN_MONTHLY not in full_menu  # moved under آپلود فایل
         assert kb.BTN_CATALOG_SETTINGS in full_menu
         assert kb.BTN_MATERIAL_REQUEST in full_menu
         assert kb.BTN_WAREHOUSE_RETURN in full_menu
@@ -586,15 +589,43 @@ def main() -> int:
     assert SITE_STOCK_GROUPS["billet"] == "موجودی مواد بیلت"
     assert kb.SITE_GROUP_BUTTONS[kb.BTN_SITE_BILLET] == "billet"
 
-    # file entry picker (after وضعیت فایل‌ها) + routing maps
+    # آپلود فایل submenu + فایل منبع اصلی + file entry picker + routing maps
+    upload_menu = menu_texts(kb.upload_files_menu())
+    assert {
+        kb.BTN_WAREHOUSE_STOCK,
+        kb.BTN_MONTHLY,
+        kb.BTN_MAIN_SOURCE_FILE,
+        kb.BTN_BACK_MAIN,
+    }.issubset(upload_menu)
+    assert kb.BTN_SITE_STOCK not in upload_menu
+
+    main_src_menu = menu_texts(kb.main_source_file_menu())
+    assert {
+        kb.BTN_INV_UPLOAD,
+        kb.BTN_INV_ADD_RECORD,
+        kb.BTN_INV_EDIT_RECORD,
+        kb.BTN_INV_ADD_CATEGORY,
+        kb.BTN_INV_LIST_CATEGORIES,
+        kb.BTN_BACK_UPLOAD,
+    }.issubset(main_src_menu)
+    assert kb.BTN_INV_EDIT not in main_src_menu  # flattened — no nested edit opener
+    assert menu_texts(kb.inventory_menu()) == main_src_menu
+    assert menu_texts(kb.inventory_edit_menu()) == main_src_menu
+
     file_entry = menu_texts(kb.file_entry_menu())
-    assert {kb.BTN_INV_UPLOAD, kb.BTN_MONTHLY, kb.BTN_SITE_STOCK, kb.BTN_BACK_MAIN}.issubset(file_entry)
-    assert kb.BTN_INV_MENU not in file_entry  # submenu opener stays on main_menu only
+    assert file_entry == upload_menu  # status/doc picker = upload picker (no site stock)
+    assert kb.BTN_SITE_STOCK not in file_entry
+    assert kb.BTN_INV_MENU not in file_entry
+    assert kb.button_to_file_type(kb.BTN_WAREHOUSE_STOCK) == "product_inventory"
     assert kb.button_to_file_type(kb.BTN_INV) == "product_inventory"
     assert kb.button_to_file_type(kb.BTN_INV_UPLOAD) == "product_inventory"
     assert kb.button_to_file_type(kb.BTN_MONTHLY) == "monthly_consumption"
     assert kb.button_to_file_type(kb.BTN_SITE_STOCK) is None  # interactive, not Excel
-    assert kb.button_to_file_type(kb.BTN_INV_MENU) is None  # submenu, not upload
+    assert kb.button_to_file_type(kb.BTN_INV_MENU) is None  # legacy submenu opener
+    assert kb.button_to_file_type(kb.BTN_MAIN_SOURCE_FILE) is None  # submenu opener
+    assert kb.button_to_file_type(kb.BTN_UPLOAD_MENU) is None
+    assert kb.button_to_file_type("📦 موجودی انبار") == "product_inventory"  # warehouse upload
+    assert kb.BTN_WAREHOUSE_STOCK == "📥 موجودی انبار"
 
     # site stock inline 2-col keyboard (شرح | تعداد) + confirm
     items_fake = [

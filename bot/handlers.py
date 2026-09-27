@@ -96,7 +96,7 @@ logger = logging.getLogger(__name__)
 HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 
 جریان اصلی:
-۱) منبع اصلی و مصرف ماهیانه را از منو با Excel (.xlsx) بفرستید
+۱) از «آپلود فایل» موجودی انبار / مصرف ماهیانه / فایل منبع اصلی را با Excel (.xlsx) بفرستید
 ۲) «موجودی روزانه سایت» را به‌صورت تعاملی وارد کنید (نه Excel تکنسین)
 ۳) دکمه «تولید گزارش PDF» یا «گزارش‌ها / تحلیل تاندیش» را بزنید
 
@@ -167,6 +167,8 @@ class BotApp:
         self._await_category_code: set[str] = set()
         # منبع اصلی edit/add record interactive flow
         self._main_source_pending: dict[str, dict[str, Any]] = {}
+        # After Excel pick/upload: "upload" | "main_source" | "main"
+        self._upload_return_menu: dict[str, str] = {}
         # site stock interactive entry: uid -> {group, items, values, awaiting_idx, walk_idx, guided, chat_id, message_id}
         self._site_stock_pending: dict[str, dict[str, Any]] = {}
         # catalog assignment: uid -> {item_id} while choosing group
@@ -248,6 +250,7 @@ class BotApp:
         self._clear_analysis_pending(uid)
         self._await_category_code.discard(uid)
         self._main_source_pending.pop(uid, None)
+        self._upload_return_menu.pop(uid, None)
         self._site_stock_pending.pop(uid, None)
         self._catalog_assign_pending.pop(uid, None)
         self._users_pending.pop(uid, None)
@@ -993,6 +996,7 @@ class BotApp:
         self._analysis_tundish_filter.pop(uid, None)
         self._await_category_code.discard(uid)
         self._main_source_pending.pop(uid, None)
+        self._upload_return_menu.pop(uid, None)
         self._site_stock_pending.pop(uid, None)
         self._catalog_assign_pending.pop(uid, None)
         self._users_pending.pop(uid, None)
@@ -1004,16 +1008,22 @@ class BotApp:
         self._reply(message, "جلسه آپلود و وضعیت ورود جاری پاک شد. از منو دوباره شروع کنید.", kb.main_menu(user))
 
     # ---------- request-driven flow ----------
-    def on_pick_file_type(self, message: dict, file_type: str) -> None:
+    def on_pick_file_type(
+        self, message: dict, file_type: str, *, return_menu: str = "upload"
+    ) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
         if user.get("role") == "technician":
             self._deny_technician(message, user)
             return
+        uid = str(user["bale_user_id"])
         self._clear_analysis_pending(user["bale_user_id"])
-        self._await_category_code.discard(str(user["bale_user_id"]))
-        self._main_source_pending.pop(str(user["bale_user_id"]), None)
+        self._await_category_code.discard(uid)
+        self._main_source_pending.pop(uid, None)
+        self._upload_return_menu[uid] = return_menu if return_menu in {
+            "upload", "main_source", "main"
+        } else "upload"
         self.db.set_pending_file_type(user["bale_user_id"], file_type)
         label = FILE_TYPES[file_type]["label_fa"]
         self._reply(
@@ -1023,6 +1033,21 @@ class BotApp:
             f"اگر منصرف شدید، «{kb.BTN_CANCEL_PENDING}» را بزنید.",
             kb.cancel_pending_menu(),
         )
+
+    def _keyboard_for_upload_return(
+        self, user: dict, *, default: str = "main", consume: bool = True
+    ) -> dict:
+        """Reply keyboard after Excel cancel/success based on pick context."""
+        uid = str(user["bale_user_id"])
+        if consume:
+            dest = self._upload_return_menu.pop(uid, None) or default
+        else:
+            dest = self._upload_return_menu.get(uid) or default
+        if dest == "main_source":
+            return kb.main_source_file_menu()
+        if dest == "upload":
+            return kb.upload_files_menu()
+        return kb.main_menu(user)
 
     def on_cancel_pending(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -1034,7 +1059,11 @@ class BotApp:
         self._await_category_code.discard(uid)
         self._main_source_pending.pop(uid, None)
         session = self.db.get_or_create_session(user["bale_user_id"])
-        menu = kb.inventory_edit_menu() if had_main else kb.main_menu(user)
+        if had_main:
+            self._upload_return_menu.pop(uid, None)
+            menu = kb.main_source_file_menu()
+        else:
+            menu = self._keyboard_for_upload_return(user, default="main")
         self._reply(message, "عملیات لغو شد.\n" + self._status_text(session), menu)
 
     def on_status(self, message: dict) -> None:
@@ -1127,9 +1156,9 @@ class BotApp:
                 self._reply(
                     message,
                     "لیست کدهای دسته‌بندی خالی است.\n"
-                    "ابتدا از منوی «منبع اصلی» → «اضافه کردن کد دسته بندی» "
+                    "ابتدا از «آپلود فایل» → «فایل منبع اصلی» → «اضافه کردن کد دسته بندی» "
                     "حداقل یک کد ۴ رقمی ثبت کنید، سپس دوباره فایل را بفرستید.",
-                    kb.inventory_menu(),
+                    self._keyboard_for_upload_return(user, default="main_source", consume=False),
                 )
                 return
 
@@ -1180,7 +1209,12 @@ class BotApp:
             )
         except ExcelValidationError as exc:
             dest.unlink(missing_ok=True)
-            menu = kb.inventory_menu() if pending == "product_inventory" else kb.cancel_pending_menu()
+            if pending == "product_inventory":
+                menu = self._keyboard_for_upload_return(
+                    user, default="main_source", consume=False
+                )
+            else:
+                menu = kb.cancel_pending_menu()
             self._reply(message, str(exc), menu)
             return
         except Exception as exc:  # noqa: BLE001
@@ -1319,11 +1353,7 @@ class BotApp:
         extra_cols_note = ""
         if result.extra_columns_dropped:
             extra_cols_note = "\nستون‌های اضافی کنار گذاشته شد."
-        reply_menu = (
-            kb.inventory_menu()
-            if pending == "product_inventory"
-            else kb.main_menu(user)
-        )
+        reply_menu = self._keyboard_for_upload_return(user, default="upload")
         actor_line = f"ثبت‌کننده: {self._format_actor(user)}"
         if pending == "product_inventory":
             log_activity(self.db, user, "upload_product_inventory")
@@ -1390,16 +1420,39 @@ class BotApp:
             logger.exception("generate failed")
             self._reply(message, f"خطا در تولید گزارش: {exc}", kb.main_menu(user))
 
-    # ---------- منبع اصلی submenu ----------
-    def on_inventory_menu(self, message: dict) -> None:
+    # ---------- آپلود فایل / فایل منبع اصلی ----------
+    def on_upload_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
         if self._deny_technician(message, user):
             return
+        uid = str(user["bale_user_id"])
         self._clear_analysis_pending(user["bale_user_id"])
-        self._await_category_code.discard(str(user["bale_user_id"]))
-        self._main_source_pending.pop(str(user["bale_user_id"]), None)
+        self._await_category_code.discard(uid)
+        self._main_source_pending.pop(uid, None)
+        self._upload_return_menu.pop(uid, None)
+        self.db.set_pending_file_type(user["bale_user_id"], None)
+        self._reply(
+            message,
+            "منوی آپلود فایل\n"
+            "• موجودی انبار — Excel انبار (به‌روزرسانی منبع اصلی)\n"
+            "• مصرف ماهیانه مواد\n"
+            "• فایل منبع اصلی — آپلود Excel / افزودن و ویرایش رکورد / کد دسته",
+            kb.upload_files_menu(),
+        )
+
+    def on_main_source_file_menu(self, message: dict) -> None:
+        """Open flattened «فایل منبع اصلی» submenu (also legacy «منبع اصلی»)."""
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(user["bale_user_id"])
+        self._await_category_code.discard(uid)
+        self._main_source_pending.pop(uid, None)
         codes = self.db.list_category_codes(active_only=True)
         hint = (
             f"تعداد کدهای فعال دسته‌بندی: {len(codes)}\n"
@@ -1407,9 +1460,13 @@ class BotApp:
         )
         self._reply(
             message,
-            "منوی منبع اصلی\n" + hint,
-            kb.inventory_menu(),
+            "منوی فایل منبع اصلی\n" + hint,
+            kb.main_source_file_menu(),
         )
+
+    def on_inventory_menu(self, message: dict) -> None:
+        """Alias for legacy callers."""
+        self.on_main_source_file_menu(message)
 
     def on_add_category_prompt(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -1507,28 +1564,8 @@ class BotApp:
         self._main_source_pending.pop(str(uid), None)
 
     def on_inventory_edit_menu(self, message: dict) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_technician(message, user):
-            return
-        if self._deny_main_source_edit(message, user):
-            return
-        uid = str(user["bale_user_id"])
-        self._clear_analysis_pending(uid)
-        self._await_category_code.discard(uid)
-        self._main_source_pending[uid] = {"mode": "menu"}
-        frame = main_source_svc.load_primary_frame(self.db, bale_user_id=uid)
-        n = 0 if frame is None else int(len(frame))
-        self._reply(
-            message,
-            (
-                "ویرایش منبع اصلی\n"
-                f"تعداد ردیف‌های فعلی: {n}\n"
-                "می‌توانید رکورد ویرایش/اضافه کنید یا فایل اکسل با همان قالب تمیز را آپلود کنید."
-            ),
-            kb.inventory_edit_menu(),
-        )
+        """Legacy nested edit menu — now flattened into main_source_file_menu."""
+        self.on_main_source_file_menu(message)
 
     def on_inv_edit_record_start(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -5436,23 +5473,20 @@ class BotApp:
             if self.on_date_range_choice(message, "custom"):
                 return
 
-        # Only the submenu button (and legacy 📦 موجودی انبار) opens inventory submenu.
-        # BTN_INV (📥 منبع اصلی) and "📥 موجودی انبار" map to product_inventory via
-        # button_to_file_type below — they must NOT open the submenu.
-        if text == kb.BTN_INV_MENU or text == "📦 موجودی انبار":
-            self.on_inventory_menu(message)
+        # آپلود فایل section + فایل منبع اصلی submenu
+        # «📥/📦 موجودی انبار» prefer warehouse upload via button_to_file_type (not submenu).
+        # Legacy «📦 منبع اصلی» and «📦 فایل منبع اصلی» open main-source submenu.
+        if text == kb.BTN_UPLOAD_MENU or text == kb.BTN_BACK_UPLOAD:
+            self.on_upload_menu(message)
             return
-        if text == kb.BTN_INV_EDIT:
-            self.on_inventory_edit_menu(message)
+        if text in {kb.BTN_MAIN_SOURCE_FILE, kb.BTN_INV_MENU, kb.BTN_INV_EDIT, kb.BTN_BACK_INV_EDIT}:
+            self.on_main_source_file_menu(message)
             return
         if text == kb.BTN_INV_EDIT_RECORD:
             self.on_inv_edit_record_start(message)
             return
         if text == kb.BTN_INV_ADD_RECORD:
             self.on_inv_add_record_start(message)
-            return
-        if text == kb.BTN_BACK_INV_EDIT:
-            self.on_inventory_menu(message)
             return
         if text == kb.BTN_INV_ADD_CATEGORY:
             self.on_add_category_prompt(message)
@@ -5486,7 +5520,17 @@ class BotApp:
 
         file_type = kb.button_to_file_type(text)
         if file_type:
-            self.on_pick_file_type(message, file_type)
+            # Excel from «فایل منبع اصلی» returns there; warehouse/monthly → آپلود فایل
+            if text in {
+                kb.BTN_INV_UPLOAD,
+                kb.BTN_INV,
+                "📥 ورود فایل اکسل",
+                FILE_TYPES["product_inventory"]["label_fa"],
+            }:
+                ret = "main_source"
+            else:
+                ret = "upload"
+            self.on_pick_file_type(message, file_type, return_menu=ret)
             return
 
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))

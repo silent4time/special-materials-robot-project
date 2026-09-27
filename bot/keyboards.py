@@ -1,4 +1,4 @@
-"""Persian reply keyboards for upload flow, warehouse inventory submenu, site stock, and analytics."""
+"""Persian reply keyboards for upload flow, main-source file submenu, site stock, and analytics."""
 from __future__ import annotations
 
 from config import ASSISTANT_ENABLED, FILE_TYPES, SITE_STOCK_GROUPS, TUNDISH_TYPES
@@ -47,15 +47,21 @@ ROLE_BUTTON_TO_KEY = {
     BTN_ROLE_TECH: "technician",
 }
 
-# منبع اصلی (warehouse inventory extract) submenu
-BTN_INV_MENU = "📦 منبع اصلی"
+# آپلود فایل (main-menu section) + فایل منبع اصلی submenu
+BTN_UPLOAD_MENU = "📤 آپلود فایل"
+BTN_WAREHOUSE_STOCK = "📥 موجودی انبار"  # Excel → product_inventory (refreshes منبع اصلی)
+BTN_MAIN_SOURCE_FILE = "📦 فایل منبع اصلی"  # submenu opener, not upload
+BTN_BACK_UPLOAD = "⬅️ بازگشت به آپلود فایل"
+
+# منبع اصلی (legacy labels + edit/upload actions)
+BTN_INV_MENU = "📦 منبع اصلی"  # legacy → opens main-source submenu
 BTN_INV_UPLOAD = "📥 ورود فایل اکسل منبع اصلی"
-BTN_INV_EDIT = "✏️ ویرایش منبع اصلی"
+BTN_INV_EDIT = "✏️ ویرایش منبع اصلی"  # legacy → same flattened main-source menu
 BTN_INV_EDIT_RECORD = "✏️ ویرایش رکورد"
 BTN_INV_ADD_RECORD = "➕ اضافه کردن رکورد"
 BTN_INV_ADD_CATEGORY = "➕ اضافه کردن کد دسته بندی"
 BTN_INV_LIST_CATEGORIES = "📋 لیست کدهای دسته بندی"
-BTN_BACK_INV_EDIT = "⬅️ بازگشت به ویرایش منبع اصلی"
+BTN_BACK_INV_EDIT = "⬅️ بازگشت به ویرایش منبع اصلی"  # legacy → main_source_file_menu
 
 # موجودی روزانه سایت — interactive entry (not Excel primary path)
 BTN_SITE_STOCK = BTN_TANK  # «📥 موجودی روزانه سایت»
@@ -160,10 +166,12 @@ def button_to_file_type(text: str) -> str | None:
 
     Note: BTN_TANK / موجودی روزانه سایت is **interactive entry** now and is
     intentionally NOT mapped here (handled by site-stock submenu).
-    BTN_INV (📥 منبع اصلی) and BTN_INV_UPLOAD both select product_inventory
-    upload — they do NOT open the inventory submenu (that is BTN_INV_MENU).
+    BTN_WAREHOUSE_STOCK / BTN_INV / BTN_INV_UPLOAD all select product_inventory
+    upload. Submenu openers (BTN_UPLOAD_MENU, BTN_MAIN_SOURCE_FILE, BTN_INV_MENU)
+    are intentionally NOT mapped.
     """
     mapping = {
+        BTN_WAREHOUSE_STOCK: "product_inventory",
         BTN_INV: "product_inventory",
         BTN_INV_UPLOAD: "product_inventory",
         BTN_MONTHLY: "monthly_consumption",
@@ -199,8 +207,7 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
 
     is_manager = bool(user) if isinstance(user, bool) else role in {"owner", "manager"}
     rows = [
-        [BTN_INV_MENU],
-        [BTN_MONTHLY],
+        [BTN_UPLOAD_MENU],
         [BTN_SITE_STOCK],
         [BTN_CATALOG_SETTINGS],
         [BTN_MATERIAL_REQUEST, BTN_WAREHOUSE_RETURN],
@@ -244,40 +251,45 @@ def role_menu(include_owner: bool = False) -> dict:
     return BaleClient.reply_keyboard(rows)
 
 
-def inventory_menu() -> dict:
-    """Submenu under منبع اصلی."""
-    rows = [
-        [BTN_INV_UPLOAD],
-        [BTN_INV_EDIT],
-        [BTN_INV_ADD_CATEGORY],
-        [BTN_INV_LIST_CATEGORIES],
-        [BTN_BACK_MAIN],
-    ]
-    return BaleClient.reply_keyboard(rows)
-
-
-def file_entry_menu() -> dict:
-    """Picker after وضعیت فایل‌ها / document-without-pending: choose entry type."""
+def upload_files_menu() -> dict:
+    """Main-menu section «آپلود فایل»: warehouse / monthly / main-source file."""
     return BaleClient.reply_keyboard(
         [
-            [BTN_INV_UPLOAD],
+            [BTN_WAREHOUSE_STOCK],
             [BTN_MONTHLY],
-            [BTN_SITE_STOCK],
+            [BTN_MAIN_SOURCE_FILE],
             [BTN_BACK_MAIN],
         ]
     )
 
 
-def inventory_edit_menu() -> dict:
-    """Edit/upload submenu for منبع اصلی (catalog-admin roles)."""
+def main_source_file_menu() -> dict:
+    """Flattened «فایل منبع اصلی» submenu (Excel + add/edit record + categories)."""
     return BaleClient.reply_keyboard(
         [
-            [BTN_INV_EDIT_RECORD],
-            [BTN_INV_ADD_RECORD],
             [BTN_INV_UPLOAD],
-            [BTN_BACK_INV_EDIT],
+            [BTN_INV_ADD_RECORD],
+            [BTN_INV_EDIT_RECORD],
+            [BTN_INV_ADD_CATEGORY],
+            [BTN_INV_LIST_CATEGORIES],
+            [BTN_BACK_UPLOAD],
         ]
     )
+
+
+def inventory_menu() -> dict:
+    """Alias of main_source_file_menu (legacy name)."""
+    return main_source_file_menu()
+
+
+def file_entry_menu() -> dict:
+    """Upload picker after وضعیت فایل‌ها / document-without-pending (no site stock)."""
+    return upload_files_menu()
+
+
+def inventory_edit_menu() -> dict:
+    """Alias — edit actions are flattened into main_source_file_menu."""
+    return main_source_file_menu()
 
 
 def site_stock_menu() -> dict:
