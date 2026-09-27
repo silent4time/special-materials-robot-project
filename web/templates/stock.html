@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}موجودی سایت{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>موجودی روزانه سایت</h1>
+  <p class="muted">ثبت مستقیم در همان جدول <code>site_stock_entries</code> ربات.</p>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+
+  <form method="get" action="/stock" class="row-inline">
+    <div>
+      <label for="group">گروه</label>
+      <select id="group" name="group" onchange="this.form.submit()">
+        {% for key, label in groups.items() %}
+        <option value="{{ key }}" {% if key == group %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="entry_date">تاریخ</label>
+      <input id="entry_date" name="entry_date" type="date" value="{{ entry_date }}" onchange="this.form.submit()">
+    </div>
+  </form>
+
+  <form method="post" action="/stock/save">
+    <input type="hidden" name="group" value="{{ group }}">
+    <input type="hidden" name="entry_date" value="{{ entry_date }}">
+    {% if not items %}
+    <p class="muted">برای این گروه کالایی در کاتالوگ تخصیص نشده است.</p>
+    {% else %}
+    <table>
+      <thead>
+        <tr><th>نام کالا</th><th>شناسه</th><th>مقدار فعلی</th><th>مقدار جدید</th></tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        {% set cur = existing.get(it.id) %}
+        <tr>
+          <td>{{ it.name_desc }}</td>
+          <td class="muted">{{ it.id }}</td>
+          <td>{% if cur %}{{ cur.quantity }}{% else %}—{% endif %}</td>
+          <td>
+            <input type="number" step="any" name="qty_{{ it.id }}"
+                   value="{% if cur %}{{ cur.quantity }}{% endif %}" placeholder="—">
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p style="margin-top:1rem"><button type="submit">ذخیره</button></p>
+    {% endif %}
+  </form>
+</div>
+{% endblock %}

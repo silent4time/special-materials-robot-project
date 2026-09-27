@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}درخواست مواد{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>درخواست مواد</h1>
+  <p class="muted">ثبت از طریق <code>Database.create_material_request</code> (همان مسیر ربات). دسترسی: مالک / مدیر / کاردان مسئول.</p>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  <form method="post" action="/materials/request">
+    <label for="coverage_days">روز پوشش</label>
+    <input id="coverage_days" name="coverage_days" type="number" step="1" min="1" value="{{ coverage_days }}">
+    <table style="margin-top:1rem">
+      <thead><tr><th>نام</th><th>گروه</th><th>مقدار درخواستی</th></tr></thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td>{{ it.name_desc }}</td>
+          <td class="muted">{{ it.tundish_group or "—" }}</td>
+          <td><input type="number" step="any" min="0" name="qty_{{ it.id }}" placeholder="۰"></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p style="margin-top:1rem"><button type="submit">ثبت درخواست</button></p>
+  </form>
+</div>
+{% if history %}
+<div class="card">
+  <h2>تاریخچه اخیر</h2>
+  <table>
+    <thead><tr><th>#</th><th>زمان</th><th>روز</th><th>اقلام</th><th>ثبت‌کننده</th></tr></thead>
+    <tbody>
+      {% for r in history %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.created_at }}</td>
+        <td>{{ r.coverage_days }}</td>
+        <td>{{ r.line_count }}</td>
+        <td>{{ r.actor_display_name or r.bale_user_id }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

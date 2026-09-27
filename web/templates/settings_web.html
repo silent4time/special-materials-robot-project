@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}تنظیم ورود وب{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>تنظیم ورود وب</h1>
+  <p class="muted">
+    فقط برای مالک/مدیر. نام کاربری به یک ردیف موجود در <code>users</code> (کاربر بله) وصل می‌شود.
+    نقش از همان فیلد <code>users.role</code> خوانده می‌شود — مالک وب جداگانه ساخته نمی‌شود.
+  </p>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  <form method="post" action="/settings/web-login">
+    <label for="bale_user_id">کاربر بله</label>
+    <select id="bale_user_id" name="bale_user_id" required>
+      {% for u in users %}
+      <option value="{{ u.bale_user_id }}">
+        {{ u.display_name or u.bale_user_id }} — {{ role_label(u.role) }} ({{ u.bale_user_id }})
+      </option>
+      {% endfor %}
+    </select>
+    <label for="username">نام کاربری وب</label>
+    <input id="username" name="username" type="text" required minlength="3">
+    <label for="password">رمز عبور</label>
+    <input id="password" name="password" type="password" required minlength="6">
+    <p style="margin-top:1rem"><button type="submit">ذخیره / به‌روزرسانی</button></p>
+  </form>
+</div>
+{% if credentials %}
+<div class="card">
+  <h2>حساب‌های وب موجود</h2>
+  <table>
+    <thead><tr><th>نام کاربری</th><th>کاربر بله</th><th>نقش</th></tr></thead>
+    <tbody>
+      {% for c in credentials %}
+      <tr>
+        <td>{{ c.username }}</td>
+        <td>{{ c.display_name or c.bale_user_id }}</td>
+        <td>{{ role_label(c.role) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}ورود — داشبورد مواد{% endblock %}
+{% block content %}
+<div class="card login-box">
+  <h1>ورود به داشبورد</h1>
+  <p class="muted">با حساب وب متصل به کاربر بله وارد شوید. نقش شما همان نقش ربات است.</p>
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  <form method="post" action="/login">
+    <label for="username">نام کاربری</label>
+    <input id="username" name="username" type="text" autocomplete="username" required>
+    <label for="password">رمز عبور</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <p style="margin-top:1rem"><button type="submit">ورود</button></p>
+  </form>
+</div>
+{% endblock %}

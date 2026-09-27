@@ -25,6 +25,13 @@ SURPLUS_COVER_DAYS = float(os.getenv("SURPLUS_COVER_DAYS", "10"))
 SURPLUS_FORECAST_DAYS = float(os.getenv("SURPLUS_FORECAST_DAYS", "30"))
 BALE_API_BASE = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}" if BALE_BOT_TOKEN else ""
 
+# Web dashboard (separate process; does not require BALE_BOT_TOKEN)
+WEB_SECRET_KEY = os.getenv("WEB_SECRET_KEY", "").strip() or "change-me-in-production"
+WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0").strip() or "0.0.0.0"
+WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
+WEB_ADMIN_USERNAME = os.getenv("WEB_ADMIN_USERNAME", "").strip()
+WEB_ADMIN_PASSWORD = os.getenv("WEB_ADMIN_PASSWORD", "").strip()
+
 # دستیار هوشمند — local report-only (Ollama or compatible — no cloud LLM)
 # Default OFF: menu hidden; /assistant replies «فعلاً غیرفعال» unless explicitly enabled.
 ASSISTANT_ENABLED = os.getenv("ASSISTANT_ENABLED", "0").strip().lower() in {

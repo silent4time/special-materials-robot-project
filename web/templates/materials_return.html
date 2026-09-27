@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}برگشت به انبار{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>برگشت به انبار</h1>
+  <p class="muted">ثبت از طریق <code>Database.create_warehouse_return</code> — همان ledger ربات.</p>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  <form method="post" action="/materials/return">
+    <table>
+      <thead><tr><th>نام</th><th>گروه</th><th>مقدار برگشتی</th></tr></thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td>{{ it.name_desc }}</td>
+          <td class="muted">{{ it.tundish_group or "—" }}</td>
+          <td><input type="number" step="any" min="0" name="qty_{{ it.id }}" placeholder="۰"></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p style="margin-top:1rem"><button type="submit">ثبت برگشت</button></p>
+  </form>
+</div>
+{% endblock %}

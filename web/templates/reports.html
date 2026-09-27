@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}گزارش‌ها{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>گزارش‌های PDF</h1>
+  <p class="muted">فرمول‌ها از <code>analytics.tundish</code> و خروجی از <code>pdf.generator</code> — بدون کپی منطق.</p>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  <p class="muted">
+    موجودی سایت: {{ site_stock_date or "—" }} |
+    مصرف تانک: {% if completeness.tank_consumption %}✅{% else %}⏳{% endif %} |
+    انبار: {% if completeness.product_inventory %}✅{% else %}⏳{% endif %} |
+    ماهیانه: {% if completeness.monthly_consumption %}✅{% else %}⏳{% endif %}
+  </p>
+  <div class="report-actions">
+    <a class="btn" href="/reports/remaining-critical">موجودی و مواد بحرانی</a>
+    <a class="btn" href="/reports/surplus">مواد مازاد</a>
+    <a class="btn" href="/reports/monthly-summary">خلاصه مصرف ماهیانه</a>
+    <a class="btn" href="/reports/user-activity">فعالیت کاربران</a>
+  </div>
+</div>
+{% endblock %}

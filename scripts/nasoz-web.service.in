@@ -1,0 +1,16 @@
+[Unit]
+Description=Nasoz materials web dashboard (separate from Bale bot)
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+Environment=PATH=__WORKDIR__/.venv/bin
+EnvironmentFile=-__WORKDIR__/.env
+ExecStart=__WORKDIR__/.venv/bin/python web_main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

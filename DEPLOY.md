@@ -188,3 +188,27 @@ curl -s http://127.0.0.1:11434/api/tags
 | کندی | مدل کوچک‌تر یا افزایش `OLLAMA_TIMEOUT` |
 
 به‌روزرسانی مدل: `ollama pull …` سپس در صورت نیاز تغییر `OLLAMA_MODEL` و restart ربات (`bash install.sh --update` یا `systemctl restart nasoz-bot`).
+
+## داشبورد وب (فرآیند جدا)
+
+پنل وب روی **همان ماشین و همان `DATABASE_PATH`** اجرا می‌شود ولی **فرآیند جدا** از `main.py` است (`web_main.py` / `python -m web`). توکن بله لازم نیست.
+
+**هماهنگی ربات و وب:** منطق کسب‌وکار در ماژول‌های مشترک است (`db`, `auth.rbac`, `analytics`, `pdf`, `excel`, `bot.activity`). نقش‌ها همان `users.role` ربات‌اند. هنگام تغییر کد مشترک، **ربات و وب را با هم دیپلوی** کنید.
+
+```bash
+# وابستگی‌ها
+.venv/bin/pip install -r requirements.txt
+
+# اولین ورود وب برای مالک موجود (اولین /start در بله)
+.venv/bin/python scripts/seed_web_admin.py
+# رمز در data/web_admin_credentials.txt (gitignore، mode 600)
+
+# اجرا
+.venv/bin/python web_main.py
+# یا systemd:
+# sed ... scripts/nasoz-web.service.in → /etc/systemd/system/nasoz-web.service
+```
+
+در `.env`: `WEB_SECRET_KEY`, `WEB_HOST=0.0.0.0`, `WEB_PORT=8000`.
+
+`PRAGMA journal_mode=WAL` و `busy_timeout` در `Database.connect` برای هم‌زیستی ربات+وب فعال است. اتصال‌های جدید وب WAL را می‌گیرند؛ ربات در **ری‌استارت بعدی** همان pragma را روی اتصال‌های تازه اعمال می‌کند (نیازی به ری‌استارت فوری نیست مگر قفل‌های طولانی ببینید).

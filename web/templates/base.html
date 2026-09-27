@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}داشبورد مواد{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% if user %}
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/home">داشبورد مواد تاندیش</a>
+    <nav class="nav">
+      <a href="/home">خانه</a>
+      <a href="/stock">موجودی سایت</a>
+      {% if can_request_materials(user) %}
+      <a href="/materials/request">درخواست مواد</a>
+      <a href="/materials/return">برگشت انبار</a>
+      {% endif %}
+      {% if user_can_see_reports(user) %}
+      <a href="/reports">گزارش‌ها</a>
+      {% endif %}
+      {% if require_manager(user) %}
+      <a href="/settings/web-login">تنظیم ورود وب</a>
+      {% endif %}
+      <form action="/logout" method="post" style="display:inline">
+        <button type="submit" class="linkish">خروج</button>
+      </form>
+    </nav>
+    <div class="user-chip">
+      {{ user.display_name or user.bale_user_id }}
+      <span class="badge">{{ role_label(user.role) }}</span>
+    </div>
+  </div>
+</header>
+{% endif %}
+<main class="wrap">
+  {% block content %}{% endblock %}
+  <p class="footer-note">همان نقش‌ها و پایگاه‌دادهٔ ربات بله — پنل وب فرآیند جداست.</p>
+</main>
+</body>
+</html>

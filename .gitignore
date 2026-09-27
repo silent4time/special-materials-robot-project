@@ -22,3 +22,5 @@ data/bot.pid
 data/bot.log
 data/ollama.pid
 data/ollama.log
+
+data/web_admin_credentials.txt

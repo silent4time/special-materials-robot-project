@@ -24,9 +24,11 @@ class Database:
 
     @contextmanager
     def connect(self) -> Generator[sqlite3.Connection, None, None]:
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.path, timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         try:
             yield conn
             conn.commit()
@@ -241,6 +243,17 @@ class Database:
                     ON warehouse_returns(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_warehouse_return_lines_ret
                     ON warehouse_return_lines(return_id);
+
+                CREATE TABLE IF NOT EXISTS web_credentials (
+                    bale_user_id TEXT NOT NULL PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    password_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(bale_user_id) REFERENCES users(bale_user_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_web_credentials_username
+                    ON web_credentials(username);
 
                 CREATE TABLE IF NOT EXISTS user_activity (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1774,7 +1787,98 @@ class Database:
             out[key] = val
         return out
 
+    # ---------- web credentials (dashboard login) ----------
+    def get_web_credential_by_username(self, username: str) -> Optional[dict[str, Any]]:
+        uname = (username or "").strip()
+        if not uname:
+            return None
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT w.*, u.display_name, u.role, u.scope, u.active
+                FROM web_credentials w
+                JOIN users u ON u.bale_user_id = w.bale_user_id
+                WHERE w.username = ? COLLATE NOCASE
+                """,
+                (uname,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_web_credential_by_bale_id(self, bale_user_id: str | int) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM web_credentials WHERE bale_user_id = ?",
+                (str(bale_user_id),),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_web_credentials(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT w.bale_user_id, w.username, w.created_at, w.updated_at,
+                       u.display_name, u.role, u.active
+                FROM web_credentials w
+                JOIN users u ON u.bale_user_id = w.bale_user_id
+                ORDER BY w.username COLLATE NOCASE
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def upsert_web_credential(
+        self,
+        *,
+        bale_user_id: str | int,
+        username: str,
+        password_hash: str,
+    ) -> dict[str, Any]:
+        uid = str(bale_user_id).strip()
+        uname = (username or "").strip()
+        if not uid or not uname or not password_hash:
+            raise ValueError("شناسه کاربر، نام کاربری و رمز الزامی است.")
+        user = self.get_user(uid)
+        if not user:
+            raise KeyError("کاربر بله یافت نشد.")
+        now = _utcnow()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO web_credentials
+                    (bale_user_id, username, password_hash, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(bale_user_id) DO UPDATE SET
+                    username = excluded.username,
+                    password_hash = excluded.password_hash,
+                    updated_at = excluded.updated_at
+                """,
+                (uid, uname, password_hash, now, now),
+            )
+            row = conn.execute(
+                "SELECT * FROM web_credentials WHERE bale_user_id = ?",
+                (uid,),
+            ).fetchone()
+        return dict(row) if row else {}
+
+    def count_web_credentials(self) -> int:
+        with self.connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM web_credentials").fetchone()
+            return int(row["c"] if row else 0)
+
+    def get_latest_extracted_any(self, file_type: str) -> Optional[dict[str, Any]]:
+        """Plant-wide newest extract for a file type (any user)."""
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM extracted_datasets
+                WHERE file_type = ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (str(file_type),),
+            ).fetchone()
+            return dict(row) if row else None
+
     # ---------- user activity log ----------
+
     def insert_user_activity(
         self,
         *,

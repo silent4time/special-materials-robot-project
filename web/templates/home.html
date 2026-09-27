@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}خانه — داشبورد مواد{% endblock %}
+{% block content %}
+<div class="card">
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  <h1>سلام، {{ user.display_name or user.bale_user_id }}</h1>
+  <p class="muted">نقش شما: <strong>{{ role_fa }}</strong> (همان نقش در ربات بله)</p>
+  {% if is_technician %}
+  <div class="alert ok">برای نقش تکنسین فقط «موجودی روزانه سایت» فعال است — مطابق ربات.</div>
+  {% endif %}
+  <div class="grid-links">
+    <a href="/stock">📦 موجودی روزانه سایت</a>
+    {% if show_materials %}
+    <a href="/materials/request">🛒 درخواست مواد</a>
+    <a href="/materials/return">↩️ برگشت به انبار</a>
+    {% else %}
+    <a class="disabled" href="#">🛒 درخواست مواد (بدون دسترسی)</a>
+    {% endif %}
+    {% if show_reports %}
+    <a href="/reports">📊 گزارش‌ها (PDF)</a>
+    {% else %}
+    <a class="disabled" href="#">📊 گزارش‌ها (بدون دسترسی)</a>
+    {% endif %}
+    {% if show_web_settings %}
+    <a href="/settings/web-login">🔐 تنظیم ورود وب</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
