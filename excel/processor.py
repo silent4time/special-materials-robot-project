@@ -677,15 +677,28 @@ def merge_clean_frames(
 
 
 def write_clean_excel(df: pd.DataFrame, path: Path | str, file_type: str) -> None:
-    """Persist a cleaned extract with the user-facing sheet title."""
+    """Persist a cleaned extract with the user-facing sheet title.
+
+    For tables that carry product_name / usage_location, apply shared
+    auto-size, wrap, and location coloring (see excel.table_style).
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    sheet = clean_excel_sheet_name(file_type)
     df.to_excel(
         path,
         index=False,
         engine="openpyxl",
-        sheet_name=clean_excel_sheet_name(file_type),
+        sheet_name=sheet,
     )
+    cols = {str(c) for c in (df.columns if df is not None else [])}
+    if cols & {"product_name", "usage_location", "material_name"}:
+        try:
+            from excel.table_style import style_workbook_path
+
+            style_workbook_path(path, sheet_name=sheet)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def extract_and_save_clean(

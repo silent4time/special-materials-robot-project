@@ -97,6 +97,7 @@ def _write_table_sheet(
         cell.alignment = center
     row_idx += 1
 
+    header_row_idx = row_idx - 1  # last written header row
     for row in rows:
         for c_i, col in enumerate(columns, start=1):
             cell = ws.cell(
@@ -107,11 +108,10 @@ def _write_table_sheet(
             cell.alignment = center
         row_idx += 1
 
-    # Reasonable column widths
-    for c_i, col in enumerate(columns, start=1):
-        label = _header_label(col, header_map)
-        width = max(10, min(40, len(label) + 4))
-        ws.column_dimensions[get_column_letter(c_i)].width = width
+    # Shared auto-size / wrap / usage_location coloring
+    from excel.table_style import apply_product_table_style
+
+    apply_product_table_style(ws, header_row=header_row_idx)
 
 
 def generate_simple_report_xlsx(
@@ -345,4 +345,7 @@ def export_dataframe_xlsx(
     work = work.rename(columns=rename)
     safe = _safe_sheet_title(sheet_name)
     work.to_excel(out, index=False, engine="openpyxl", sheet_name=safe)
+    from excel.table_style import style_workbook_path
+
+    style_workbook_path(out, sheet_name=safe)
     return out

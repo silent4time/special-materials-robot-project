@@ -45,7 +45,20 @@ FIELD_LABELS_FA: dict[str, str] = {
 }
 
 # Short labels preferred for محل استفاده (work_order / tundish derived)
-_LOCATION_ORDER = ("اسلب", "بلوم", "بیلت", "سایر نواحی")
+_LOCATION_ORDER = ("اسلب", "بلوم", "بیلت", "سطح ریخته‌گری", "سایر نواحی")
+
+# Shroud / ladle shroud → casting-floor label (not tundish اسلب/بلوم/بیلت)
+SHROUD_LOCATION_LABEL = "سطح ریخته‌گری"
+_SHROUD_NEEDLES = ("shroud", "شرود")
+
+
+def _is_shroud_name(value: object) -> bool:
+    """True when product/material name mentions shroud / شرود (case-insensitive)."""
+    text = _cell_str(value)
+    if not text:
+        return False
+    folded = text.casefold()
+    return any(needle.casefold() in folded or needle in text for needle in _SHROUD_NEEDLES)
 
 
 def _norm_id(value: object) -> str:
@@ -64,15 +77,30 @@ def location_label_from_consumption_row(row: Mapping[str, Any] | pd.Series) -> s
     """Pick the best محل استفاده label from a monthly/consumption row.
 
     Preference:
+      0. material/product name contains shroud/شرود → سطح ریخته‌گری
       1. work_order → اسلب / بلوم / بیلت / سایر نواحی
       2. tundish_type (strip «تاندیش » / map known labels)
       3. non-numeric domain text (skip bare category codes)
     """
-    group = group_for_work_order(row.get("work_order") if hasattr(row, "get") else row["work_order"] if "work_order" in row else None)
+    get = row.get if hasattr(row, "get") else None
+
+    def _get(key: str):
+        if get is not None:
+            return get(key)
+        try:
+            return row[key]
+        except Exception:  # noqa: BLE001
+            return None
+
+    name = _get("material_name") or _get("product_name")
+    if _is_shroud_name(name):
+        return SHROUD_LOCATION_LABEL
+
+    group = group_for_work_order(_get("work_order"))
     if group:
         return GROUP_LABELS_FA.get(group) or group
 
-    tt = row.get("tundish_type") if hasattr(row, "get") else None
+    tt = _get("tundish_type")
     if not _is_blank(tt):
         text = _cell_str(tt)
         # Exact canonical «تاندیش اسلب» etc.
@@ -85,7 +113,7 @@ def location_label_from_consumption_row(row: Mapping[str, Any] | pd.Series) -> s
             text = text[len("تاندیش ") :].strip()
         return text or None
 
-    domain = row.get("domain") if hasattr(row, "get") else None
+    domain = _get("domain")
     if not _is_blank(domain):
         d = _cell_str(domain)
         # Skip 4-digit category codes used as plant domain placeholders
@@ -100,7 +128,7 @@ def location_label_from_consumption_row(row: Mapping[str, Any] | pd.Series) -> s
 def build_usage_location_map(monthly_df: pd.DataFrame | None) -> dict[str, str]:
     """Map item id → unique usage locations joined with «، ».
 
-    Order: اسلب، بلوم، بیلت، سایر نواحی، then any leftover labels alphabetically.
+    Order: اسلب، بلوم، بیلت، سطح ریخته‌گری، سایر نواحی، then leftovers; shroud alone wins.
     """
     if monthly_df is None or monthly_df.empty or "id" not in monthly_df.columns:
         return {}
@@ -121,6 +149,10 @@ def build_usage_location_map(monthly_df: pd.DataFrame | None) -> dict[str, str]:
 
     out: dict[str, str] = {}
     for iid, labels in buckets.items():
+        # Shroud wins alone — never keep tundish اسلب/بلوم/بیلت alongside it
+        if SHROUD_LOCATION_LABEL in labels:
+            out[iid] = SHROUD_LOCATION_LABEL
+            continue
         ordered = [lab for lab in _LOCATION_ORDER if lab in labels]
         rest = sorted(lab for lab in labels if lab not in _LOCATION_ORDER)
         out[iid] = "، ".join([*ordered, *rest])
@@ -318,17 +350,36 @@ def apply_usage_locations(
     out = ensure_inventory_columns(inv_df)
     if not location_map:
         return out, 0
+    norm_map = {_norm_id(k): v for k, v in location_map.items() if _norm_id(k)}
+    if not norm_map:
+        return out, 0
     updated = 0
     for idx, row in out.iterrows():
         iid = _norm_id(row.get("id"))
-        if not iid or iid not in location_map:
+        if not iid or iid not in norm_map:
             continue
-        new_val = location_map[iid]
+        new_val = norm_map[iid]
         old_val = _cell_str(row.get("usage_location"))
         if only_blank and old_val:
             continue
         if old_val != new_val:
             out.at[idx, "usage_location"] = new_val
+            updated += 1
+    return out, updated
+
+
+def force_shroud_usage_locations(inv_df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Force usage_location=سطح ریخته‌گری for rows whose product_name is shroud."""
+    out = ensure_inventory_columns(inv_df)
+    if out.empty or "product_name" not in out.columns:
+        return out, 0
+    updated = 0
+    for idx, row in out.iterrows():
+        if not _is_shroud_name(row.get("product_name")):
+            continue
+        old_val = _cell_str(row.get("usage_location"))
+        if old_val != SHROUD_LOCATION_LABEL:
+            out.at[idx, "usage_location"] = SHROUD_LOCATION_LABEL
             updated += 1
     return out, updated
 
@@ -341,12 +392,24 @@ def sync_usage_from_monthly(
 ) -> dict[str, Any]:
     """Merge usage_location onto matching ids in latest منبع اصلی (qty untouched)."""
     loc_map = build_usage_location_map(monthly_df)
-    if not loc_map:
-        return {"ok": True, "updated": 0, "mapped": 0, "reason": "no_locations"}
     inv = load_primary_frame(db, bale_user_id=bale_user_id)
     if inv is None or inv.empty:
-        return {"ok": False, "updated": 0, "mapped": len(loc_map), "reason": "no_inventory"}
-    new_inv, updated = apply_usage_locations(inv, loc_map, only_blank=False)
+        return {
+            "ok": False,
+            "updated": 0,
+            "mapped": len(loc_map),
+            "reason": "no_inventory",
+        }
+    updated = 0
+    new_inv = inv
+    if loc_map:
+        new_inv, updated = apply_usage_locations(inv, loc_map, only_blank=False)
+    # Always re-force shroud from product_name so monthly sync cannot overwrite
+    # shroud rows back to tundish اسلب/بلوم/بیلت.
+    new_inv, shroud_n = force_shroud_usage_locations(new_inv)
+    updated += shroud_n
+    if not loc_map and shroud_n == 0:
+        return {"ok": True, "updated": 0, "mapped": 0, "reason": "no_locations"}
     if updated:
         path = persist_primary_frame(db, new_inv, bale_user_id=bale_user_id)
     else:
@@ -355,6 +418,7 @@ def sync_usage_from_monthly(
         "ok": True,
         "updated": updated,
         "mapped": len(loc_map),
+        "shroud_forced": shroud_n,
         "path": str(path) if path else None,
     }
 
