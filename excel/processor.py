@@ -54,6 +54,8 @@ COLUMN_ALIASES = {
         "کد دسته‌بندی",
         "کد_دسته_بندی",
         "کد دسته",
+        "کد ساختار",  # plant warehouse export (موجودی انبار)
+        "کد_ساختار",
     ],
     "item_code_desc": [
         "item_code_desc",
