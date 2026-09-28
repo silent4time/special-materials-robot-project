@@ -23,6 +23,8 @@ CRITICAL_DAYS = float(os.getenv("CRITICAL_DAYS", "3"))
 # Surplus: days_of_cover above this threshold (also max(CRITICAL_DAYS*3, 10))
 SURPLUS_COVER_DAYS = float(os.getenv("SURPLUS_COVER_DAYS", "10"))
 SURPLUS_FORECAST_DAYS = float(os.getenv("SURPLUS_FORECAST_DAYS", "30"))
+# Bale group chat_id for auto site-stock reports (negative id). DB setting overrides this.
+SITE_STOCK_REPORT_GROUP_ID = os.getenv("SITE_STOCK_REPORT_GROUP_ID", "").strip()
 BALE_API_BASE = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}" if BALE_BOT_TOKEN else ""
 
 # Web dashboard (separate process; does not require BALE_BOT_TOKEN)

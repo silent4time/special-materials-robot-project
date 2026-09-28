@@ -459,6 +459,58 @@ def _test_user_activity_log() -> None:
     line = format_activity_line("نصراله ولی‌زاده", "1644670601", "report_monthly_summary")
     assert "نصراله" in line and "1644670601" in line and "خلاصه مصرف ماهیانه" in line
     assert "اسلب" in format_activity_line("x", 1, "site_stock_saved", tundish_group="slab")
+    assert "settings_stock_group" in ACTION_PHRASES
+
+    # site-stock group notify helpers (no network)
+    from services import site_stock_notify as ssn
+    assert ssn.resolve_report_group_id(db) is None or isinstance(ssn.resolve_report_group_id(db), str)
+    db.set_setting(ssn.SETTING_KEY, "-999001", updated_by="998")
+    assert ssn.resolve_report_group_id(db) == "-999001"
+    msg = ssn.build_site_stock_report_text(
+        registrar_name="تست کاربر",
+        tundish_group="slab",
+        entry_date=db.tehran_today(),
+        saved=2,
+        items_total=5,
+        values={"A": 1.5, "B": 2},
+        id_to_item={"A": {"id": "A", "name_desc": "قلم آ"}, "B": {"id": "B", "name_desc": "قلم ب"}},
+    )
+    assert "موجودی روزانه سایت" in msg
+    assert "اسلب" in msg
+    assert "تست کاربر" in msg
+    assert "قلم آ" in msg
+    # notify without client / with fake client that records
+    class _FakeClient:
+        def __init__(self):
+            self.sent = []
+        def send_message(self, chat_id, text, **kwargs):
+            self.sent.append(("msg", chat_id, text))
+            return {}
+        def send_document(self, chat_id, path, caption=None):
+            self.sent.append(("doc", chat_id, str(path), caption))
+            return {}
+    fake = _FakeClient()
+    assert ssn.notify_site_stock_saved(
+        fake, db,
+        registrar_name="تست",
+        tundish_group="bloom",
+        entry_date=db.tehran_today(),
+        saved=1,
+        items_total=1,
+        values={"X": 3},
+        id_to_item={"X": {"id": "X", "name_desc": "ایکس"}},
+    )
+    assert fake.sent and fake.sent[0][0] == "msg" and fake.sent[0][1] == "-999001"
+    db.clear_setting(ssn.SETTING_KEY, updated_by="998")
+    assert ssn.notify_site_stock_saved(
+        fake, db,
+        registrar_name="تست",
+        tundish_group="bloom",
+        entry_date=db.tehran_today(),
+        saved=1,
+        items_total=1,
+        values={"X": 3},
+    ) is False
     assert "BTN_USER_ACTIVITY" in dir(kb) or hasattr(kb, "BTN_USER_ACTIVITY")
     menu = {b["text"] for row in kb.analytics_menu()["keyboard"] for b in row}
     assert kb.BTN_USER_ACTIVITY in menu
@@ -570,6 +622,10 @@ def main() -> int:
     assert kb.BTN_SET_INVITE in bot_set_menu
     assert kb.BTN_SET_WELCOME in bot_set_menu
     assert kb.BTN_SET_LOGO in bot_set_menu
+    assert kb.BTN_SET_STOCK_GROUP in bot_set_menu
+    stock_g_menu = menu_texts(kb.bot_settings_stock_group_menu())
+    assert kb.BTN_SETTINGS_VIEW in stock_g_menu
+    assert kb.BTN_SETTINGS_CLEAR_STOCK_GROUP in stock_g_menu
     item_menu = menu_texts(kb.bot_settings_item_menu(include_text=True))
     assert kb.BTN_SETTINGS_VIEW in item_menu
     assert kb.BTN_SETTINGS_EDIT_TEXT in item_menu

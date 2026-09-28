@@ -237,6 +237,14 @@ python scripts/make_samples.py
 
 نمونه Excel قدیمی `01_tank_consumption.xlsx` هنوز برای تحلیل مصرف تاریخی/آفلاین موجود است؛ مسیر UI تکنسین دیگر آپلود آن نیست.
 
+
+پس از ثبت موفق، در صورت تنظیم گروه گزارش، خلاصه به گروه بله ارسال می‌شود:
+
+1. ربات را به گروه اضافه کنید و `/set_stock_group` بفرستید (مالک/مدیر)، یا
+2. `SITE_STOCK_REPORT_GROUP_ID` در `.env`، یا از «تنظیمات ربات» → «گروه گزارش موجودی روزانه».
+
+بدون شناسه، ثبت موجودی بدون خطا ادامه می‌یابد.
+
 ### مصرف ماهیانه مواد
 
 `domain`, `tundish_type`, `assignee_id`, `assignee_name`, `material_name`, `month`, `quantity`, `unit`, `status`, `notes`

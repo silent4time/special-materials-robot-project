@@ -1,13 +1,18 @@
 """Site stock entry — all active roles (incl. technician), same DB as bot."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Form, Request
 
 from bot.activity import log_activity
 from config import SITE_STOCK_GROUP_KEYS, SITE_STOCK_GROUPS
 from db.models import Database
+from services import site_stock_notify
 from web.deps import current_user, get_db
 from web.templating import render
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stock", tags=["stock"])
 
@@ -76,6 +81,8 @@ async def stock_save(
     form = await request.form()
     saved = 0
     errors: list[str] = []
+    values: dict[str, float] = {}
+    id_to_item = {str(it["id"]): it for it in items}
     for it in items:
         iid = str(it["id"])
         raw = form.get(f"qty_{iid}")
@@ -96,11 +103,35 @@ async def stock_save(
                 actor_display_name=user.get("display_name"),
                 entry_date=day,
             )
+            values[iid] = qty
             saved += 1
         except (ValueError, KeyError) as exc:
             errors.append(f"{it.get('name_desc') or iid}: {exc}")
     if saved:
         log_activity(db, user, "site_stock_saved", tundish_group=g)
+        # Best-effort Bale group notify (same rules as bot; skip if no token/group)
+        try:
+            from bot.bale_api import BaleClient
+            from config import BALE_BOT_TOKEN
+
+            if BALE_BOT_TOKEN.strip() and site_stock_notify.resolve_report_group_id(db):
+                client = BaleClient()
+                try:
+                    site_stock_notify.notify_site_stock_saved(
+                        client,
+                        db,
+                        registrar_name=user.get("display_name") or "کاربر وب",
+                        tundish_group=g,
+                        entry_date=day,
+                        saved=saved,
+                        items_total=len(items),
+                        values=values,
+                        id_to_item=id_to_item,
+                    )
+                finally:
+                    client.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("web site-stock group notify failed")
     existing = {
         e["item_id"]: e
         for e in db.list_site_stock_entries(entry_date=day, tundish_group=g)

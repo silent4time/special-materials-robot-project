@@ -66,9 +66,10 @@ from bot.settings_text import (
     format_invite_text,
     format_welcome_text,
 )
-from config import ASSISTANT_ENABLED, BOT_ASSETS_DIR, BOT_USERNAME, CRITICAL_DAYS, FILE_TYPES, REPORT_DIR, ROLES, SITE_STOCK_GROUPS, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
+from config import ASSISTANT_ENABLED, BOT_ASSETS_DIR, BOT_USERNAME, CRITICAL_DAYS, FILE_TYPES, REPORT_DIR, ROLES, SITE_STOCK_GROUPS, SITE_STOCK_REPORT_GROUP_ID, SURPLUS_COVER_DAYS, SURPLUS_FORECAST_DAYS, UPLOAD_DIR, ensure_dirs
 from db.models import Database
 from services import main_source as main_source_svc
+from services import site_stock_notify
 from excel.inbound import (
     compute_inbound_delta,
 )
@@ -154,6 +155,8 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • متن دعوت‌نامه کاربران (قالب + تصویر اختیاری)
 • پیام خوشامدگویی (قالب + تصویر اختیاری)
 • لوگوی ربات (تصویر برندینگ؛ در خوشامدگویی نمایش داده می‌شود)
+• گروه گزارش موجودی روزانه — پس از ثبت موجودی سایت، خلاصه به گروه بله ارسال می‌شود
+  (در گروه: /set_stock_group ؛ یا متغیر محیطی SITE_STOCK_REPORT_GROUP_ID)
 
 /reset — پاک کردن جلسه آپلود و وضعیت ورود جاری
 """.format(
@@ -630,6 +633,82 @@ class BotApp:
             "شما در سیستم ثبت نشده‌اید.\n"
             "از مدیر بخواهید از منوی «کاربران → اضافه کردن کاربر» لینک دعوت برایتان بفرستد.",
         )
+
+
+    @staticmethod
+    def _is_group_chat(message: dict) -> bool:
+        """True for Bale/Telegram group or supergroup chats."""
+        chat = (message or {}).get("chat") or {}
+        ctype = str(chat.get("type") or "").lower()
+        if ctype in {"group", "supergroup"}:
+            return True
+        cid = chat.get("id")
+        try:
+            return int(cid) < 0
+        except (TypeError, ValueError):
+            return False
+
+    def cmd_set_stock_group(self, message: dict) -> None:
+        """Owner/manager: bind current group chat_id for site-stock reports."""
+        user = ensure_registered(self.db, self._uid(message), self._display_name(message))
+        if not user:
+            self._reply(message, "شما در سیستم ثبت نشده‌اید.")
+            return
+        if not require_manager(user):
+            self._reply(message, "فقط مالک یا مدیر می‌تواند گروه گزارش موجودی را تنظیم کند.")
+            return
+        if not self._is_group_chat(message):
+            self._reply(
+                message,
+                "این دستور را داخل گروهی بفرستید که ربات عضو آن است.\n"
+                "ربات همان chat_id را به‌عنوان «گروه گزارش موجودی روزانه» ذخیره می‌کند.\n"
+                "جایگزین: متغیر محیطی SITE_STOCK_REPORT_GROUP_ID یا منوی تنظیمات ربات.",
+                kb.main_menu(user),
+            )
+            return
+        chat = message.get("chat") or {}
+        chat_id = chat.get("id")
+        if chat_id is None:
+            self._reply(message, "شناسه گروه خوانده نشد.")
+            return
+        self.db.set_setting(
+            site_stock_notify.SETTING_KEY,
+            str(chat_id),
+            updated_by=user["bale_user_id"],
+        )
+        log_activity(self.db, user, "settings_stock_group")
+        title = (chat.get("title") or "").strip()
+        title_bit = f" «{title}»" if title else ""
+        self._reply(
+            message,
+            f"✅ گروه گزارش موجودی روزانه تنظیم شد{title_bit}.\n"
+            f"chat_id: `{chat_id}`\n"
+            "از این پس با ثبت موفق «موجودی روزانه سایت»، خلاصه به این گروه ارسال می‌شود.",
+        )
+
+    def on_my_chat_member(self, mcm: dict) -> None:
+        """Log when bot joins a group so managers can /set_stock_group."""
+        chat = (mcm or {}).get("chat") or {}
+        new = (mcm or {}).get("new_chat_member") or {}
+        status = str(new.get("status") or "").lower()
+        chat_id = chat.get("id")
+        title = (chat.get("title") or "").strip()
+        ctype = chat.get("type")
+        if status in {"member", "administrator", "creator"} and chat_id is not None:
+            logger.info(
+                "Bot joined chat id=%s title=%r type=%s — owner/manager: /set_stock_group",
+                chat_id,
+                title,
+                ctype,
+            )
+        elif status in {"left", "kicked"} and chat_id is not None:
+            current = site_stock_notify.resolve_report_group_id(self.db)
+            logger.info(
+                "Bot left/removed from chat id=%s title=%r (configured_report_group=%s)",
+                chat_id,
+                title,
+                current,
+            )
 
     def cmd_help(self, message: dict) -> None:
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))
@@ -3617,6 +3696,7 @@ class BotApp:
         err_block = ""
         if errors:
             err_block = "\n\nخطاها:\n" + "\n".join(f"• {e}" for e in errors)
+        attachment: Path | None = None
         # Long item lists → PDF table; short lists stay as interactive text bullets
         if values and len(values) > 8:
             pdf_rows = []
@@ -3629,7 +3709,7 @@ class BotApp:
                         "مقدار": f"{float(qty):g}",
                     }
                 )
-            self._send_simple_pdf_report(
+            attachment = self._send_simple_pdf_report(
                 message,
                 title=f"ثبت موجودی سایت — {label}",
                 subtitle=f"تاریخ {format_date(day)} — {saved} از {len(items)} قلم",
@@ -3641,19 +3721,59 @@ class BotApp:
                 reply_ok=f"{header}{err_block}\n\nجدول اقلام در PDF.\n{stamp}",
                 reply_markup=kb.site_stock_menu(),
             )
-            return
-        lines = [header, ""]
-        if values:
-            for iid, qty in values.items():
-                name = kb.item_display_name(id_to_item.get(iid) or {"id": iid, "name_desc": iid})
-                lines.append(f"• {name}: {float(qty):g}")
         else:
-            lines.append("(هیچ مقداری ثبت نشد)")
-        if err_block:
-            lines.append(err_block.strip())
-        lines.append("")
-        lines.append(stamp)
-        self._reply(message, "\n".join(lines), kb.site_stock_menu())
+            lines = [header, ""]
+            if values:
+                for iid, qty in values.items():
+                    name = kb.item_display_name(id_to_item.get(iid) or {"id": iid, "name_desc": iid})
+                    lines.append(f"• {name}: {float(qty):g}")
+            else:
+                lines.append("(هیچ مقداری ثبت نشد)")
+            if err_block:
+                lines.append(err_block.strip())
+            lines.append("")
+            lines.append(stamp)
+            self._reply(message, "\n".join(lines), kb.site_stock_menu())
+        # Auto-post to configured Bale group (never breaks submit flow)
+        self._notify_site_stock_group(
+            user=user,
+            group=group,
+            day=day,
+            saved=saved,
+            items_total=len(items),
+            values=values,
+            id_to_item=id_to_item,
+            attachment_path=attachment,
+        )
+
+    def _notify_site_stock_group(
+        self,
+        *,
+        user: dict,
+        group: str,
+        day: str,
+        saved: int,
+        items_total: int,
+        values: dict,
+        id_to_item: dict,
+        attachment_path: Path | None = None,
+    ) -> None:
+        """Best-effort post to the site-stock report group after confirm."""
+        try:
+            site_stock_notify.notify_site_stock_saved(
+                self.client,
+                self.db,
+                registrar_name=self._actor_full_name(user),
+                tundish_group=group,
+                entry_date=day,
+                saved=saved,
+                items_total=items_total,
+                values=values,
+                id_to_item=id_to_item,
+                attachment_path=attachment_path,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("site-stock group notify wrapper failed")
 
     def handle_callback_query(self, cq: dict) -> None:
         """Dispatch inline-button callbacks (site-stock editor)."""
@@ -4028,6 +4148,8 @@ class BotApp:
     def _settings_item_menu(self, which: str) -> dict:
         if which == "letterhead":
             return kb.bot_settings_letterhead_menu()
+        if which == "stock_group":
+            return kb.bot_settings_stock_group_menu()
         return kb.bot_settings_item_menu(include_text=(which not in {"logo", "letterhead"}))
 
     def _image_status_line(self, key: str) -> str:
@@ -4058,6 +4180,7 @@ class BotApp:
             "welcome": "پیام خوشامدگویی",
             "logo": "لوگوی ربات",
             "letterhead": "سربرگ PDF گزارش‌ها",
+            "stock_group": "گروه گزارش موجودی روزانه",
         }
         hint = ""
         if which == "invite":
@@ -4068,6 +4191,25 @@ class BotApp:
             hint = (
                 "\n\nسربرگ اختیاری است. اگر آپلود شود، همه گزارش‌های PDF "
                 "روی این سربرگ (پس‌زمینه هر صفحه) تولید می‌شوند."
+            )
+        elif which == "stock_group":
+            current = site_stock_notify.resolve_report_group_id(self.db)
+            cur_line = f"شناسه فعلی: {current}" if current else "شناسه فعلی: (تنظیم نشده)"
+            env_note = (
+                f"env SITE_STOCK_REPORT_GROUP_ID={SITE_STOCK_REPORT_GROUP_ID}"
+                if SITE_STOCK_REPORT_GROUP_ID
+                else "env SITE_STOCK_REPORT_GROUP_ID خالی است"
+            )
+            hint = (
+                "\n\n"
+                + cur_line
+                + "\n"
+                + env_note
+                + "\n\n"
+                "ربات را به گروه بله اضافه کنید، سپس داخل همان گروه دستور\n"
+                "/set_stock_group\n"
+                "را بفرستید (فقط مالک/مدیر). شناسه منفی گروه ذخیره می‌شود.\n"
+                "اگر گروه تنظیم نشده باشد، ثبت موجودی سایت بدون خطا ادامه می‌یابد."
             )
         self._reply(
             message,
@@ -4251,6 +4393,44 @@ class BotApp:
         )
         return True
 
+
+    def _preview_stock_group(self, message: dict, user: dict) -> None:
+        markup = self._settings_item_menu("stock_group")
+        current = site_stock_notify.resolve_report_group_id(self.db)
+        db_raw = self.db.get_setting(site_stock_notify.SETTING_KEY)
+        lines = [
+            "📣 گروه گزارش موجودی روزانه",
+            "",
+            f"شناسه فعال: {current or '(تنظیم نشده)'}",
+            f"مقدار ذخیره‌شده در DB: {db_raw or '(خالی)'}",
+            f"env SITE_STOCK_REPORT_GROUP_ID: {SITE_STOCK_REPORT_GROUP_ID or '(خالی)'}",
+            "",
+            "برای تنظیم: ربات را به گروه اضافه کنید و داخل گروه بفرستید:",
+            "/set_stock_group",
+            "",
+            "اولویت: مقدار DB بر env غلبه دارد. بدون شناسه، گزارش گروهی ارسال نمی‌شود.",
+        ]
+        self._reply(message, "\n".join(lines), markup)
+
+    def on_bot_settings_clear_stock_group(self, message: dict) -> None:
+        user = self._require_bot_settings_user(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self.db.clear_setting(site_stock_notify.SETTING_KEY, updated_by=uid)
+        log_activity(self.db, user, "settings_stock_group")
+        self._bot_settings_pending[uid] = {"mode": "menu", "which": "stock_group"}
+        env_bit = (
+            f"\nتوجه: env SITE_STOCK_REPORT_GROUP_ID={SITE_STOCK_REPORT_GROUP_ID} هنوز فعال است."
+            if SITE_STOCK_REPORT_GROUP_ID
+            else ""
+        )
+        self._reply(
+            message,
+            f"✅ شناسه گروه گزارش از تنظیمات ربات حذف شد.{env_bit}",
+            self._settings_item_menu("stock_group"),
+        )
+
     def on_bot_settings_view(self, message: dict) -> None:
         user = self._require_bot_settings_user(message)
         if not user:
@@ -4265,6 +4445,8 @@ class BotApp:
             self._preview_logo(message, user)
         elif which == "letterhead":
             self._preview_letterhead(message, user)
+        elif which == "stock_group":
+            self._preview_stock_group(message, user)
         else:
             self._reply(message, "ابتدا یک بخش تنظیمات را انتخاب کنید.", kb.bot_settings_menu())
 
@@ -5527,6 +5709,16 @@ class BotApp:
             return
         text = (message.get("text") or "").strip()
 
+        # Group chats: only /set_stock_group (avoid menu spam in groups)
+        if self._is_group_chat(message):
+            if text.startswith("/"):
+                parts = text.split()
+                cmd = parts[0].split("@")[0].lower()
+                if cmd == "/set_stock_group":
+                    self.cmd_set_stock_group(message)
+                # ignore other slash commands / chatter in groups
+            return
+
         # Bot-settings letterhead PDF wait — before generic document handler
         if message.get("document"):
             if self.on_bot_settings_letterhead_document(message):
@@ -5564,6 +5756,7 @@ class BotApp:
                 "/report": lambda: self.on_generate(message),
                 "/analytics": lambda: self.on_analytics_menu(message),
                 "/assistant": lambda: self.cmd_assistant(message),
+                "/set_stock_group": lambda: self.cmd_set_stock_group(message),
             }
             handler = mapping.get(cmd)
             if handler:
@@ -5692,6 +5885,12 @@ class BotApp:
             return
         if text == kb.BTN_SET_LETTERHEAD:
             self.on_bot_settings_section(message, "letterhead")
+            return
+        if text == kb.BTN_SET_STOCK_GROUP:
+            self.on_bot_settings_section(message, "stock_group")
+            return
+        if text == kb.BTN_SETTINGS_CLEAR_STOCK_GROUP:
+            self.on_bot_settings_clear_stock_group(message)
             return
         if text == kb.BTN_SETTINGS_UPLOAD_LETTERHEAD:
             self.on_bot_settings_upload_letterhead_start(message)
@@ -5940,6 +6139,8 @@ class BotApp:
         try:
             if "callback_query" in update:
                 self.handle_callback_query(update["callback_query"])
+            elif "my_chat_member" in update:
+                self.on_my_chat_member(update["my_chat_member"])
             elif "message" in update:
                 self.handle_message(update["message"])
         except Exception:  # noqa: BLE001

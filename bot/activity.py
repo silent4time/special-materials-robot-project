@@ -38,6 +38,7 @@ ACTION_PHRASES: dict[str, str] = {
     "settings_letterhead": "سربرگ PDF را تغییر داد",
     "settings_logo": "لوگوی ربات را تغییر داد",
     "settings_invite": "تنظیمات دعوت‌نامه را تغییر داد",
+    "settings_stock_group": "گروه گزارش موجودی روزانه را تغییر داد",
     "user_add": "کاربر جدید دعوت کرد",
     "user_edit": "نقش کاربر را ویرایش کرد",
     "user_delete": "کاربر را حذف (غیرفعال) کرد",

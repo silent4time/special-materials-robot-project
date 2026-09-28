@@ -1772,6 +1772,7 @@ class Database:
         "welcome_image_path",
         "logo_path",
         "letterhead_pdf",
+        "site_stock_report_group_id",
     })
 
     def get_setting(self, key: str) -> Optional[str]:
