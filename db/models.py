@@ -793,6 +793,21 @@ class Database:
             ).fetchone()
             return dict(row) if row else None
 
+    def get_extracted_before(
+        self, extract_id: int, file_type: str
+    ) -> Optional[dict[str, Any]]:
+        """Plant-wide previous extract with id strictly less than ``extract_id``."""
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM extracted_datasets
+                WHERE file_type = ? AND id < ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (str(file_type), int(extract_id)),
+            ).fetchone()
+            return dict(row) if row else None
+
     def update_extracted_clean_path(self, extract_id: int, clean_path: str) -> None:
         """Point an extract row at a preserved snapshot file (after overwrite)."""
         with self.connect() as conn:

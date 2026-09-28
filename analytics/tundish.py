@@ -668,26 +668,77 @@ def format_suggest_list_fa(suggest_df: pd.DataFrame, limit: int = 20) -> str:
 
 
 def missing_files_for_goal(goal: str, completeness: dict[str, bool]) -> list[str]:
-    """
-    Which Excel slots are required for a given analytics goal.
+    """Which data sources are required for a given analytics goal.
+
+    ``completeness`` keys: FILE_TYPES plus optional ``site_stock`` (interactive
+    daily site inventory). See ``analytics.frames.data_completeness``.
+
+    Rates (daily / forecast / suggest / remaining critical) accept tank Excel
+    **or** monthly (÷ 30). Remaining prefers interactive site stock, else
+    product_inventory / tank Excel. Suggest / surplus / full plant facts need
+    ``product_inventory`` (منبع اصلی). Period series needs tank Excel rows.
     goal: daily | period | remaining_critical | forecast | suggest | surplus | full
     """
     from config import FILE_TYPES
 
-    need_map = {
-        "daily": ["tank_consumption"],
-        "period": ["tank_consumption"],
-        "remaining_critical": ["tank_consumption", "product_inventory"],
-        "forecast": ["tank_consumption"],
-        "suggest": ["tank_consumption", "product_inventory"],
-        "surplus": ["product_inventory"],
-        "full": ["tank_consumption", "product_inventory"],
-    }
-    required = need_map.get(goal, ["tank_consumption"])
-    missing = [
-        FILE_TYPES[k]["label_fa"] for k in required if not completeness.get(k) and k in FILE_TYPES
-    ]
+    def label(k: str) -> str:
+        return FILE_TYPES[k]["label_fa"]
+
+    def has(k: str) -> bool:
+        return bool(completeness.get(k))
+
+    has_tank_excel = has("tank_consumption")
+    has_site = has("site_stock")
+    has_inv = has("product_inventory")
+    has_monthly = has("monthly_consumption")
+    has_rates = has_tank_excel or has_monthly
+    has_remaining = has_site or has_tank_excel or has_inv
+
+    missing: list[str] = []
+
+    if goal == "daily":
+        if not has_rates:
+            missing.append(f"{label('tank_consumption')} یا {label('monthly_consumption')}")
+    elif goal == "period":
+        # Dated period series needs tank Excel; monthly/site snapshot insufficient.
+        if not has_tank_excel:
+            missing.append(f"{label('tank_consumption')} (Excel تاریخی مصرف)")
+    elif goal == "forecast":
+        if not has_rates:
+            missing.append(f"{label('tank_consumption')} یا {label('monthly_consumption')}")
+    elif goal == "remaining_critical":
+        if not has_remaining:
+            missing.append(
+                f"{label('tank_consumption')} یا {label('product_inventory')}"
+            )
+        if not has_rates:
+            missing.append(
+                f"{label('tank_consumption')} یا {label('monthly_consumption')}"
+            )
+    elif goal == "suggest":
+        # Material request: canonical warehouse + consumption rates.
+        # Do NOT demand tank Excel when monthly rates exist.
+        if not has_inv:
+            missing.append(label("product_inventory"))
+        if not has_rates:
+            missing.append(
+                f"{label('tank_consumption')} یا {label('monthly_consumption')}"
+            )
+    elif goal == "surplus":
+        if not has_inv:
+            missing.append(label("product_inventory"))
+    elif goal == "full":
+        if not has_inv:
+            missing.append(label("product_inventory"))
+        if not has_rates:
+            missing.append(
+                f"{label('tank_consumption')} یا {label('monthly_consumption')}"
+            )
+    else:
+        required = ["tank_consumption"]
+        missing = [label(k) for k in required if not has(k) and k in FILE_TYPES]
     return missing
+
 
 
 def surplus_materials(

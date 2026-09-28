@@ -116,12 +116,22 @@ def build_report_context(db: Any, user: dict[str, Any] | None = None) -> str:
         uid = str((user or {}).get("bale_user_id") or "")
         if uid:
             session = db.get_or_create_session(uid)
-            done = db.session_completeness(session)
+            try:
+                from analytics.frames import data_completeness
+
+                done = data_completeness(db, user, session=session)
+            except Exception:  # noqa: BLE001
+                done = db.session_completeness(session)
             lines.append(
-                "وضعیت فایل‌های جلسه: "
+                "وضعیت داده‌ها: "
                 + "، ".join(
                     f"{k}={'✓' if done.get(k) else '✗'}"
-                    for k in ("product_inventory", "monthly_consumption", "tank_consumption")
+                    for k in (
+                        "product_inventory",
+                        "monthly_consumption",
+                        "tank_consumption",
+                        "site_stock",
+                    )
                 )
             )
 
@@ -138,8 +148,14 @@ def build_report_context(db: Any, user: dict[str, Any] | None = None) -> str:
                 from excel.inbound import compute_inbound_delta
                 from excel.processor import process_file
 
-                latest = db.get_latest_extracted(uid, "product_inventory")
-                previous = db.get_previous_extracted(uid, "product_inventory")
+                latest = db.get_latest_extracted(uid, "product_inventory") or db.get_latest_extracted_any(
+                    "product_inventory"
+                )
+                previous = None
+                if latest:
+                    previous = db.get_previous_extracted(uid, "product_inventory")
+                    if (not previous) or int(previous.get("id") or 0) >= int(latest.get("id") or 0):
+                        previous = db.get_extracted_before(int(latest["id"]), "product_inventory")
                 if latest and previous and latest.get("clean_path") and previous.get("clean_path"):
                     cur, _ = process_file(str(latest["clean_path"]), "product_inventory", user or {"role": "owner", "bale_user_id": uid})
                     prev, _ = process_file(str(previous["clean_path"]), "product_inventory", user or {"role": "owner", "bale_user_id": uid})

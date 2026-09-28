@@ -95,14 +95,28 @@ def filter_dataframe_for_user(df: pd.DataFrame, user: dict[str, Any]) -> pd.Data
 
 
 def can_generate_report(user: dict, session: dict, completeness: dict[str, bool]) -> tuple[bool, str]:
-    """
-    Owner/manager need all three files.
-    Officer/technician can generate with all three as well (filtered view).
+    """Allow کلی مواد when canonical منبع اصلی + a rates source exist.
+
+    ``completeness`` from ``analytics.frames.data_completeness`` (extracts +
+    optional ``site_stock``). Tank Excel is optional when monthly consumption
+    covers rates. Interactive site stock alone does not invent rates.
     """
     if not user or not user.get("active"):
         return False, "دسترسی ندارید."
-    if not all(completeness.values()):
-        missing = [k for k, v in completeness.items() if not v]
-        names = "، ".join(FILE_TYPES[m]["label_fa"] for m in missing if m in FILE_TYPES)
-        return False, f"هنوز این فایل‌ها دریافت نشده‌اند:\n{names}"
-    return True, ""
+    has_inv = bool(completeness.get("product_inventory"))
+    has_rates = bool(
+        completeness.get("tank_consumption") or completeness.get("monthly_consumption")
+    )
+    if has_inv and has_rates:
+        return True, ""
+    missing: list[str] = []
+    if not has_inv:
+        missing.append(FILE_TYPES["product_inventory"]["label_fa"])
+    if not has_rates:
+        missing.append(
+            f"{FILE_TYPES['tank_consumption']['label_fa']} یا "
+            f"{FILE_TYPES['monthly_consumption']['label_fa']}"
+        )
+    return False, (
+        "هنوز این داده‌ها برای گزارش کلی موجود نیستند:\n" + "\n".join(missing)
+    )

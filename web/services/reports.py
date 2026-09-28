@@ -304,8 +304,11 @@ def generate_monthly_summary_files(
 
 
 def data_status(db: Database, user: dict[str, Any]) -> dict[str, Any]:
+    from web.services.data import data_completeness
+
     frames = load_frames(db, user)
     return {
-        "completeness": frames_completeness(frames),
+        "completeness": data_completeness(db, user),
+        "frames_completeness": frames_completeness(frames),
         "site_stock_date": db.get_latest_site_stock_date(),
     }

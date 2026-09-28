@@ -132,6 +132,125 @@ def frames_completeness(frames: dict[str, Optional[pd.DataFrame]]) -> dict[str, 
     return {k: v is not None and not getattr(v, "empty", True) for k, v in frames.items()}
 
 
+def has_interactive_site_stock(db: Database) -> bool:
+    """True when at least one interactive daily site-stock row exists."""
+    return bool(db.get_latest_site_stock_date())
+
+
+def resolve_extract_path(
+    db: Database,
+    file_type: str,
+    *,
+    bale_user_id: str | int | None = None,
+    session_path: str | None = None,
+) -> str | None:
+    """Newest on-disk cleaned path for any extract type.
+
+    Order for non-inventory: session (if on disk) → user latest → plant-wide.
+    For ``product_inventory`` prefer canonical latest extract over a stale session
+    slot (same rule as ``resolve_primary_inventory_path``).
+    """
+    if file_type == PRIMARY_INVENTORY_TYPE:
+        return resolve_primary_inventory_path(
+            db,
+            bale_user_id=bale_user_id,
+            session_inventory_path=session_path,
+        )
+
+    candidates: list[str] = []
+    if session_path:
+        candidates.append(str(session_path))
+    if bale_user_id is not None:
+        own = db.get_latest_extracted(bale_user_id, file_type)
+        if own and own.get("clean_path"):
+            path = str(own["clean_path"])
+            if path not in candidates:
+                candidates.append(path)
+    any_row = db.get_latest_extracted_any(file_type)
+    if any_row and any_row.get("clean_path"):
+        path = str(any_row["clean_path"])
+        if path not in candidates:
+            candidates.append(path)
+    for path in candidates:
+        if Path(path).is_file():
+            return path
+    return None
+
+
+def data_completeness(
+    db: Database,
+    user: dict[str, Any] | None = None,
+    *,
+    session: dict[str, Any] | None = None,
+) -> dict[str, bool]:
+    """DB-aware completeness for bot + web report gates.
+
+    Keys:
+      - product_inventory / monthly_consumption / tank_consumption: on-disk
+        cleaned Excel extract (own → plant-wide) or session path.
+      - site_stock: interactive ``site_stock_entries`` rows present.
+
+    Excel upload remains an optional refresh path. Interactive site stock does
+    not invent a tank Excel frame; ``missing_files_for_goal`` treats it as a
+    remaining/critical source separately.
+    """
+    uid = (user or {}).get("bale_user_id")
+    session = session or {}
+    session_cols = {
+        "tank_consumption": "tank_path",
+        "product_inventory": "inventory_path",
+        "monthly_consumption": "monthly_path",
+    }
+    out: dict[str, bool] = {}
+    for ft_key, col in session_cols.items():
+        path = resolve_extract_path(
+            db,
+            ft_key,
+            bale_user_id=uid,
+            session_path=session.get(col),
+        )
+        out[ft_key] = bool(path)
+    out["site_stock"] = has_interactive_site_stock(db)
+    return out
+
+
+def completeness_status_lines(
+    db: Database,
+    user: dict[str, Any] | None = None,
+    *,
+    session: dict[str, Any] | None = None,
+) -> list[str]:
+    """Persian status lines distinguishing Excel extract vs interactive site stock."""
+    uid = (user or {}).get("bale_user_id")
+    session = session or {}
+    marks = {True: "✅", False: "⏳"}
+    lines: list[str] = []
+    tank_path = resolve_extract_path(
+        db,
+        "tank_consumption",
+        bale_user_id=uid,
+        session_path=session.get("tank_path"),
+    )
+    site_day = db.get_latest_site_stock_date()
+    if tank_path:
+        lines.append(f"{marks[True]} {FILE_TYPES['tank_consumption']['label_fa']} (Excel)")
+    elif site_day:
+        lines.append(
+            f"{marks[True]} {FILE_TYPES['tank_consumption']['label_fa']} "
+            f"(ورود تعاملی — {site_day})"
+        )
+    else:
+        lines.append(f"{marks[False]} {FILE_TYPES['tank_consumption']['label_fa']}")
+    for ft_key in ("product_inventory", "monthly_consumption"):
+        col = "inventory_path" if ft_key == "product_inventory" else "monthly_path"
+        path = resolve_extract_path(
+            db, ft_key, bale_user_id=uid, session_path=session.get(col)
+        )
+        lines.append(f"{marks[bool(path)]} {FILE_TYPES[ft_key]['label_fa']}")
+    return lines
+
+
+
 def resolve_primary_inventory_path(
     db: Database,
     *,

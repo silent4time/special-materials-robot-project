@@ -13,6 +13,8 @@ from typing import Any
 from analytics.frames import (
     PRIMARY_INVENTORY_LABEL,
     PRIMARY_INVENTORY_TYPE,
+    completeness_status_lines,
+    data_completeness,
     load_primary_inventory,
     resolve_primary_inventory_path,
     resolve_remaining as shared_resolve_remaining,
@@ -268,21 +270,34 @@ class BotApp:
         )
         return True
 
-    def _status_text(self, session: dict) -> str:
-        done = self.db.session_completeness(session)
-        lines = ["وضعیت فایل‌های جلسه جاری:"]
-        marks = {True: "✅", False: "⏳"}
-        for key, meta in FILE_TYPES.items():
-            lines.append(f"{marks[done[key]]} {meta['label_fa']}")
+    def _status_text(self, session: dict, user: dict | None = None) -> str:
+        """DB-aware status: extracts + interactive site stock, not session slots alone."""
+        lines = ["وضعیت داده‌های موجود (پایگاه + جلسه):"]
+        lines.extend(completeness_status_lines(self.db, user, session=session))
+        done = (
+            self._effective_completeness(user, session)
+            if user
+            else self.db.session_completeness(session)
+        )
         pending = session.get("pending_file_type")
         if pending and pending in FILE_TYPES:
             lines.append(f"\nدر انتظار آپلود: {FILE_TYPES[pending]['label_fa']}")
         else:
             lines.append("\nنوع ورود اطلاعات را از دکمه‌های زیر انتخاب کنید.")
-        if all(done.values()):
-            lines.append("\nهمه فایل‌ها آماده‌اند — از «گزارش‌ها / تحلیل تاندیش» می‌توانید «گزارش کلی مواد» را بگیرید.")
-        elif done.get("tank_consumption") or done.get("product_inventory"):
-            lines.append("\nبا فایل‌های موجود می‌توانید بخشی از تحلیل تاندیش را اجرا کنید.")
+        has_inv = bool(done.get("product_inventory"))
+        has_rates = bool(done.get("tank_consumption") or done.get("monthly_consumption"))
+        if has_inv and has_rates:
+            lines.append(
+                "\nداده‌های لازم برای گزارش‌ها آماده‌اند — از «گزارش‌ها / تحلیل تاندیش» "
+                "یا «گزارش کلی مواد» استفاده کنید."
+            )
+        elif has_inv or done.get("site_stock") or done.get("monthly_consumption"):
+            lines.append("\nبا داده‌های موجود می‌توانید بخشی از گزارش‌ها را اجرا کنید.")
+        else:
+            lines.append(
+                "\nهنوز دادهٔ کافی نیست — منبع اصلی / مصرف ماهیانه را آپلود کنید "
+                "یا موجودی روزانه سایت را تعاملی وارد کنید."
+            )
         return "\n".join(lines)
 
     def _session_paths(self, session: dict) -> dict[str, str | None]:
@@ -336,8 +351,8 @@ class BotApp:
         return resolved
 
     def _effective_completeness(self, user: dict, session: dict) -> dict[str, bool]:
-        """Like session_completeness, but treats on-disk latest extracts as present."""
-        return {k: bool(v) for k, v in self._resolved_file_paths(user, session).items()}
+        """DB-aware completeness (extracts + interactive site stock)."""
+        return data_completeness(self.db, user, session=session)
 
     def _load_frames(self, user: dict, session: dict) -> tuple[dict, dict]:
         paths = self._resolved_file_paths(user, session)
@@ -494,9 +509,10 @@ class BotApp:
         if missing:
             self._reply(
                 message,
-                "برای این گزارش این فایل(ها) لازم است:\n• "
+                "برای این گزارش این داده(ها) لازم است:\n• "
                 + "\n• ".join(missing)
-                + "\n\nابتدا از منوی اصلی نوع فایل را انتخاب و Excel را ارسال کنید.",
+                + "\n\nمنبع اصلی و مصرف ماهیانه را از «آپلود فایل» بفرستید؛ "
+                "موجودی روزانه سایت را می‌توانید تعاملی وارد کنید (Excel تکنسین لازم نیست).",
                 kb.analytics_menu(),
             )
             return None
@@ -757,9 +773,14 @@ class BotApp:
             self._clear_users_pending(uid)
             return False
 
-        if raw in (kb.BTN_BACK_USERS, kb.BTN_BACK_MAIN, kb.BTN_CANCEL_PENDING):
+        if raw in (
+            kb.BTN_BACK_USERS,
+            kb.BTN_BACK_MAIN,
+            kb.BTN_CANCEL_PENDING,
+            kb.BTN_INVITE_CANCEL,
+        ):
             self._clear_users_pending(uid)
-            if raw == kb.BTN_BACK_MAIN or raw == kb.BTN_BACK_USERS:
+            if raw == kb.BTN_BACK_MAIN:
                 self._reply(message, "منوی اصلی:", kb.main_menu(user))
             else:
                 self._reply(message, "مدیریت کاربران:", kb.users_menu())
@@ -779,16 +800,59 @@ class BotApp:
                 self._reply(message, "فقط مالک می‌تواند نقش مالک بدهد.", kb.users_menu())
                 self._clear_users_pending(uid)
                 return True
-            # responsible_officer: no scope text — same invite path as other roles
-            self._clear_users_pending(uid)
-            self._create_and_send_invite(message, user, role, None)
+            # Confirm before creating invite link (invite-link model; no target user id).
+            self._users_pending[uid] = {"mode": "add_confirm", "role": role}
+            self._reply(
+                message,
+                (
+                    f"ساخت لینک دعوت با نقش «{role_label(role)}»\n"
+                    "اعتبار لینک: ۷ روز\n\n"
+                    f"برای ساخت لینک «{kb.BTN_INVITE_CONFIRM}» را بزنید؛ "
+                    f"برای لغو «{kb.BTN_INVITE_CANCEL}»."
+                ),
+                kb.invite_confirm_menu(),
+            )
             return True
 
-        # Legacy: if an old pending add_scope somehow remains, invite without scope
+        # --- add: confirm invite creation ---
+        if mode == "add_confirm":
+            role = pending.get("role")
+            if not role:
+                self._clear_users_pending(uid)
+                self._reply(
+                    message,
+                    "نقش نامشخص بود. دوباره نقش را انتخاب کنید:",
+                    kb.users_menu(),
+                )
+                return True
+            if raw == kb.BTN_INVITE_CONFIRM:
+                self._clear_users_pending(uid)
+                self._create_and_send_invite(message, user, role, None)
+                return True
+            self._reply(
+                message,
+                (
+                    f"نقش انتخاب‌شده: «{role_label(role)}» — اعتبار ۷ روز.\n"
+                    f"«{kb.BTN_INVITE_CONFIRM}» یا «{kb.BTN_INVITE_CANCEL}» را بزنید."
+                ),
+                kb.invite_confirm_menu(),
+            )
+            return True
+
+        # Legacy: if an old pending add_scope somehow remains, ask confirm first
         if mode == "add_scope":
             role = pending.get("role") or "responsible_officer"
-            self._clear_users_pending(uid)
-            self._create_and_send_invite(message, user, role, None)
+            self._users_pending[uid] = {"mode": "add_confirm", "role": role}
+            self._reply(
+                message,
+                (
+                    f"ساخت لینک دعوت با نقش «{role_label(role)}»\n"
+                    "اعتبار لینک: ۷ روز\n\n"
+                    f"برای ساخت لینک «{kb.BTN_INVITE_CONFIRM}» را بزنید؛ "
+                    f"برای لغو «{kb.BTN_INVITE_CANCEL}»."
+                ),
+                kb.invite_confirm_menu(),
+            )
             return True
 
         # --- edit: pick user id ---
@@ -1069,7 +1133,7 @@ class BotApp:
             menu = kb.main_source_file_menu()
         else:
             menu = self._keyboard_for_upload_return(user, default="main")
-        self._reply(message, "عملیات لغو شد.\n" + self._status_text(session), menu)
+        self._reply(message, "عملیات لغو شد.\n" + self._status_text(session, user), menu)
 
     def on_status(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -1082,7 +1146,7 @@ class BotApp:
             menu = kb.main_menu(user)
         else:
             menu = kb.file_entry_menu()
-        self._reply(message, self._status_text(session), menu)
+        self._reply(message, self._status_text(session, user), menu)
 
     def on_document(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -1373,7 +1437,7 @@ class BotApp:
                 f"نسخه تمیز ذخیره و در پایگاه‌داده ثبت شد.\n"
                 f"{actor_line}\n\n"
             )
-            + self._status_text(session),
+            + self._status_text(session, user),
             reply_menu,
         )
 
@@ -1384,16 +1448,22 @@ class BotApp:
         if self._deny_technician(message, user):
             return
         session = self.db.get_or_create_session(user["bale_user_id"])
-        completeness = self.db.session_completeness(session)
+        completeness = self._effective_completeness(user, session)
         ok, err = can_generate_report(user, session, completeness)
         if not ok:
-            self._reply(message, err + "\n\n" + self._status_text(session), kb.analytics_menu())
+            self._reply(
+                message,
+                err + "\n\n" + self._status_text(session, user),
+                kb.analytics_menu(),
+            )
             return
 
-        paths = self._session_paths(session)
+        paths = self._resolved_file_paths(user, session)
         self._reply(message, "در حال پردازش و ساخت PDF…")
         try:
-            frames, metas = process_session_files(paths, user)
+            frames, metas = process_session_files(
+                {k: v for k, v in paths.items() if v}, user
+            )
             analytics = self._build_analytics_bundle(frames)
             pdf_path = generate_report(frames, metas, user, analytics=analytics, letterhead_path=self._letterhead_path())
             counts = {k: int(metas[k]["visible_rows"]) for k in metas}
@@ -1978,18 +2048,29 @@ class BotApp:
         self._clear_analysis_pending(user["bale_user_id"])
         self._clear_report_assistant_pending(str(user["bale_user_id"]))
         session = self.db.get_or_create_session(user["bale_user_id"])
-        done = self.db.session_completeness(session)
+        done = self._effective_completeness(user, session)
         lines = [
             "منوی گزارش‌ها / تحلیل تاندیش",
             f"آستانه بحرانی: {CRITICAL_DAYS} روز پوشش موجودی",
             "",
-            self._status_text(session),
+            self._status_text(session, user),
             "",
             f"فیلتر نوع تاندیش: {self._selected_tundish_label(str(user['bale_user_id']))}",
             "یک گزینه را انتخاب کنید:",
         ]
-        if not any(done.values()):
-            lines.append("\nهنوز فایلی بارگذاری نشده — ابتدا Excelها را از منوی اصلی بفرستید.")
+        if not any(
+            done.get(k)
+            for k in (
+                "product_inventory",
+                "monthly_consumption",
+                "tank_consumption",
+                "site_stock",
+            )
+        ):
+            lines.append(
+                "\nهنوز داده‌ای نیست — منبع اصلی / مصرف ماهیانه را آپلود کنید "
+                "یا موجودی روزانه سایت را تعاملی وارد کنید."
+            )
         self._reply(message, "\n".join(lines), kb.analytics_menu())
 
     def on_daily_report(self, message: dict) -> None:
@@ -2026,13 +2107,22 @@ class BotApp:
         if self._deny_technician(message, user):
             return
         uid = user["bale_user_id"]
+        # Prefer caller's extracts; fall back to plant-wide DB (same as دانلود منبع اصلی).
         latest = self.db.get_latest_extracted(uid, "product_inventory")
-        previous = self.db.get_previous_extracted(uid, "product_inventory")
+        if not latest:
+            latest = self.db.get_latest_extracted_any("product_inventory")
+        previous = None
+        if latest:
+            previous = self.db.get_previous_extracted(uid, "product_inventory")
+            if (not previous) or int(previous.get("id") or 0) >= int(latest.get("id") or 0):
+                previous = self.db.get_extracted_before(
+                    int(latest["id"]), "product_inventory"
+                )
         if not latest or not latest.get("clean_path"):
             self._reply(
                 message,
-                "هیچ منبع اصلی برای مقایسه یافت نشد.\n"
-                "ابتدا از منوی «منبع اصلی» فایل اکسل را آپلود کنید.",
+                "هیچ منبع اصلی در پایگاه‌داده برای مقایسه یافت نشد.\n"
+                "ابتدا از منوی «فایل منبع اصلی» یا «موجودی انبار» فایل اکسل را آپلود کنید.",
                 kb.analytics_menu(),
             )
             return
@@ -2040,7 +2130,7 @@ class BotApp:
             self._reply(
                 message,
                 "پایه مقایسه موجود نیست.\n"
-                "این اولین موجودی ذخیره‌شده است؛ پس از آپلود موجودی بعدی "
+                "فقط یک نسخه از منبع اصلی ذخیره شده؛ پس از آپلود موجودی بعدی "
                 "می‌توانید «گزارش ورودی به انبار» را ببینید.",
                 kb.analytics_menu(),
             )
@@ -4517,9 +4607,10 @@ class BotApp:
         missing = missing_files_for_goal("suggest", completeness)
         if missing:
             return [], (
-                "برای درخواست مواد این فایل(ها) لازم است:\n• "
+                "برای درخواست مواد این داده(ها) لازم است:\n• "
                 + "\n• ".join(missing)
-                + "\n\nابتدا از منوی اصلی نوع فایل را انتخاب و Excel را ارسال کنید."
+                + "\n\nمنبع اصلی و مصرف ماهیانه را از «آپلود فایل» بفرستید "
+                "(موجودی روزانه سایتِ Excel لازم نیست اگر مصرف ماهیانه موجود باشد)."
             )
         frames, _metas = self._load_frames(user, session)
         frames = self._apply_tundish_filter(frames, str(user["bale_user_id"]))

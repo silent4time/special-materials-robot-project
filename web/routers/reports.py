@@ -10,7 +10,7 @@ from bot.activity import log_activity
 from db.models import Database
 from web.deps import get_db, require_non_technician
 from web.services import reports as report_svc
-from web.services.data import frames_completeness, load_frames
+from web.services.data import data_completeness, load_frames
 from web.templating import render
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -25,13 +25,12 @@ async def reports_page(
     user=Depends(require_non_technician),
     db: Database = Depends(get_db),
 ):
-    frames = load_frames(db, user)
     return render(
         request,
         "reports.html",
         {
             "user": user,
-            "completeness": frames_completeness(frames),
+            "completeness": data_completeness(db, user),
             "site_stock_date": db.get_latest_site_stock_date(),
             "message": request.query_params.get("msg"),
             "error": request.query_params.get("err"),

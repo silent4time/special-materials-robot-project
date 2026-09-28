@@ -581,6 +581,13 @@ def main() -> int:
     assert kb.BTN_USERS_EDIT in users_submenu
     assert kb.BTN_USERS_DELETE in users_submenu
     assert kb.BTN_USERS_LIST in users_submenu
+    # invite confirm keyboard (role pick → confirm before create)
+    conf_kb = kb.invite_confirm_menu()
+    conf_texts = [btn["text"] for row in conf_kb["keyboard"] for btn in row]
+    assert kb.BTN_INVITE_CONFIRM in conf_texts
+    assert kb.BTN_INVITE_CANCEL in conf_texts
+    assert kb.BTN_INVITE_CONFIRM == "✅ تأیید ساخت لینک"
+
     # inline URL invite button (forwardable deep link)
     inv_kb = kb.invite_url_button("https://ble.ir/nasoz_bot?start=tok123")
     assert "inline_keyboard" in inv_kb

@@ -7,8 +7,11 @@
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
   <p class="muted">
-    موجودی سایت: {{ site_stock_date or "—" }} |
-    مصرف تانک: {% if completeness.tank_consumption %}✅{% else %}⏳{% endif %} |
+    موجودی روزانه سایت:
+    {% if completeness.tank_consumption %}✅ Excel
+    {% elif completeness.site_stock or site_stock_date %}✅ تعاملی ({{ site_stock_date or "—" }})
+    {% else %}⏳{% endif %}
+    |
     منبع اصلی: {% if completeness.product_inventory %}✅{% else %}⏳{% endif %} |
     ماهیانه: {% if completeness.monthly_consumption %}✅{% else %}⏳{% endif %}
   </p>

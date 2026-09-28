@@ -18,6 +18,8 @@ BTN_USERS_EDIT = "✏️ اصلاح نقش کاربر"
 BTN_USERS_DELETE = "🗑 حذف کاربر"
 BTN_USERS_LIST = "📋 لیست کاربران"
 BTN_BACK_USERS = "⬅️ بازگشت"
+BTN_INVITE_CONFIRM = "✅ تأیید ساخت لینک"
+BTN_INVITE_CANCEL = "✖️ انصراف"
 
 # Bot settings (owner/manager)
 BTN_BOT_SETTINGS = "⚙️ تنظیمات ربات"
@@ -265,6 +267,17 @@ def users_menu() -> dict:
             [BTN_USERS_EDIT],
             [BTN_USERS_DELETE],
             [BTN_USERS_LIST],
+            [BTN_BACK_USERS],
+        ]
+    )
+
+
+def invite_confirm_menu() -> dict:
+    """Confirm/cancel before creating a role invite link."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_INVITE_CONFIRM],
+            [BTN_INVITE_CANCEL],
             [BTN_BACK_USERS],
         ]
     )
