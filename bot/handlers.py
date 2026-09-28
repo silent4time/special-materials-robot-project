@@ -112,8 +112,8 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • همگام‌سازی اقلام از آخرین استخراج منبع اصلی
 • تخصیص خودکار از ستون سفارش کار مصرف ماهیانه (اسلب/بلوم/بیلت) + تخصیص دستی
 
-انواع فایل Excel:
-• منبع اصلی — ۳ ستون: کد دسته بندی، کد و شرح کالا، موجودی
+انواع فایل Excel (زیر «آپلود فایل»):
+• موجودی انبار / فایل منبع اصلی — ۳ ستون: کد دسته بندی، کد و شرح کالا، موجودی
 • مصرف ماهیانه مواد
 
 تحلیل:
@@ -1057,12 +1057,14 @@ class BotApp:
         if not user:
             return
         uid = str(user["bale_user_id"])
-        had_main = uid in self._main_source_pending
+        had_main_source = (
+            uid in self._main_source_pending or uid in self._await_category_code
+        )
         self.db.set_pending_file_type(user["bale_user_id"], None)
         self._await_category_code.discard(uid)
         self._main_source_pending.pop(uid, None)
         session = self.db.get_or_create_session(user["bale_user_id"])
-        if had_main:
+        if had_main_source:
             self._upload_return_menu.pop(uid, None)
             menu = kb.main_source_file_menu()
         else:
@@ -1507,7 +1509,8 @@ class BotApp:
         self._reply(
             message,
             "کد دسته بندی ۴ رقمی را ارسال کنید (مثال: 1201).\n"
-            f"برای انصراف «{kb.BTN_CANCEL_PENDING}» یا بازگشت به منو را بزنید.",
+            f"برای انصراف دکمه «{kb.BTN_CANCEL_PENDING}» را بزنید "
+            f"(یا «بازگشت به منوی اصلی»).",
             kb.cancel_pending_menu(),
         )
 
@@ -1515,6 +1518,22 @@ class BotApp:
         """Handle pending category-code entry. Returns True if consumed."""
         uid = str(self._uid(message))
         if uid not in self._await_category_code:
+            return False
+        raw = kb.normalize_pending_text(text)
+        # Cancel / help / back / menu — never treat as a 4-digit code
+        if kb.is_pending_reserved_text(raw):
+            if kb.is_pending_cancel_text(raw):
+                self._await_category_code.discard(uid)
+                user = self._user_or_deny(message)
+                if user:
+                    self.db.set_pending_file_type(user["bale_user_id"], None)
+                    self._reply(
+                        message,
+                        "اضافه کردن کد دسته بندی لغو شد.",
+                        kb.main_source_file_menu(),
+                    )
+                return True
+            # help / back / reset → let later keyboard handlers run
             return False
         user = self._user_or_deny(message)
         if not user:
@@ -1524,7 +1543,7 @@ class BotApp:
             return True
         try:
             row = self.db.add_category_code(
-                text.strip(), created_by=user["bale_user_id"]
+                raw, created_by=user["bale_user_id"]
             )
         except ValueError as exc:
             self._reply(message, str(exc), kb.cancel_pending_menu())
@@ -1723,11 +1742,20 @@ class BotApp:
             return True
         if self._deny_technician(message, user) or self._deny_main_source_edit(message, user):
             return True
-        if text.strip() == kb.BTN_CANCEL_PENDING:
-            self._clear_main_source_pending(uid)
-            self.db.set_pending_file_type(user["bale_user_id"], None)
-            self._reply(message, "ویرایش منبع اصلی لغو شد.", kb.inventory_edit_menu())
-            return True
+        raw_nav = kb.normalize_pending_text(text)
+        if kb.is_pending_reserved_text(raw_nav):
+            if kb.is_pending_cancel_text(raw_nav):
+                mode = pending.get("mode") or ""
+                self._clear_main_source_pending(uid)
+                self.db.set_pending_file_type(user["bale_user_id"], None)
+                if mode == "add_fields" or str(mode).startswith("add"):
+                    msg = "اضافه کردن رکورد لغو شد."
+                else:
+                    msg = "ویرایش منبع اصلی لغو شد."
+                self._reply(message, msg, kb.inventory_edit_menu())
+                return True
+            # help / back / reset → let later keyboard handlers run
+            return False
 
         mode = pending.get("mode")
         if mode == "edit_pick_id":

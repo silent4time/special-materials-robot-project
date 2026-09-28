@@ -153,6 +153,43 @@ SITE_STOCK_RESERVED_TEXTS = frozenset(
     }
 )
 
+# Cancel / help / back labels that must NOT be parsed as category codes or record fields.
+# Includes typed aliases: prompts may quote « انصراف از آپلود» / «بازگشت به منو» without emoji.
+PENDING_CANCEL_TEXTS = frozenset(
+    {
+        BTN_CANCEL_PENDING,
+        "انصراف از آپلود",
+    }
+)
+PENDING_INPUT_RESERVED_TEXTS = frozenset(
+    {
+        BTN_CANCEL_PENDING,
+        BTN_HELP,
+        BTN_BACK_MAIN,
+        BTN_BACK_PREV,
+        BTN_BACK_UPLOAD,
+        BTN_RESET,
+        *PENDING_CANCEL_TEXTS,
+        "بازگشت به منو",
+        "بازگشت به منوی اصلی",
+        "راهنما",
+    }
+)
+
+
+def normalize_pending_text(text: str | None) -> str:
+    """Strip so prompt-quoted labels (leading space) match keyboard buttons."""
+    return (text or "").strip()
+
+
+def is_pending_cancel_text(text: str | None) -> bool:
+    return normalize_pending_text(text) in PENDING_CANCEL_TEXTS
+
+
+def is_pending_reserved_text(text: str | None) -> bool:
+    return normalize_pending_text(text) in PENDING_INPUT_RESERVED_TEXTS
+
+
 ASSIGN_GROUP_BUTTONS = {
     BTN_CATALOG_ASSIGN_SLAB: "slab",
     BTN_CATALOG_ASSIGN_BLOOM: "bloom",
