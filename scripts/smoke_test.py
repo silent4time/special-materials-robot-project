@@ -568,7 +568,96 @@ def _test_simple_report_xlsx() -> None:
 
 
 
+
+def _test_shroud_casting_labels() -> None:
+    """Shroud محل استفاده is a casting-floor label, not plain اسلب."""
+    import tempfile
+
+    from excel.table_style import USAGE_LOCATION_PALETTE, fill_for_usage_location
+    from services import main_source as ms
+
+    assert ms.SHROUD_SLAB_LABEL == "سطح ریخته‌گری اسلب"
+    assert ms.SHROUD_BLOOM_LABEL == "سطح ریخته‌گری بلوم"
+    assert ms.SHROUD_BILLET_LABEL == "سطح ریخته‌گری بیلت"
+    assert "سطح ریخته‌گری" not in ms._LOCATION_ORDER
+    for lab in ms.SHROUD_CASTING_LABELS:
+        assert lab in ms._LOCATION_ORDER
+        assert lab in USAGE_LOCATION_PALETTE
+    casting_colors = [USAGE_LOCATION_PALETTE[lab] for lab in ms.SHROUD_CASTING_LABELS]
+    assert len(set(casting_colors)) == 3
+    tundish_colors = {USAGE_LOCATION_PALETTE[k] for k in ("اسلب", "بلوم", "بیلت", "سایر نواحی", "")}
+    assert not (set(casting_colors) & tundish_colors)
+    legacy = fill_for_usage_location("سطح ریخته‌گری")
+    slab_fill = fill_for_usage_location(ms.SHROUD_SLAB_LABEL)
+    assert str(legacy.fgColor.rgb).upper().endswith(USAGE_LOCATION_PALETTE[ms.SHROUD_SLAB_LABEL])
+    assert str(slab_fill.fgColor.rgb).upper().endswith(USAGE_LOCATION_PALETTE[ms.SHROUD_SLAB_LABEL])
+    assert str(fill_for_usage_location(ms.SHROUD_BLOOM_LABEL).fgColor.rgb).upper().endswith("C6E8E3")
+    assert str(fill_for_usage_location(ms.SHROUD_BILLET_LABEL).fgColor.rgb).upper().endswith("F8D3E0")
+
+    monthly = pd.DataFrame(
+        [
+            {"id": "S1", "material_name": "LADLE SHROUD X", "work_order": "1102010000", "tundish_type": "تاندیش اسلب"},
+            {"id": "S2", "material_name": "شرود بلوم", "work_order": "1102010000", "tundish_type": "تاندیش بلوم"},
+            {"id": "S3", "material_name": "nozzle shroud", "work_order": "1102030000", "tundish_type": ""},
+            {"id": "S4", "material_name": "brick", "work_order": "1102010000", "tundish_type": "تاندیش اسلب"},
+            {"id": "S6", "material_name": "billet shroud", "work_order": "1102010000", "tundish_type": "تاندیش بیلت"},
+        ]
+    )
+    loc = ms.build_usage_location_map(monthly)
+    assert loc["s1"] == ms.SHROUD_SLAB_LABEL, loc
+    assert loc["s2"] == ms.SHROUD_BLOOM_LABEL, loc
+    assert loc["s3"] == ms.SHROUD_SLAB_LABEL, loc  # no tundish → slab, not plain بیلت
+    assert loc["s4"] == "اسلب", loc
+    assert loc["s6"] == ms.SHROUD_BILLET_LABEL, loc
+
+    inv = pd.DataFrame(
+        [
+            {"category_code": "1201", "id": "S1", "product_name": "LADLE SHROUD", "keyword": "", "usage_location": "اسلب", "quantity": 1, "priority": 1},
+            {"category_code": "1201", "id": "S2", "product_name": "SHROUD BLOOM", "keyword": "", "usage_location": ms.SHROUD_BLOOM_LABEL, "quantity": 1, "priority": 1},
+            {"category_code": "1201", "id": "S5", "product_name": "spare shroud", "keyword": "", "usage_location": "اسلب", "quantity": 2, "priority": 1},
+            {"category_code": "1201", "id": "S9", "product_name": "ladle shroud spare", "keyword": "", "usage_location": "", "quantity": 1, "priority": 1},
+            {"category_code": "1201", "id": "N1", "product_name": "brick", "keyword": "", "usage_location": "اسلب", "quantity": 4, "priority": 1},
+        ]
+    )
+    # S2 would default to slab (shroud name, no tundish) — must not overwrite bloom floor.
+    # S5 monthly name is not a shroud and work_order is slab — must not stay plain اسلب.
+    monthly2 = pd.DataFrame(
+        [
+            {"id": "S1", "material_name": "LADLE SHROUD", "work_order": "1102010000", "tundish_type": "تاندیش اسلب"},
+            {"id": "S2", "material_name": "SHROUD BLOOM", "work_order": "1102010000", "tundish_type": ""},
+            {"id": "S5", "material_name": "brick lookalike", "work_order": "1102010000", "tundish_type": "تاندیش اسلب"},
+            {"id": "N1", "material_name": "brick", "work_order": "1102010000", "tundish_type": "تاندیش اسلب"},
+        ]
+    )
+    tmp = Path(tempfile.mkdtemp(prefix="shroud-smoke-"))
+    db = Database(tmp / "smoke.db")
+    old_upload = ms.UPLOAD_DIR
+    ms.UPLOAD_DIR = tmp / "uploads"
+    try:
+        ms.persist_primary_frame(db, inv, bale_user_id="4242")
+        result = ms.sync_usage_from_monthly(db, monthly2, bale_user_id="4242")
+        assert result.get("ok"), result
+        loaded = ms.load_primary_frame(db, bale_user_id="4242")
+    finally:
+        ms.UPLOAD_DIR = old_upload
+
+    def loc_of(df, item_id):
+        hit = df.loc[df["id"].astype(str) == item_id, "usage_location"]
+        assert len(hit) == 1, item_id
+        return str(hit.iloc[0])
+
+    assert loc_of(loaded, "S1") == ms.SHROUD_SLAB_LABEL
+    assert loc_of(loaded, "S2") == ms.SHROUD_BLOOM_LABEL
+    assert loc_of(loaded, "S5") == ms.SHROUD_SLAB_LABEL
+    assert loc_of(loaded, "S9") == ms.SHROUD_SLAB_LABEL
+    assert loc_of(loaded, "N1") == "اسلب"
+    assert int((loaded["usage_location"] == ms.SHROUD_BLOOM_LABEL).sum()) == 1
+    assert int((loaded["usage_location"] == ms.SHROUD_BILLET_LABEL).sum()) == 0
+    print("shroud casting labels OK", result.get("updated"), result.get("shroud_forced"))
+
+
 def main() -> int:
+    _test_shroud_casting_labels()
     make_samples()
     _test_simple_report_xlsx()
     _test_inbound_delta()

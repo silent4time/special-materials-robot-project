@@ -44,12 +44,36 @@ FIELD_LABELS_FA: dict[str, str] = {
     "priority": "اولویت",
 }
 
-# Short labels preferred for محل استفاده (work_order / tundish derived)
-_LOCATION_ORDER = ("اسلب", "بلوم", "بیلت", "سطح ریخته‌گری", "سایر نواحی")
+# Short labels preferred for محل استفاده (work_order / tundish derived).
+# Casting-floor shroud labels are distinct from tundish اسلب/بلوم/بیلت.
+SHROUD_SLAB_LABEL = "سطح ریخته‌گری اسلب"
+SHROUD_BLOOM_LABEL = "سطح ریخته‌گری بلوم"
+SHROUD_BILLET_LABEL = "سطح ریخته‌گری بیلت"
+SHROUD_CASTING_LABELS = (
+    SHROUD_SLAB_LABEL,
+    SHROUD_BLOOM_LABEL,
+    SHROUD_BILLET_LABEL,
+)
+# Default shroud label (these plant items are slab). Kept name for callers.
+SHROUD_LOCATION_LABEL = SHROUD_SLAB_LABEL
+# Previous single label — upgraded to the slab casting-floor label, never written again.
+LEGACY_SHROUD_LOCATION_LABEL = "سطح ریخته‌گری"
+_SHROUD_BLOOM_BILLET_LABELS = frozenset({SHROUD_BLOOM_LABEL, SHROUD_BILLET_LABEL})
 
-# Shroud / ladle shroud → casting-floor label (not tundish اسلب/بلوم/بیلت)
-SHROUD_LOCATION_LABEL = "سطح ریخته‌گری"
+_LOCATION_ORDER = (
+    "اسلب",
+    "بلوم",
+    "بیلت",
+    *SHROUD_CASTING_LABELS,
+    "سایر نواحی",
+)
+
 _SHROUD_NEEDLES = ("shroud", "شرود")
+_SHROUD_GROUP_BY_TUNDISH = {
+    "slab": SHROUD_SLAB_LABEL,
+    "bloom": SHROUD_BLOOM_LABEL,
+    "billet": SHROUD_BILLET_LABEL,
+}
 
 
 def _is_shroud_name(value: object) -> bool:
@@ -73,11 +97,46 @@ def _cell_str(value: object) -> str:
     return " ".join(text.split())
 
 
+def _group_from_tundish_text(value: object) -> str | None:
+    """slab/bloom/billet when tundish text names exactly one group, else None."""
+    if _is_blank(value):
+        return None
+    text = _cell_str(value)
+    if not text:
+        return None
+    folded = text.casefold()
+    hits: list[str] = []
+    if "بلوم" in text or "bloom" in folded:
+        hits.append("bloom")
+    if "بیلت" in text or "billet" in folded:
+        hits.append("billet")
+    if "اسلب" in text or "slab" in folded:
+        hits.append("slab")
+    if len(hits) == 1:
+        return hits[0]
+    return None
+
+
+def shroud_location_label(name: object, tundish_type: object = None) -> str | None:
+    """Casting-floor label for a shroud name, or None if the name is not a shroud.
+
+    Bloom/billet only when tundish type says so. Otherwise «سطح ریخته‌گری اسلب»
+    (current shroud items are slab). Never returns plain اسلب/بلوم/بیلت.
+    """
+    if not _is_shroud_name(name):
+        return None
+    group = _group_from_tundish_text(tundish_type)
+    if group in _SHROUD_GROUP_BY_TUNDISH:
+        return _SHROUD_GROUP_BY_TUNDISH[group]
+    return SHROUD_SLAB_LABEL
+
+
 def location_label_from_consumption_row(row: Mapping[str, Any] | pd.Series) -> str | None:
     """Pick the best محل استفاده label from a monthly/consumption row.
 
     Preference:
-      0. material/product name contains shroud/شرود → سطح ریخته‌گری
+      0. material/product name contains shroud/شرود → سطح ریخته‌گری اسلب,
+         or بلوم/بیلت casting-floor label when tundish type says so
       1. work_order → اسلب / بلوم / بیلت / سایر نواحی
       2. tundish_type (strip «تاندیش » / map known labels)
       3. non-numeric domain text (skip bare category codes)
@@ -93,8 +152,9 @@ def location_label_from_consumption_row(row: Mapping[str, Any] | pd.Series) -> s
             return None
 
     name = _get("material_name") or _get("product_name")
-    if _is_shroud_name(name):
-        return SHROUD_LOCATION_LABEL
+    shroud_label = shroud_location_label(name, _get("tundish_type"))
+    if shroud_label:
+        return shroud_label
 
     group = group_for_work_order(_get("work_order"))
     if group:
@@ -128,7 +188,8 @@ def location_label_from_consumption_row(row: Mapping[str, Any] | pd.Series) -> s
 def build_usage_location_map(monthly_df: pd.DataFrame | None) -> dict[str, str]:
     """Map item id → unique usage locations joined with «، ».
 
-    Order: اسلب، بلوم، بیلت، سطح ریخته‌گری، سایر نواحی، then leftovers; shroud alone wins.
+    Order: اسلب، بلوم، بیلت، then the three سطح ریخته‌گری labels, سایر نواحی,
+    then leftovers. Any casting-floor shroud label wins alone (plain اسلب is dropped).
     """
     if monthly_df is None or monthly_df.empty or "id" not in monthly_df.columns:
         return {}
@@ -149,9 +210,12 @@ def build_usage_location_map(monthly_df: pd.DataFrame | None) -> dict[str, str]:
 
     out: dict[str, str] = {}
     for iid, labels in buckets.items():
-        # Shroud wins alone — never keep tundish اسلب/بلوم/بیلت alongside it
-        if SHROUD_LOCATION_LABEL in labels:
-            out[iid] = SHROUD_LOCATION_LABEL
+        # Casting-floor shroud wins alone — never keep plain اسلب/بلوم/بیلت with it.
+        casting = [lab for lab in SHROUD_CASTING_LABELS if lab in labels]
+        if not casting and LEGACY_SHROUD_LOCATION_LABEL in labels:
+            casting = [SHROUD_SLAB_LABEL]
+        if casting:
+            out[iid] = "، ".join(casting)
             continue
         ordered = [lab for lab in _LOCATION_ORDER if lab in labels]
         rest = sorted(lab for lab in labels if lab not in _LOCATION_ORDER)
@@ -368,8 +432,86 @@ def apply_usage_locations(
     return out, updated
 
 
+def _location_parts(value: object) -> list[str]:
+    text = _cell_str(value)
+    if not text:
+        return []
+    return [p.strip() for p in text.replace(",", "،").split("،") if p.strip()]
+
+
+def _keeps_bloom_or_billet_floor(value: object) -> bool:
+    """True when محل استفاده already names bloom/billet casting floor."""
+    parts = _location_parts(value)
+    if any(p in _SHROUD_BLOOM_BILLET_LABELS for p in parts):
+        return True
+    text = _cell_str(value)
+    return any(lab in text for lab in _SHROUD_BLOOM_BILLET_LABELS)
+
+
+def _is_casting_floor_location(value: object) -> bool:
+    """True for one casting-floor label or a join of only those labels."""
+    parts = _location_parts(value)
+    return bool(parts) and all(p in SHROUD_CASTING_LABELS for p in parts)
+
+
+def _shroud_ids_with_bloom_or_billet(inv_df: pd.DataFrame) -> set[str]:
+    """Inventory shroud ids whose محل استفاده is already bloom/billet casting floor."""
+    protected: set[str] = set()
+    if inv_df is None or inv_df.empty or "product_name" not in inv_df.columns:
+        return protected
+    for _, row in inv_df.iterrows():
+        if not _is_shroud_name(row.get("product_name")):
+            continue
+        iid = _norm_id(row.get("id"))
+        if not iid:
+            continue
+        if _keeps_bloom_or_billet_floor(row.get("usage_location")):
+            protected.add(iid)
+    return protected
+
+
+def usage_map_keeping_shroud_floors(
+    inv_df: pd.DataFrame,
+    location_map: Mapping[str, str],
+) -> dict[str, str]:
+    """Copy of location_map safe to apply onto an inventory that contains shrouds.
+
+    - Do not overwrite an existing «سطح ریخته‌گری بلوم/بیلت».
+    - A shroud id must not be written back to plain اسلب (or any non-casting label).
+      Bloom/billet casting labels already in the map (tundish detection) are kept.
+    """
+    if not location_map:
+        return {}
+    protected = _shroud_ids_with_bloom_or_billet(inv_df)
+    shroud_ids: set[str] = set()
+    if inv_df is not None and not inv_df.empty and "product_name" in inv_df.columns:
+        for _, row in inv_df.iterrows():
+            if _is_shroud_name(row.get("product_name")):
+                iid = _norm_id(row.get("id"))
+                if iid:
+                    shroud_ids.add(iid)
+    out: dict[str, str] = {}
+    for key, value in location_map.items():
+        iid = _norm_id(key)
+        if not iid or iid in protected:
+            continue
+        label = _cell_str(value)
+        if label == LEGACY_SHROUD_LOCATION_LABEL:
+            label = SHROUD_SLAB_LABEL
+        if iid in shroud_ids and not _is_casting_floor_location(label):
+            label = SHROUD_SLAB_LABEL
+        if label:
+            out[iid] = label
+    return out
+
+
 def force_shroud_usage_locations(inv_df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """Force usage_location=سطح ریخته‌گری for rows whose product_name is shroud."""
+    """Set shroud rows to «سطح ریخته‌گری اسلب» unless a casting-floor label is set.
+
+    Existing «سطح ریخته‌گری بلوم» / «سطح ریخته‌گری بیلت» / «سطح ریخته‌گری اسلب»
+    are left alone. Plain اسلب, blank, and the legacy lone label are upgraded
+    to the slab casting-floor label. Does not invent bloom/billet rows.
+    """
     out = ensure_inventory_columns(inv_df)
     if out.empty or "product_name" not in out.columns:
         return out, 0
@@ -378,9 +520,10 @@ def force_shroud_usage_locations(inv_df: pd.DataFrame) -> tuple[pd.DataFrame, in
         if not _is_shroud_name(row.get("product_name")):
             continue
         old_val = _cell_str(row.get("usage_location"))
-        if old_val != SHROUD_LOCATION_LABEL:
-            out.at[idx, "usage_location"] = SHROUD_LOCATION_LABEL
-            updated += 1
+        if _is_casting_floor_location(old_val) or _keeps_bloom_or_billet_floor(old_val):
+            continue
+        out.at[idx, "usage_location"] = SHROUD_SLAB_LABEL
+        updated += 1
     return out, updated
 
 
@@ -402,10 +545,13 @@ def sync_usage_from_monthly(
         }
     updated = 0
     new_inv = inv
-    if loc_map:
-        new_inv, updated = apply_usage_locations(inv, loc_map, only_blank=False)
-    # Always re-force shroud from product_name so monthly sync cannot overwrite
-    # shroud rows back to tundish اسلب/بلوم/بیلت.
+    # Shroud ids already on bloom/billet casting floor stay; other shroud ids
+    # never receive plain اسلب from the monthly work-order map.
+    safe_map = usage_map_keeping_shroud_floors(inv, loc_map)
+    if safe_map:
+        new_inv, updated = apply_usage_locations(inv, safe_map, only_blank=False)
+    # Re-force from product_name so a shroud missing from this month still
+    # cannot remain (or be reset to) plain اسلب.
     new_inv, shroud_n = force_shroud_usage_locations(new_inv)
     updated += shroud_n
     if not loc_map and shroud_n == 0:

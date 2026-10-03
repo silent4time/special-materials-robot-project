@@ -4,13 +4,15 @@ Applied to منبع اصلی downloads and simple tabular reports so bot + web
 exports look consistent.
 
 Palette (entire data-row fill by محل استفاده / usage_location):
-  اسلب            — soft blue   #BDD7EE
-  بلوم            — soft green  #C6EFCE
-  بیلت            — soft peach  #FCE4D6
-  سطح ریخته‌گری   — soft lilac  #E2D5F1
-  سایر نواحی      — pale steel  #D9E1F2
-  ترکیبی          — soft yellow #FFF2CC  (multi-label joined with «، »)
-  (empty/blank)   — light gray  #F2F2F2
+  اسلب                  — soft blue    #BDD7EE
+  بلوم                  — soft green   #C6EFCE
+  بیلت                  — soft peach   #FCE4D6
+  سطح ریخته‌گری اسلب    — soft lilac   #E2D5F1
+  سطح ریخته‌گری بلوم    — soft teal    #C6E8E3
+  سطح ریخته‌گری بیلت    — soft rose    #F8D3E0
+  سایر نواحی            — pale steel   #D9E1F2
+  ترکیبی                — soft yellow  #FFF2CC  (multi-label joined with «، »)
+  (empty/blank)         — light gray   #F2F2F2
 """
 from __future__ import annotations
 
@@ -25,7 +27,9 @@ USAGE_LOCATION_PALETTE: dict[str, str] = {
     "اسلب": "BDD7EE",
     "بلوم": "C6EFCE",
     "بیلت": "FCE4D6",
-    "سطح ریخته‌گری": "E2D5F1",
+    "سطح ریخته‌گری اسلب": "E2D5F1",
+    "سطح ریخته‌گری بلوم": "C6E8E3",
+    "سطح ریخته‌گری بیلت": "F8D3E0",
     "سایر نواحی": "D9E1F2",
     "ترکیبی": "FFF2CC",
     "": "F2F2F2",
@@ -51,7 +55,9 @@ _KNOWN_LOCATION_LABELS = frozenset({
     "اسلب",
     "بلوم",
     "بیلت",
-    "سطح ریخته‌گری",
+    "سطح ریخته‌گری اسلب",
+    "سطح ریخته‌گری بلوم",
+    "سطح ریخته‌گری بیلت",
     "سایر نواحی",
 })
 
@@ -73,6 +79,9 @@ def fill_for_usage_location(value: object) -> PatternFill:
     text = str(value).strip()
     if not text or text.lower() in {"nan", "none", "nat"}:
         return _fill(USAGE_LOCATION_PALETTE[""])
+    if text == "سطح ریخته‌گری":
+        # Retired single label — same fill as slab casting floor.
+        return _fill(USAGE_LOCATION_PALETTE["سطح ریخته‌گری اسلب"])
     if text in USAGE_LOCATION_PALETTE:
         return _fill(USAGE_LOCATION_PALETTE[text])
     # Multi-label (e.g. «اسلب، بیلت») or unknown composite → ترکیبی
