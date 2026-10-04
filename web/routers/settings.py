@@ -42,6 +42,8 @@ def _main_source_context(
         "user": user,
         "row_count": row_count,
         "preview": preview,
+        "columns": list(main_source_svc.INVENTORY_COLUMNS),
+        "labels": main_source_svc.FIELD_LABELS_FA,
         "message": message,
         "error": error,
     }
@@ -127,32 +129,25 @@ async def main_source_edit(
     request: Request,
     user=Depends(require_catalog_admin),
     db: Database = Depends(get_db),
-    id: str = Form(...),
-    category_code: str = Form(""),
-    product_name: str = Form(""),
-    keyword: str = Form(""),
-    usage_location: str = Form(""),
-    quantity: str = Form(""),
-    priority: str = Form(""),
 ):
+    form = await request.form()
+    item_id = str(form.get("id") or "").strip()
     updates = {}
-    for key, raw in (
-        ("category_code", category_code),
-        ("product_name", product_name),
-        ("keyword", keyword),
-        ("usage_location", usage_location),
-        ("quantity", quantity),
-        ("priority", priority),
-    ):
-        if str(raw or "").strip():
-            updates[key] = raw.strip()
+    for key in main_source_svc.INVENTORY_COLUMNS:
+        if key == "id":
+            continue
+        raw = str(form.get(key) or "").strip()
+        if raw:
+            updates[key] = raw
     error = None
     message = None
     try:
         if not updates:
             raise ValueError("حداقل یک فیلد برای ویرایش پر کنید.")
+        if not item_id:
+            raise ValueError("شناسه مواد الزامی است.")
         result = main_source_svc.upsert_row(
-            db, id.strip(), updates, bale_user_id=user["bale_user_id"]
+            db, item_id, updates, bale_user_id=user["bale_user_id"]
         )
         log_activity(db, user, "web_edit_main_source_record")
         message = f"✅ رکورد «{result.get('id')}» به‌روز شد."
@@ -171,28 +166,20 @@ async def main_source_add(
     request: Request,
     user=Depends(require_catalog_admin),
     db: Database = Depends(get_db),
-    category_code: str = Form(...),
-    id: str = Form(...),
-    product_name: str = Form(...),
-    keyword: str = Form(""),
-    usage_location: str = Form(""),
-    quantity: str = Form(...),
-    priority: str = Form("1"),
 ):
     error = None
     message = None
+    form = await request.form()
     try:
+        record = {
+            key: str(form.get(key) or "").strip()
+            for key in main_source_svc.INVENTORY_COLUMNS
+        }
+        if not record.get("priority"):
+            record["priority"] = "1"
         result = main_source_svc.add_row(
             db,
-            {
-                "category_code": category_code,
-                "id": id,
-                "product_name": product_name,
-                "keyword": keyword,
-                "usage_location": usage_location,
-                "quantity": quantity,
-                "priority": priority or 1,
-            },
+            record,
             bale_user_id=user["bale_user_id"],
         )
         log_activity(db, user, "web_add_main_source_record")

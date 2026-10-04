@@ -1489,7 +1489,6 @@ class BotApp:
         if pending == "product_inventory" and reasons:
             dropped_note = (
                 f"\nحذف‌شده‌ها: دسته نامجاز={reasons.get('wrong_category', 0)}، "
-                f"اولویت ۰={reasons.get('priority_0', 0)}، "
                 f"شناسه نامعتبر={reasons.get('bad_id', 0)}، "
                 f"دسته خالی={reasons.get('bad_category', 0)}، "
                 f"موجودی نامعتبر={reasons.get('bad_quantity', 0)}"
@@ -1809,7 +1808,7 @@ class BotApp:
                 out,
                 columns=list(INVENTORY_COLUMNS),
                 header_map=FIELD_LABELS_FA,
-                sheet_name="منبع اصلی",
+                sheet_name="ریز اطلاعات",
             )
             self.client.send_document(
                 self._chat_id(message),
@@ -2044,7 +2043,11 @@ class BotApp:
             self._main_source_pending[uid] = pending
             nxt = fields[idx]
             label = main_source_svc.FIELD_LABELS_FA.get(nxt, nxt)
-            optional = " (اختیاری — با «-» رد کنید)" if nxt in {"keyword", "usage_location", "priority"} else ""
+            optional = (
+                ""
+                if nxt in {"id", "category_code", "product_name", "quantity"}
+                else " (اختیاری — با «-» رد کنید)"
+            )
             self._reply(
                 message,
                 f"مقدار «{label}» ({nxt}){optional} را بفرستید.",

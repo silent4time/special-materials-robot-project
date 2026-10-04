@@ -3,16 +3,25 @@
 Applied to منبع اصلی downloads and simple tabular reports so bot + web
 exports look consistent.
 
-Palette (entire data-row fill by محل استفاده / usage_location):
-  اسلب                  — soft blue    #BDD7EE
-  بلوم                  — soft green   #C6EFCE
-  بیلت                  — soft peach   #FCE4D6
-  سطح ریخته‌گری اسلب    — soft lilac   #E2D5F1
-  سطح ریخته‌گری بلوم    — soft teal    #C6E8E3
-  سطح ریخته‌گری بیلت    — soft rose    #F8D3E0
-  سایر نواحی            — pale steel   #D9E1F2
-  ترکیبی                — soft yellow  #FFF2CC  (multi-label joined with «، »)
-  (empty/blank)         — light gray   #F2F2F2
+Palette (entire data-row fill by محل استفاده / usage_location).
+Phrases match the منبع اصلی file (no ZWNJ in ریخته گری).
+
+  اسلب                         — soft blue     #BDD7EE
+  بلوم                         — soft green    #C6EFCE
+  بیلت                         — soft peach    #FCE4D6
+  بلوم / بیلت                  — sand mix      #E7F2D3  (green + peach)
+  بلوم/اسلب                    — mint mix      #B7DCCB  (green + blue)
+  سطح ریخته گری اسلب           — soft lilac    #E2D5F1
+  سطح ریخته گری بلوم           — soft teal     #C6E8E3
+  سطح ریخته گری بیلت           — soft rose     #F8D3E0
+  سطح ریخته گری اسلب/بلوم      — lilac/teal    #D5DEEE  (lilac + teal)
+  سایر نواحی                   — pale steel    #D9E1F2
+  ترکیبی                       — soft yellow   #FFF2CC
+      («،»-joined labels that are not one of the phrases above)
+  (empty/blank)                — light gray    #F2F2F2
+
+ZWNJ forms (سطح ریخته‌گری …) use the same fill as the file phrase.
+The retired lone label «سطح ریخته گری» uses the slab casting-floor fill.
 """
 from __future__ import annotations
 
@@ -27,9 +36,12 @@ USAGE_LOCATION_PALETTE: dict[str, str] = {
     "اسلب": "BDD7EE",
     "بلوم": "C6EFCE",
     "بیلت": "FCE4D6",
-    "سطح ریخته‌گری اسلب": "E2D5F1",
-    "سطح ریخته‌گری بلوم": "C6E8E3",
-    "سطح ریخته‌گری بیلت": "F8D3E0",
+    "بلوم / بیلت": "E7F2D3",
+    "بلوم/اسلب": "B7DCCB",
+    "سطح ریخته گری اسلب": "E2D5F1",
+    "سطح ریخته گری بلوم": "C6E8E3",
+    "سطح ریخته گری بیلت": "F8D3E0",
+    "سطح ریخته گری اسلب/بلوم": "D5DEEE",
     "سایر نواحی": "D9E1F2",
     "ترکیبی": "FFF2CC",
     "": "F2F2F2",
@@ -51,15 +63,9 @@ _USAGE_HEADERS = frozenset({
     "محل‌استفاده",
 })
 
-_KNOWN_LOCATION_LABELS = frozenset({
-    "اسلب",
-    "بلوم",
-    "بیلت",
-    "سطح ریخته‌گری اسلب",
-    "سطح ریخته‌گری بلوم",
-    "سطح ریخته‌گری بیلت",
-    "سایر نواحی",
-})
+_KNOWN_LOCATION_LABELS = frozenset(
+    k for k in USAGE_LOCATION_PALETTE if k not in {"ترکیبی", ""}
+)
 
 _MAX_COL_WIDTH = 48.0
 _MIN_COL_WIDTH = 8.0
@@ -72,26 +78,34 @@ def _fill(hex_color: str) -> PatternFill:
     return PatternFill("solid", fgColor=hex_color)
 
 
+def _canon_location_key(value: object) -> str:
+    """Match file phrases and older ZWNJ labels to the same palette key."""
+    text = "" if value is None else str(value)
+    text = text.replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+    text = text.replace("\u200c", " ")
+    return " ".join(text.strip().split())
+
+
 def fill_for_usage_location(value: object) -> PatternFill:
     """Return the PatternFill for a usage_location cell value."""
     if value is None:
         return _fill(USAGE_LOCATION_PALETTE[""])
-    text = str(value).strip()
+    text = _canon_location_key(value)
     if not text or text.lower() in {"nan", "none", "nat"}:
         return _fill(USAGE_LOCATION_PALETTE[""])
-    if text == "سطح ریخته‌گری":
+    if text in {"سطح ریخته گری", "سطح ریخته‌گری"}:
         # Retired single label — same fill as slab casting floor.
-        return _fill(USAGE_LOCATION_PALETTE["سطح ریخته‌گری اسلب"])
+        return _fill(USAGE_LOCATION_PALETTE["سطح ریخته گری اسلب"])
     if text in USAGE_LOCATION_PALETTE:
         return _fill(USAGE_LOCATION_PALETTE[text])
-    # Multi-label (e.g. «اسلب، بیلت») or unknown composite → ترکیبی
+    # Multi-label (e.g. «اسلب، بیلت») that is not its own phrase → ترکیبی.
+    # Dedicated combined phrases (بلوم / بیلت, بلوم/اسلب, …) already matched.
     parts = [p.strip() for p in text.replace(",", "،").split("،") if p.strip()]
     known_hits = [p for p in parts if p in _KNOWN_LOCATION_LABELS]
     if len(known_hits) >= 2 or (len(parts) >= 2 and known_hits):
         return _fill(USAGE_LOCATION_PALETTE["ترکیبی"])
     if len(known_hits) == 1:
         return _fill(USAGE_LOCATION_PALETTE[known_hits[0]])
-    # Unrecognized single label — soft gray, not empty
     return _fill(USAGE_LOCATION_PALETTE[""])
 
 

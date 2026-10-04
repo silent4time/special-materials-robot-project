@@ -4,10 +4,13 @@
 <div class="card">
   <h1>منبع اصلی</h1>
   <p class="muted">
-    جدول تمیزشدهٔ canonical برای گزارش‌ها.
-    ستون‌ها:
-    <code>category_code, id, product_name, keyword, usage_location, quantity, priority</code>
-    — هدر فارسی «محل استفاده» برای <code>usage_location</code> پذیرفته می‌شود.
+    فقط شیت «ریز اطلاعات». ستون‌ها:
+    <code>{{ columns|join(', ') }}</code>
+  </p>
+  <p class="muted">
+    محل استفاده همان عبارت فایل ذخیره می‌شود (بیلت، اسلب، بلوم / بیلت، بلوم،
+    سطح ریخته گری اسلب، بلوم/اسلب، سطح ریخته گری بیلت، سطح ریخته گری اسلب/بلوم).
+    نوسازی، پچینگ و نقطه بحرانی فقط ذخیره و نمایش داده می‌شوند.
   </p>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
@@ -16,7 +19,7 @@
 
 <div class="card">
   <h2>آپلود فایل اکسل</h2>
-  <p class="muted">همان قالب تمیز منبع اصلی (.xlsx). در صورت نبودن ستون محل استفاده، مقادیر قبلی بر اساس شناسه حفظ می‌شوند.</p>
+  <p class="muted">شیت «ریز اطلاعات». شیت‌های دیگر نادیده گرفته می‌شوند. اگر ستون تازه‌ای نباشد، فیلدهای جدید خالی می‌مانند و محل استفادهٔ قبلی بر اساس شناسه حفظ می‌شود.</p>
   <form method="post" action="/settings/main-source/upload" enctype="multipart/form-data">
     <input type="file" name="file" accept=".xlsx,.xlsm" required>
     <p style="margin-top:1rem"><button type="submit">آپلود و همسان‌سازی</button></p>
@@ -26,20 +29,12 @@
 <div class="card">
   <h2>ویرایش رکورد</h2>
   <form method="post" action="/settings/main-source/edit">
-    <label for="edit_id">شناسه (id)</label>
+    <label for="edit_id">شناسه مواد</label>
     <input id="edit_id" name="id" type="text" required>
-    <label for="edit_category_code">کد دسته بندی</label>
-    <input id="edit_category_code" name="category_code" type="text">
-    <label for="edit_product_name">نام محصول</label>
-    <input id="edit_product_name" name="product_name" type="text">
-    <label for="edit_keyword">کلید واژه</label>
-    <input id="edit_keyword" name="keyword" type="text">
-    <label for="edit_usage_location">محل استفاده</label>
-    <input id="edit_usage_location" name="usage_location" type="text" placeholder="اسلب، بیلت، سطح ریخته‌گری اسلب">
-    <label for="edit_quantity">موجودی</label>
-    <input id="edit_quantity" name="quantity" type="text">
-    <label for="edit_priority">اولویت</label>
-    <input id="edit_priority" name="priority" type="text">
+    {% for key in columns if key != 'id' %}
+    <label for="edit_{{ key }}">{{ labels.get(key, key) }}</label>
+    <input id="edit_{{ key }}" name="{{ key }}" type="text"{% if key == 'usage_location' %} placeholder="اسلب، بیلت، سطح ریخته گری اسلب"{% endif %}>
+    {% endfor %}
     <p class="muted">فقط فیلدهایی که پر شوند به‌روز می‌شوند.</p>
     <p style="margin-top:1rem"><button type="submit">ذخیره ویرایش</button></p>
   </form>
@@ -48,20 +43,11 @@
 <div class="card">
   <h2>اضافه کردن رکورد</h2>
   <form method="post" action="/settings/main-source/add">
-    <label for="add_category_code">کد دسته بندی *</label>
-    <input id="add_category_code" name="category_code" type="text" required>
-    <label for="add_id">شناسه *</label>
-    <input id="add_id" name="id" type="text" required>
-    <label for="add_product_name">نام محصول *</label>
-    <input id="add_product_name" name="product_name" type="text" required>
-    <label for="add_keyword">کلید واژه</label>
-    <input id="add_keyword" name="keyword" type="text">
-    <label for="add_usage_location">محل استفاده</label>
-    <input id="add_usage_location" name="usage_location" type="text">
-    <label for="add_quantity">موجودی *</label>
-    <input id="add_quantity" name="quantity" type="text" required>
-    <label for="add_priority">اولویت</label>
-    <input id="add_priority" name="priority" type="text" value="1">
+    {% for key in columns %}
+    {% set required = key in ['category_code', 'id', 'product_name', 'quantity'] %}
+    <label for="add_{{ key }}">{{ labels.get(key, key) }}{% if required %} *{% endif %}</label>
+    <input id="add_{{ key }}" name="{{ key }}" type="text"{% if required %} required{% endif %}{% if key == 'priority' %} value="1"{% endif %}>
+    {% endfor %}
     <p style="margin-top:1rem"><button type="submit">افزودن رکورد</button></p>
   </form>
 </div>
@@ -69,27 +55,26 @@
 {% if preview %}
 <div class="card">
   <h2>پیش‌نمایش ({{ preview|length }} از {{ row_count }})</h2>
+  <div style="overflow-x:auto">
   <table>
     <thead>
       <tr>
-        <th>کد دسته</th><th>شناسه</th><th>نام</th><th>کلید واژه</th>
-        <th>محل استفاده</th><th>موجودی</th><th>اولویت</th>
+        {% for key in columns %}
+        <th>{{ labels.get(key, key) }}</th>
+        {% endfor %}
       </tr>
     </thead>
     <tbody>
       {% for r in preview %}
       <tr>
-        <td>{{ r.category_code }}</td>
-        <td>{{ r.id }}</td>
-        <td>{{ r.product_name }}</td>
-        <td>{{ r.keyword }}</td>
-        <td>{{ r.usage_location }}</td>
-        <td>{{ r.quantity }}</td>
-        <td>{{ r.priority }}</td>
+        {% for key in columns %}
+        <td>{{ r[key] }}</td>
+        {% endfor %}
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% endif %}
 {% endblock %}

@@ -71,7 +71,13 @@ FILE_TYPES = {
 
 
 def clean_excel_sheet_name(file_type: str) -> str:
-    """User-facing Excel sheet title for cleaned extracts (max 31 chars)."""
+    """User-facing Excel sheet title for cleaned extracts (max 31 chars).
+
+    منبع اصلی is stored and re-exported as the single sheet «ریز اطلاعات».
+    Category-summary sheets (کل موجودی and empty extras) are never written.
+    """
+    if file_type == "product_inventory":
+        return "ریز اطلاعات"
     label = FILE_TYPES.get(file_type, {}).get("label_fa") or "Sheet1"
     return str(label)[:31]
 
@@ -124,12 +130,17 @@ DEFAULT_CATEGORY_LABELS: dict[str, str] = {
 DEFAULT_CATEGORY_CODES: list[str] = [
     "1203",
     "1207",
+    "1237",
+    "1271",
+    "1272",
     "1274",
+    "1450",
     "1451",
     "1473",
     "1581",
     "1603",
     "1604",
+    "1605",
     "1623",
     "1626",
     "1628",
@@ -145,12 +156,27 @@ DEFAULT_CATEGORY_CODES: list[str] = [
     "1662",
     "1664",
     "1667",
+    "1668",
+    "1670",
     "1672",
     "1674",
     "1676",
+    "1678",
+    "1710",
     "1712",
     "1714",
     "1716",
+    "1717",
+    "1718",
+    "1721",
+    "1722",
+    "1723",
+    "1724",
+    "1725",
+    "1726",
+    "1727",
+    "1745",
+    "1746",
     SURPLUS_CATEGORY_CODE,
 ]
 
@@ -167,16 +193,30 @@ REQUIRED_COLUMNS = {
         "date",
         "notes",
     ],
-    # Warehouse inventory (منبع اصلی): cleaned cols; raw upload still has
-    # کد دسته بندی / کد و شرح کالا / موجودی (id+product_name parsed from شرح).
+    # منبع اصلی: sheet «ریز اطلاعات» only. Legacy 3/7-col uploads still load;
+    # columns they lack stay blank. Newer template columns are stored as-is
+    # (no business rules for نوسازی / پچینگ / نقطه بحرانی).
     "product_inventory": [
         "category_code",
         "id",
         "product_name",
-        "keyword",
+        "work_order",
         "usage_location",
+        "keyword",
         "quantity",
         "priority",
+        "contractor_or_company",
+        "origin",
+        "shared",
+        "critical_point",
+        "unit",
+        "other_areas",
+        "billet_renovation",
+        "billet_patching",
+        "bloom_renovation",
+        "bloom_patching",
+        "slab_renovation",
+        "slab_patching",
     ],
     "monthly_consumption": [
         "domain",

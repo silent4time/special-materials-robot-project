@@ -325,7 +325,7 @@ def export_dataframe_xlsx(
     *,
     columns: list[str] | None = None,
     header_map: dict[str, str] | None = None,
-    sheet_name: str = "منبع اصلی",
+    sheet_name: str = "ریز اطلاعات",
 ) -> Path:
     """Write a DataFrame to xlsx with optional Persian header rename."""
     import pandas as pd

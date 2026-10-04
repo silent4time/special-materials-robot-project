@@ -576,10 +576,11 @@ def _test_shroud_casting_labels() -> None:
     from excel.table_style import USAGE_LOCATION_PALETTE, fill_for_usage_location
     from services import main_source as ms
 
-    assert ms.SHROUD_SLAB_LABEL == "سطح ریخته‌گری اسلب"
-    assert ms.SHROUD_BLOOM_LABEL == "سطح ریخته‌گری بلوم"
-    assert ms.SHROUD_BILLET_LABEL == "سطح ریخته‌گری بیلت"
+    assert ms.SHROUD_SLAB_LABEL == "سطح ریخته گری اسلب"
+    assert ms.SHROUD_BLOOM_LABEL == "سطح ریخته گری بلوم"
+    assert ms.SHROUD_BILLET_LABEL == "سطح ریخته گری بیلت"
     assert "سطح ریخته‌گری" not in ms._LOCATION_ORDER
+    assert "سطح ریخته گری" not in "".join(ms._LOCATION_ORDER) or ms.SHROUD_SLAB_LABEL in ms._LOCATION_ORDER
     for lab in ms.SHROUD_CASTING_LABELS:
         assert lab in ms._LOCATION_ORDER
         assert lab in USAGE_LOCATION_PALETTE
@@ -593,6 +594,20 @@ def _test_shroud_casting_labels() -> None:
     assert str(slab_fill.fgColor.rgb).upper().endswith(USAGE_LOCATION_PALETTE[ms.SHROUD_SLAB_LABEL])
     assert str(fill_for_usage_location(ms.SHROUD_BLOOM_LABEL).fgColor.rgb).upper().endswith("C6E8E3")
     assert str(fill_for_usage_location(ms.SHROUD_BILLET_LABEL).fgColor.rgb).upper().endswith("F8D3E0")
+    # ZWNJ form of the same phrase shares the file color.
+    zwnj_slab = fill_for_usage_location("سطح ریخته‌گری اسلب")
+    assert str(zwnj_slab.fgColor.rgb).upper().endswith(USAGE_LOCATION_PALETTE[ms.SHROUD_SLAB_LABEL])
+    combined = [
+        "بلوم / بیلت",
+        "بلوم/اسلب",
+        "سطح ریخته گری اسلب/بلوم",
+    ]
+    combo_colors = [USAGE_LOCATION_PALETTE[lab] for lab in combined]
+    assert len(set(combo_colors)) == 3
+    assert not (set(combo_colors) & set(casting_colors))
+    for lab in combined:
+        got = fill_for_usage_location(lab)
+        assert str(got.fgColor.rgb).upper().endswith(USAGE_LOCATION_PALETTE[lab])
 
     monthly = pd.DataFrame(
         [
@@ -646,9 +661,10 @@ def _test_shroud_casting_labels() -> None:
         assert len(hit) == 1, item_id
         return str(hit.iloc[0])
 
-    assert loc_of(loaded, "S1") == ms.SHROUD_SLAB_LABEL
+    # File locations win. Only a blank shroud row is filled.
+    assert loc_of(loaded, "S1") == "اسلب"
     assert loc_of(loaded, "S2") == ms.SHROUD_BLOOM_LABEL
-    assert loc_of(loaded, "S5") == ms.SHROUD_SLAB_LABEL
+    assert loc_of(loaded, "S5") == "اسلب"
     assert loc_of(loaded, "S9") == ms.SHROUD_SLAB_LABEL
     assert loc_of(loaded, "N1") == "اسلب"
     assert int((loaded["usage_location"] == ms.SHROUD_BLOOM_LABEL).sum()) == 1
@@ -903,6 +919,28 @@ def main() -> int:
     assert sample_clean.kept_row_count == 5
     assert all(c in sample_clean.columns for c in ("id", "priority", "category_code", "keyword", "product_name"))
     assert "item_code_desc" not in sample_clean.columns
+    assert "work_order" in sample_clean.columns and "slab_patching" in sample_clean.columns
+    import openpyxl as _ox_sample
+    _wb_sample = _ox_sample.load_workbook(sample_clean.clean_path, read_only=True)
+    assert _wb_sample.sheetnames == ["ریز اطلاعات"]
+    _wb_sample.close()
+    legacy = pd.DataFrame(
+        [{
+            "category_code": "1201",
+            "id": "OLD1",
+            "product_name": "قدیمی",
+            "keyword": "",
+            "usage_location": "اسلب",
+            "quantity": 3,
+            "priority": 1,
+        }]
+    )
+    from services.main_source import ensure_inventory_columns
+    ensured = ensure_inventory_columns(legacy)
+    assert list(ensured.columns) == REQUIRED_COLUMNS["product_inventory"]
+    assert str(ensured.loc[0, "usage_location"]) == "اسلب"
+    assert str(ensured.loc[0, "billet_renovation"] or "") == ""
+    assert str(ensured.loc[0, "critical_point"] or "") == ""
 
     paths = {
         "tank_consumption": str(ROOT / "samples" / "01_tank_consumption.xlsx"),
@@ -1004,34 +1042,81 @@ def main() -> int:
     )
     assert result.clean_path.exists()
     assert result.raw_row_count == 9
-    # keep: ACID01, CAUST02, CL04, OIL05, SURP01(1800) = 5
-    assert result.kept_row_count == 5
-    assert result.dropped_row_count == 4
+    # keep includes priority 0 (ZERO00) and category 1800
+    # keep: ACID01, CAUST02, CL04, OIL05, SURP01, ZERO00 (priority 0 stored)
+    assert result.kept_row_count == 6
+    assert result.dropped_row_count == 3
     assert result.drop_reasons.get("wrong_category", 0) == 2
-    assert result.drop_reasons.get("priority_0", 0) == 1
+    assert result.drop_reasons.get("priority_0", 0) == 0
     assert result.drop_reasons.get("bad_id", 0) == 1
 
-    clean_df = pd.read_excel(result.clean_path, engine="openpyxl")
+    # Only «ریز اطلاعات» is the row source; summary/empty sheets are ignored.
     import openpyxl as _ox
+    multi = wide_dir / "multi_sheet.xlsx"
+    wb_multi = Workbook()
+    junk = wb_multi.active
+    junk.title = "Sheet1"
+    junk.append(["ignore", "me"])
+    summary = wb_multi.create_sheet("کل موجودی")
+    summary.append(["کد", "جمع"])
+    summary.append(["1201", 999])
+    detail = wb_multi.create_sheet("ریز اطلاعات")
+    detail.append(["کد دسته بندی", "شناسه مواد", "شرح کالا", "شماره دستور کار", "محل استفاده", "کلید واژه", "موجودی", "اولویت"])
+    detail.append(["1201", "KEEP1", "کالای جزئی", "1102010000", "سطح ریخته گری  اسلب", "کلید", 4, 0])
+    empty = wb_multi.create_sheet("Sheet3")
+    empty["A1"] = None
+    wb_multi.save(multi)
+    multi_result = extract_and_save_clean(
+        multi,
+        "product_inventory",
+        category_allowlist=db.active_category_code_set(),
+        clean_dir=wide_dir / "multi_clean",
+    )
+    assert multi_result.kept_row_count == 1
+    multi_df = pd.read_excel(multi_result.clean_path, engine="openpyxl")
+    assert str(multi_df.loc[0, "id"]) == "KEEP1"
+    assert str(multi_df.loc[0, "usage_location"]) == "سطح ریخته گری اسلب"
+    assert int(multi_df.loc[0, "priority"]) == 0
+    assert str(multi_df.loc[0, "work_order"]) == "1102010000"
+    _wb_multi = _ox.load_workbook(multi_result.clean_path, read_only=True)
+    assert _wb_multi.sheetnames == ["ریز اطلاعات"]
+    _wb_multi.close()
+
+    clean_df = pd.read_excel(result.clean_path, engine="openpyxl")
     _wb = _ox.load_workbook(result.clean_path, read_only=True)
-    assert _wb.sheetnames == [FILE_TYPES["product_inventory"]["label_fa"]] == ["منبع اصلی"]
+    assert _wb.sheetnames == ["ریز اطلاعات"]
     _wb.close()
     assert list(clean_df.columns) == REQUIRED_COLUMNS["product_inventory"]
     assert REQUIRED_COLUMNS["product_inventory"] == [
         "category_code",
         "id",
         "product_name",
-        "keyword",
+        "work_order",
         "usage_location",
+        "keyword",
         "quantity",
         "priority",
+        "contractor_or_company",
+        "origin",
+        "shared",
+        "critical_point",
+        "unit",
+        "other_areas",
+        "billet_renovation",
+        "billet_patching",
+        "bloom_renovation",
+        "bloom_patching",
+        "slab_renovation",
+        "slab_patching",
     ]
     assert "item_code_desc" not in clean_df.columns
     assert "keyword" in clean_df.columns
     assert "usage_location" in clean_df.columns
-    assert len(clean_df) == 5
-    assert set(clean_df["id"].astype(str)) == {"ACID01", "CAUST02", "CL04", "OIL05", "SURP01"}
-    assert (clean_df["priority"] == 1).all()
+    assert len(clean_df) == 6
+    assert set(clean_df["id"].astype(str)) == {"ACID01", "CAUST02", "CL04", "OIL05", "SURP01", "ZERO00"}
+    zero = clean_df.loc[clean_df["id"].astype(str) == "ZERO00"].iloc[0]
+    assert int(zero["priority"]) == 0
+    assert clean_df["work_order"].fillna("").astype(str).str.strip().isin(["", "nan"]).all()
     assert set(clean_df["category_code"].astype(str)) == {"1201", "1800"}
     assert "1800" in db.active_category_code_set()
     surp_row = clean_df.loc[clean_df["id"].astype(str) == "SURP01"].iloc[0]
@@ -1096,7 +1181,7 @@ def main() -> int:
     assert eid > 0
     latest = db.get_latest_extracted("999", "product_inventory")
     assert latest and latest["clean_path"] == str(result.clean_path)
-    assert latest["row_count"] == 5
+    assert latest["row_count"] == 6
     assert str(latest["bale_user_id"]) == "999"
 
     clean_paths = {
@@ -1105,7 +1190,7 @@ def main() -> int:
         "monthly_consumption": paths["monthly_consumption"],
     }
     cf, cm = process_session_files(clean_paths, mgr)
-    assert cm["product_inventory"]["total_rows"] == 5
+    assert cm["product_inventory"]["total_rows"] == 6
     # surplus still callable on cleaned extract; 1800 row always surplus
     rem_clean = remaining(cf["product_inventory"])
     assert "category_code" in rem_clean.columns

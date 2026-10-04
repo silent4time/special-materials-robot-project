@@ -242,9 +242,23 @@ DISPLAY_COLUMNS = {
         "category_code",
         "id",
         "product_name",
+        "work_order",
+        "usage_location",
         "keyword",
         "quantity",
         "priority",
+        "contractor_or_company",
+        "origin",
+        "shared",
+        "critical_point",
+        "unit",
+        "other_areas",
+        "billet_renovation",
+        "billet_patching",
+        "bloom_renovation",
+        "bloom_patching",
+        "slab_renovation",
+        "slab_patching",
     ],
     "monthly_consumption": [
         "domain",
@@ -266,12 +280,25 @@ HEADER_FA = {
     "assignee_name": "مسئول",
     "tundish_id": "تاندیش",
     "material_name": "ماده",
-    "product_name": "محصول",
+    "product_name": "شرح کالا",
     "keyword": "کلید واژه",
-    "id": "کد کالا",
-    "category_code": "کد دسته",
+    "id": "شناسه مواد",
+    "category_code": "کد دسته بندی",
+    "work_order": "شماره دستور کار",
+    "usage_location": "محل استفاده",
     "priority": "اولویت",
-    "quantity": "مقدار",
+    "quantity": "موجودی",
+    "contractor_or_company": "پیمانکار / شرکت",
+    "origin": "سازنده",
+    "shared": "اشتراکی",
+    "critical_point": "نقطه بحرانی",
+    "other_areas": "سایر نواحی",
+    "billet_renovation": "نوسازی تاندیش بیلت",
+    "billet_patching": "پچینگ تاندیش بیلت",
+    "bloom_renovation": "نوسازی تاندیش بلوم",
+    "bloom_patching": "پچینگ تاندیش بلوم",
+    "slab_renovation": "نوسازی تاندیش اسلب",
+    "slab_patching": "پچینگ تاندیش اسلب",
     "unit": "واحد",
     "date": "تاریخ",
     "month": "ماه",
@@ -300,6 +327,7 @@ def _df_to_table(
     *,
     max_rows: int = 200,
     header_bg: str = "#1f4e79",
+    header_map: dict[str, str] | None = None,
 ) -> Table | Paragraph:
     use_cols = [c for c in (cols or list(df.columns)) if c in df.columns]
     if not use_cols:
@@ -307,7 +335,8 @@ def _df_to_table(
     if df is None or df.empty or not use_cols:
         return Paragraph(rtl("هیچ ردیفی یافت نشد."), styles["body"])
 
-    header = [Paragraph(rtl(HEADER_FA.get(c, c)), styles["cell"]) for c in use_cols]
+    labels = header_map or HEADER_FA
+    header = [Paragraph(rtl(labels.get(c, HEADER_FA.get(c, c))), styles["cell"]) for c in use_cols]
     header = list(reversed(header))
     data = [header]
     view = df.head(max_rows)
@@ -560,6 +589,7 @@ def generate_report(
                 frames[key],
                 DISPLAY_COLUMNS.get(key),
                 styles,
+                header_map=HEADER_FA,
             )
         )
         story.append(Spacer(1, 0.4 * cm))

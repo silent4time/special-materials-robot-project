@@ -29,7 +29,15 @@ COLUMN_ALIASES = {
     "assignee_name": ["assignee_name", "name", "نام", "نام_مسئول", "تکنسین"],
     "tundish_id": ["tundish_id", "tank", "تانک", "تاندیش", "شماره_تانک", "شماره_تاندیش"],
     "material_name": ["material_name", "material", "ماده", "نام_ماده", "مواد"],
-    "product_name": ["product_name", "product", "محصول", "نام_محصول"],
+    "product_name": [
+        "product_name",
+        "product",
+        "محصول",
+        "نام_محصول",
+        "نام محصول",
+        "شرح کالا",
+        "شرح_کالا",
+    ],
     "quantity": [
         "quantity",
         "qty",
@@ -62,9 +70,8 @@ COLUMN_ALIASES = {
         "کد و شرح کالا",
         "کد_و_شرح_کالا",
         "کد و شرح",
-        "شرح کالا",
     ],
-    "id": ["id", "کد کالا", "کد_کالا", "شناسه کالا"],
+    "id": ["id", "کد کالا", "کد_کالا", "شناسه کالا", "شناسه مواد", "شناسه_مواد"],
     "priority": ["priority", "اولویت", "اولويت"],
     "keyword": [
         "keyword",
@@ -93,7 +100,25 @@ COLUMN_ALIASES = {
         "workorder",
         "سفارش کار",
         "سفارش_کار",
+        "شماره دستور کار",
+        "شماره_دستور_کار",
     ],
+    "contractor_or_company": [
+        "contractor_or_company",
+        "پیمانکار / شرکت",
+        "پیمانکار/شرکت",
+        "پیمانکار /شرکت",
+    ],
+    "origin": ["origin", "سازنده"],
+    "shared": ["shared", "اشتراکی"],
+    "critical_point": ["critical_point", "نقطه بحرانی", "نقطه_بحرانی"],
+    "other_areas": ["other_areas", "سایر نواحی", "ساير نواحي"],
+    "billet_renovation": ["billet_renovation", "نوسازی تاندیش بیلت"],
+    "billet_patching": ["billet_patching", "پچینگ تاندیش بیلت"],
+    "bloom_renovation": ["bloom_renovation", "نوسازی تاندیش بلوم"],
+    "bloom_patching": ["bloom_patching", "پچینگ تاندیش بلوم"],
+    "slab_renovation": ["slab_renovation", "نوسازی تاندیش اسلب"],
+    "slab_patching": ["slab_patching", "پچینگ تاندیش اسلب"],
     "request_return": [
         "request_return",
         "request/return",
@@ -242,25 +267,48 @@ def looks_like_product_inventory(df: pd.DataFrame) -> bool:
         "id" in cols and ("product_name" in cols or "material_name" in cols)
     )
     has_qty = "quantity" in cols
-    # Monthly ledger markers — if present, treat as monthly not inventory
-    monthly_markers = {"month", "work_order", "request_return", "assignee_id", "domain"}
+    # Monthly ledger markers — if present, treat as monthly not inventory.
+    # work_order is also a منبع اصلی column (شماره دستور کار) and must not
+    # disqualify the detail sheet.
+    monthly_markers = {"month", "request_return", "assignee_id", "domain"}
     if cols & monthly_markers:
         return False
     return bool(has_cat and has_desc and has_qty)
 
 
-def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
-    """Parse id/product_name from raw «کد و شرح کالا»; add keyword / priority.
+def _fa_text(value: object) -> str:
+    """Persian/English cell text: yeh/kaf + collapsed whitespace. Phrases stay."""
+    if _is_blank(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        text = str(int(value))
+    elif isinstance(value, int) and not isinstance(value, bool):
+        text = str(value)
+    else:
+        text = str(value).strip()
+        if text.endswith(".0") and text[:-2].lstrip("-").isdigit():
+            text = text[:-2]
+    text = text.replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+    return " ".join(text.split())
 
-    ``item_code_desc`` is required on the *raw* upload for parsing, but is not
-    written into the cleaned extract (see REQUIRED_COLUMNS).
+
+def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize منبع اصلی rows.
+
+    Legacy uploads (کد و شرح کالا) still parse id + product_name.
+    The current template has شناسه مواد and شرح کالا already split; those
+    values are kept. Columns the file does not have stay blank later
+    (project_required_columns). No rules are applied to نوسازی / پچینگ /
+    نقطه بحرانی — they are stored as text.
     """
     out = df.copy()
-    if "item_code_desc" not in out.columns and "product_name" in out.columns:
-        out["item_code_desc"] = out["product_name"]
-    if "item_code_desc" not in out.columns:
+    has_combined = "item_code_desc" in out.columns
+    has_name = "product_name" in out.columns
+    has_id = "id" in out.columns
+    if not has_combined and not (has_name and has_id):
         raise ExcelValidationError(
-            "ستون «کد و شرح کالا» در فایل منبع اصلی یافت نشد."
+            "ستون‌های منبع اصلی یافت نشد. "
+            "یا «کد و شرح کالا» یا هر دو «شناسه مواد» و «شرح کالا» لازم است."
         )
     if "category_code" not in out.columns:
         raise ExcelValidationError(
@@ -271,44 +319,61 @@ def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
             "ستون «موجودی» در فایل منبع اصلی یافت نشد."
         )
 
-    raw_desc = out["item_code_desc"]
-    if "id" not in out.columns:
-        out["id"] = raw_desc.map(extract_item_id)
+    if has_combined:
+        raw_desc = out["item_code_desc"]
+        parsed_id = raw_desc.map(extract_item_id)
+        if not has_id:
+            out["id"] = parsed_id
+        else:
+            existing = out["id"]
+            out["id"] = [
+                (
+                    _fa_text(e)
+                    if not _is_blank(e)
+                    else (p or "")
+                )
+                for e, p in zip(existing, parsed_id)
+            ]
+        if not has_name:
+            out["product_name"] = raw_desc.map(extract_product_name)
     else:
-        # Fill blanks from parser
-        existing = out["id"]
-        parsed = raw_desc.map(extract_item_id)
-        out["id"] = [
-            (str(e).strip() if e is not None and str(e).strip() and str(e).lower() != "nan" else p)
-            for e, p in zip(existing, parsed)
-        ]
+        out["id"] = out["id"].map(_fa_text)
+        out["product_name"] = out["product_name"].map(_fa_text)
 
-    out["product_name"] = raw_desc.map(extract_product_name)
+    out["product_name"] = out["product_name"].map(_fa_text)
+    out["id"] = out["id"].map(lambda v: _fa_text(v) if not _is_blank(v) else "")
     out["category_code"] = out["category_code"].map(_normalize_category_code)
 
-    def _keyword_cell(v: object) -> str:
-        if v is None or (isinstance(v, float) and pd.isna(v)):
-            return ""
-        text = str(v).strip()
-        if not text or text.lower() == "nan":
-            return ""
-        return text
-
-    if "keyword" in out.columns:
-        out["keyword"] = out["keyword"].map(_keyword_cell)
-    else:
-        out["keyword"] = ""
+    text_cols = (
+        "keyword",
+        "usage_location",
+        "work_order",
+        "contractor_or_company",
+        "origin",
+        "shared",
+        "critical_point",
+        "unit",
+        "other_areas",
+        "billet_renovation",
+        "billet_patching",
+        "bloom_renovation",
+        "bloom_patching",
+        "slab_renovation",
+        "slab_patching",
+    )
+    for col in text_cols:
+        if col in out.columns:
+            out[col] = out[col].map(_fa_text)
+        else:
+            out[col] = ""
 
     if "priority" not in out.columns:
         out["priority"] = 1
     else:
         prio = pd.to_numeric(out["priority"], errors="coerce")
-        out["priority"] = prio.fillna(1).astype(int)
-
-    if "usage_location" in out.columns:
-        out["usage_location"] = out["usage_location"].map(_keyword_cell)
-    else:
-        out["usage_location"] = ""
+        # 0 is a real priority in the current template (including category 1800).
+        # Only a blank cell falls back to 1.
+        out["priority"] = [1 if pd.isna(v) else int(v) for v in prio]
 
     out["quantity"] = pd.to_numeric(out["quantity"], errors="coerce")
     return out
@@ -318,7 +383,11 @@ def filter_warehouse_inventory_rows(
     df: pd.DataFrame,
     allowlist: Collection[str] | None,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
-    """Keep rows with allowlisted category, valid id, priority != 0, numeric qty."""
+    """Keep rows with allowlisted category, valid id, and numeric qty.
+
+    Priority is not a filter (0 is stored). Category 1800 is kept when it is
+    on the allowlist (surplus rule).
+    """
     reasons = {
         "wrong_category": 0,
         "priority_0": 0,
@@ -343,9 +412,9 @@ def filter_warehouse_inventory_rows(
         if item_id is None or (isinstance(item_id, float) and pd.isna(item_id)) or not str(item_id).strip():
             reasons["bad_id"] += 1
             ok = False
-        if prio == 0:
-            reasons["priority_0"] += 1
-            ok = False
+        # priority 0 is stored, not a drop flag (template uses it widely,
+        # including every category-1800 surplus row).
+        del prio
         if qty is None or (isinstance(qty, float) and pd.isna(qty)):
             reasons["bad_quantity"] += 1
             ok = False
@@ -409,9 +478,18 @@ def _headers_of_sheet(path: Path, sheet_name: str) -> list[str]:
 
 
 def _sheet_has_warehouse_headers(headers: list[str]) -> bool:
+    """True for legacy 3-col warehouse or the current ریز اطلاعات template.
+
+    «کل موجودی» is a category summary and does not match (no شناسه/شرح row).
+    """
     norms = {_normalize_fa_header(h) for h in headers}
-    needed = {_normalize_fa_header(h) for h in _WAREHOUSE_HEADER_HINTS}
-    return needed.issubset(norms)
+    has_cat = _normalize_fa_header("کد دسته بندی") in norms or _normalize_fa_header("کد ساختار") in norms
+    has_qty = _normalize_fa_header("موجودی") in norms
+    has_desc = (
+        _normalize_fa_header("کد و شرح کالا") in norms
+        or _normalize_fa_header("شرح کالا") in norms
+    )
+    return has_cat and has_qty and has_desc
 
 
 def _pick_excel_sheet(path: Path) -> str | int:
@@ -711,8 +789,9 @@ def extract_and_save_clean(
 ) -> ExtractResult:
     """Load raw workbook, filter records, project columns, write cleaned xlsx.
 
-    For product_inventory (منبع اصلی): extract id, filter by category allowlist,
-    drop priority==0, default priority=1.
+    For product_inventory (منبع اصلی): read sheet «ریز اطلاعات» only, extract id,
+    filter by category allowlist (1800 surplus stays on the allowlist).
+    Priority 0 is kept. Missing new columns stay blank.
     For other types: standard tundish keep-rule + REQUIRED_COLUMNS projection.
     """
     if file_type not in FILE_TYPES:
@@ -740,7 +819,6 @@ def extract_and_save_clean(
             raise ExcelValidationError(
                 "پس از استخراج، هیچ ردیف معتبری باقی نماند.\n"
                 f"حذف‌شده‌ها: دسته نامجاز={drop_reasons.get('wrong_category', 0)}، "
-                f"اولویت ۰={drop_reasons.get('priority_0', 0)}، "
                 f"شناسه نامعتبر={drop_reasons.get('bad_id', 0)}، "
                 f"دسته خالی={drop_reasons.get('bad_category', 0)}، "
                 f"موجودی نامعتبر={drop_reasons.get('bad_quantity', 0)}."

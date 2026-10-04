@@ -19,7 +19,9 @@ from analytics.frames import (
 from config import REQUIRED_COLUMNS, UPLOAD_DIR
 from db.models import Database
 from excel.processor import (
+    _fa_text,
     _is_blank,
+    _normalize_columns,
     _normalize_key_part,
     merge_clean_frames,
     write_clean_excel,
@@ -36,19 +38,32 @@ INVENTORY_COLUMNS: list[str] = list(REQUIRED_COLUMNS["product_inventory"])
 
 FIELD_LABELS_FA: dict[str, str] = {
     "category_code": "کد دسته بندی",
-    "id": "شناسه",
-    "product_name": "نام محصول",
-    "keyword": "کلید واژه",
+    "id": "شناسه مواد",
+    "product_name": "شرح کالا",
+    "work_order": "شماره دستور کار",
     "usage_location": "محل استفاده",
+    "keyword": "کلید واژه",
     "quantity": "موجودی",
     "priority": "اولویت",
+    "contractor_or_company": "پیمانکار / شرکت",
+    "origin": "سازنده",
+    "shared": "اشتراکی",
+    "critical_point": "نقطه بحرانی",
+    "unit": "واحد",
+    "other_areas": "سایر نواحی",
+    "billet_renovation": "نوسازی تاندیش بیلت",
+    "billet_patching": "پچینگ تاندیش بیلت",
+    "bloom_renovation": "نوسازی تاندیش بلوم",
+    "bloom_patching": "پچینگ تاندیش بلوم",
+    "slab_renovation": "نوسازی تاندیش اسلب",
+    "slab_patching": "پچینگ تاندیش اسلب",
 }
 
-# Short labels preferred for محل استفاده (work_order / tundish derived).
-# Casting-floor shroud labels are distinct from tundish اسلب/بلوم/بیلت.
-SHROUD_SLAB_LABEL = "سطح ریخته‌گری اسلب"
-SHROUD_BLOOM_LABEL = "سطح ریخته‌گری بلوم"
-SHROUD_BILLET_LABEL = "سطح ریخته‌گری بیلت"
+# File phrases for محل استفاده do NOT use ZWNJ (ریخته گری, not ریخته‌گری).
+# Casting-floor shroud labels stay distinct from tundish اسلب/بلوم/بیلت.
+SHROUD_SLAB_LABEL = "سطح ریخته گری اسلب"
+SHROUD_BLOOM_LABEL = "سطح ریخته گری بلوم"
+SHROUD_BILLET_LABEL = "سطح ریخته گری بیلت"
 SHROUD_CASTING_LABELS = (
     SHROUD_SLAB_LABEL,
     SHROUD_BLOOM_LABEL,
@@ -56,15 +71,19 @@ SHROUD_CASTING_LABELS = (
 )
 # Default shroud label (these plant items are slab). Kept name for callers.
 SHROUD_LOCATION_LABEL = SHROUD_SLAB_LABEL
-# Previous single label — upgraded to the slab casting-floor label, never written again.
+# Previous single label (with ZWNJ) — recognized, never written again.
 LEGACY_SHROUD_LOCATION_LABEL = "سطح ریخته‌گری"
+LEGACY_SHROUD_LOCATION_LABEL_NO_ZWNJ = "سطح ریخته گری"
 _SHROUD_BLOOM_BILLET_LABELS = frozenset({SHROUD_BLOOM_LABEL, SHROUD_BILLET_LABEL})
 
 _LOCATION_ORDER = (
     "اسلب",
     "بلوم",
     "بیلت",
+    "بلوم / بیلت",
+    "بلوم/اسلب",
     *SHROUD_CASTING_LABELS,
+    "سطح ریخته گری اسلب/بلوم",
     "سایر نواحی",
 )
 
@@ -90,11 +109,16 @@ def _norm_id(value: object) -> str:
 
 
 def _cell_str(value: object) -> str:
-    if _is_blank(value):
-        return ""
-    text = str(value).strip()
-    text = text.replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
-    return " ".join(text.split())
+    """Normalize yeh/kaf and extra spaces. Does not rewrite محل استفاده phrases."""
+    return _fa_text(value)
+
+
+def _canon_location(value: object) -> str:
+    """Location key for comparisons: ZWNJ becomes a space, then spaces collapse.
+
+    Storage keeps the file phrase. «سطح ریخته‌گری اسلب» matches «سطح ریخته گری اسلب».
+    """
+    return " ".join(_cell_str(value).replace("\u200c", " ").split())
 
 
 def _group_from_tundish_text(value: object) -> str | None:
@@ -120,8 +144,8 @@ def _group_from_tundish_text(value: object) -> str | None:
 def shroud_location_label(name: object, tundish_type: object = None) -> str | None:
     """Casting-floor label for a shroud name, or None if the name is not a shroud.
 
-    Bloom/billet only when tundish type says so. Otherwise «سطح ریخته‌گری اسلب»
-    (current shroud items are slab). Never returns plain اسلب/بلوم/بیلت.
+    Bloom/billet only when tundish type says so. Otherwise «سطح ریخته گری اسلب»
+    (no ZWNJ; matches the منبع اصلی file). Never returns plain اسلب/بلوم/بیلت.
     """
     if not _is_shroud_name(name):
         return None
@@ -135,7 +159,7 @@ def location_label_from_consumption_row(row: Mapping[str, Any] | pd.Series) -> s
     """Pick the best محل استفاده label from a monthly/consumption row.
 
     Preference:
-      0. material/product name contains shroud/شرود → سطح ریخته‌گری اسلب,
+      0. material/product name contains shroud/شرود → سطح ریخته گری اسلب,
          or بلوم/بیلت casting-floor label when tundish type says so
       1. work_order → اسلب / بلوم / بیلت / سایر نواحی
       2. tundish_type (strip «تاندیش » / map known labels)
@@ -188,8 +212,9 @@ def location_label_from_consumption_row(row: Mapping[str, Any] | pd.Series) -> s
 def build_usage_location_map(monthly_df: pd.DataFrame | None) -> dict[str, str]:
     """Map item id → unique usage locations joined with «، ».
 
-    Order: اسلب، بلوم، بیلت، then the three سطح ریخته‌گری labels, سایر نواحی,
-    then leftovers. Any casting-floor shroud label wins alone (plain اسلب is dropped).
+    Order: اسلب، بلوم، بیلت، combined file phrases, then the three سطح ریخته گری
+    labels, سایر نواحی, then leftovers. Any casting-floor shroud label wins alone
+    (plain اسلب is dropped).
     """
     if monthly_df is None or monthly_df.empty or "id" not in monthly_df.columns:
         return {}
@@ -212,7 +237,10 @@ def build_usage_location_map(monthly_df: pd.DataFrame | None) -> dict[str, str]:
     for iid, labels in buckets.items():
         # Casting-floor shroud wins alone — never keep plain اسلب/بلوم/بیلت with it.
         casting = [lab for lab in SHROUD_CASTING_LABELS if lab in labels]
-        if not casting and LEGACY_SHROUD_LOCATION_LABEL in labels:
+        if not casting and (
+            LEGACY_SHROUD_LOCATION_LABEL in labels
+            or LEGACY_SHROUD_LOCATION_LABEL_NO_ZWNJ in labels
+        ):
             casting = [SHROUD_SLAB_LABEL]
         if casting:
             out[iid] = "، ".join(casting)
@@ -253,7 +281,8 @@ def load_primary_frame(
         return None
     if df is None or df.empty:
         return ensure_inventory_columns(pd.DataFrame())
-    return ensure_inventory_columns(df)
+    # English keys or Persian headers (re-export / old 7-col files).
+    return ensure_inventory_columns(_normalize_columns(df))
 
 
 def persist_primary_frame(
@@ -333,10 +362,14 @@ def upsert_row(
         if key == "quantity":
             df.at[idx, key] = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
         elif key == "priority":
-            try:
-                df.at[idx, key] = int(float(str(value).strip() or 1))
-            except (TypeError, ValueError):
+            raw = "" if value is None else str(value).strip()
+            if not raw or raw.casefold() in {"nan", "none"}:
                 df.at[idx, key] = 1
+            else:
+                try:
+                    df.at[idx, key] = int(float(raw))
+                except (TypeError, ValueError):
+                    df.at[idx, key] = 1
         elif key == "category_code":
             text = _cell_str(value)
             if text.endswith(".0") and text[:-2].isdigit():
@@ -374,9 +407,10 @@ def add_row(
             row_data[col] = record.get(col)
     row_data["id"] = item_id
     # Normalize types
-    row_data["keyword"] = _cell_str(row_data.get("keyword"))
-    row_data["usage_location"] = _cell_str(row_data.get("usage_location"))
-    row_data["product_name"] = _cell_str(row_data.get("product_name"))
+    for col in INVENTORY_COLUMNS:
+        if col in {"quantity", "priority", "category_code"}:
+            continue
+        row_data[col] = _cell_str(row_data.get(col))
     cat = _cell_str(row_data.get("category_code"))
     if cat.endswith(".0") and cat[:-2].isdigit():
         cat = cat[:-2]
@@ -387,10 +421,15 @@ def add_row(
         row_data["quantity"] = float(pd.to_numeric(pd.Series([row_data.get("quantity")]), errors="coerce").iloc[0])
     except (TypeError, ValueError):
         row_data["quantity"] = None
-    try:
-        row_data["priority"] = int(float(str(row_data.get("priority") or 1)))
-    except (TypeError, ValueError):
+    raw_priority = row_data.get("priority")
+    raw_priority_text = "" if raw_priority is None else str(raw_priority).strip()
+    if not raw_priority_text or raw_priority_text.casefold() in {"nan", "none"}:
         row_data["priority"] = 1
+    else:
+        try:
+            row_data["priority"] = int(float(raw_priority_text))
+        except (TypeError, ValueError):
+            row_data["priority"] = 1
 
     if idx is not None:
         for col in INVENTORY_COLUMNS:
@@ -441,17 +480,19 @@ def _location_parts(value: object) -> list[str]:
 
 def _keeps_bloom_or_billet_floor(value: object) -> bool:
     """True when محل استفاده already names bloom/billet casting floor."""
-    parts = _location_parts(value)
-    if any(p in _SHROUD_BLOOM_BILLET_LABELS for p in parts):
+    parts = [_canon_location(p) for p in _location_parts(value)]
+    canon_labs = {_canon_location(lab) for lab in _SHROUD_BLOOM_BILLET_LABELS}
+    if any(p in canon_labs for p in parts):
         return True
-    text = _cell_str(value)
-    return any(lab in text for lab in _SHROUD_BLOOM_BILLET_LABELS)
+    text = _canon_location(value)
+    return any(_canon_location(lab) in text for lab in _SHROUD_BLOOM_BILLET_LABELS)
 
 
 def _is_casting_floor_location(value: object) -> bool:
     """True for one casting-floor label or a join of only those labels."""
-    parts = _location_parts(value)
-    return bool(parts) and all(p in SHROUD_CASTING_LABELS for p in parts)
+    parts = [_canon_location(p) for p in _location_parts(value)]
+    allowed = {_canon_location(lab) for lab in SHROUD_CASTING_LABELS}
+    return bool(parts) and all(p in allowed for p in parts)
 
 
 def _shroud_ids_with_bloom_or_billet(inv_df: pd.DataFrame) -> set[str]:
@@ -476,27 +517,31 @@ def usage_map_keeping_shroud_floors(
 ) -> dict[str, str]:
     """Copy of location_map safe to apply onto an inventory that contains shrouds.
 
-    - Do not overwrite an existing «سطح ریخته‌گری بلوم/بیلت».
-    - A shroud id must not be written back to plain اسلب (or any non-casting label).
-      Bloom/billet casting labels already in the map (tundish detection) are kept.
+    A shroud row that already has محل استفاده (the منبع اصلی file value) is
+    left alone — monthly sync must not clobber it. Blank shroud rows may still
+    receive a casting-floor label. A shroud id is never written back to plain اسلب.
     """
     if not location_map:
         return {}
-    protected = _shroud_ids_with_bloom_or_billet(inv_df)
+    occupied: set[str] = set()
     shroud_ids: set[str] = set()
     if inv_df is not None and not inv_df.empty and "product_name" in inv_df.columns:
         for _, row in inv_df.iterrows():
-            if _is_shroud_name(row.get("product_name")):
-                iid = _norm_id(row.get("id"))
-                if iid:
-                    shroud_ids.add(iid)
+            if not _is_shroud_name(row.get("product_name")):
+                continue
+            iid = _norm_id(row.get("id"))
+            if not iid:
+                continue
+            shroud_ids.add(iid)
+            if _cell_str(row.get("usage_location")):
+                occupied.add(iid)
     out: dict[str, str] = {}
     for key, value in location_map.items():
         iid = _norm_id(key)
-        if not iid or iid in protected:
+        if not iid or iid in occupied:
             continue
         label = _cell_str(value)
-        if label == LEGACY_SHROUD_LOCATION_LABEL:
+        if label in {LEGACY_SHROUD_LOCATION_LABEL, LEGACY_SHROUD_LOCATION_LABEL_NO_ZWNJ}:
             label = SHROUD_SLAB_LABEL
         if iid in shroud_ids and not _is_casting_floor_location(label):
             label = SHROUD_SLAB_LABEL
@@ -506,11 +551,10 @@ def usage_map_keeping_shroud_floors(
 
 
 def force_shroud_usage_locations(inv_df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """Set shroud rows to «سطح ریخته‌گری اسلب» unless a casting-floor label is set.
+    """Fill blank shroud محل استفاده with «سطح ریخته گری اسلب».
 
-    Existing «سطح ریخته‌گری بلوم» / «سطح ریخته‌گری بیلت» / «سطح ریخته‌گری اسلب»
-    are left alone. Plain اسلب, blank, and the legacy lone label are upgraded
-    to the slab casting-floor label. Does not invent bloom/billet rows.
+    Any location already stored (file value, including plain اسلب or a
+    casting-floor phrase) is kept. Does not invent bloom/billet rows.
     """
     out = ensure_inventory_columns(inv_df)
     if out.empty or "product_name" not in out.columns:
@@ -520,7 +564,7 @@ def force_shroud_usage_locations(inv_df: pd.DataFrame) -> tuple[pd.DataFrame, in
         if not _is_shroud_name(row.get("product_name")):
             continue
         old_val = _cell_str(row.get("usage_location"))
-        if _is_casting_floor_location(old_val) or _keeps_bloom_or_billet_floor(old_val):
+        if old_val:
             continue
         out.at[idx, "usage_location"] = SHROUD_SLAB_LABEL
         updated += 1
@@ -545,13 +589,12 @@ def sync_usage_from_monthly(
         }
     updated = 0
     new_inv = inv
-    # Shroud ids already on bloom/billet casting floor stay; other shroud ids
-    # never receive plain اسلب from the monthly work-order map.
+    # Shroud rows that already have a file location are not overwritten.
+    # Blank shroud ids still receive a casting-floor label, never plain اسلب.
     safe_map = usage_map_keeping_shroud_floors(inv, loc_map)
     if safe_map:
         new_inv, updated = apply_usage_locations(inv, safe_map, only_blank=False)
-    # Re-force from product_name so a shroud missing from this month still
-    # cannot remain (or be reset to) plain اسلب.
+    # Only blank shroud rows are filled. A location already in منبع اصلی stays.
     new_inv, shroud_n = force_shroud_usage_locations(new_inv)
     updated += shroud_n
     if not loc_map and shroud_n == 0:
