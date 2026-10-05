@@ -100,6 +100,10 @@ BTN_FORECAST = "🔮 پیش‌بینی نیاز تاندیش"
 BTN_ANALYTICS_PDF = "📄 PDF کامل تحلیل"
 BTN_MONTHLY_SUMMARY = "📥 دریافت خلاصه مصرف ماهیانه"
 BTN_INBOUND = "📥 گزارش ورودی به انبار"
+BTN_CRITICAL_ITEMS = "🚨 اقلام بحرانی"
+BTN_CRITICAL_COUNTS = "📝 ثبت تعداد تاندیش ماهانه"
+BTN_CRITICAL_REPORT = "📄 تولید گزارش اقلام بحرانی"
+BTN_BACK_CRITICAL = "⬅️ بازگشت به اقلام بحرانی"
 BTN_USER_ACTIVITY = "📋 گزارش فعالیت کاربران"
 BTN_REPORT_ASSISTANT = "🤖 دستیار هوشمند"
 BTN_END_ASSISTANT = "پایان گفتگو"
@@ -467,6 +471,7 @@ def analytics_menu() -> dict:
         [BTN_SUGGEST],
         [BTN_PERIOD],
         [BTN_REMAINING],
+        [BTN_CRITICAL_ITEMS],
         [BTN_SURPLUS],
         [BTN_INBOUND],
         [BTN_FORECAST],
@@ -483,6 +488,18 @@ def analytics_menu() -> dict:
         pdf_idx = next(i for i, r in enumerate(rows) if r == [BTN_ANALYTICS_PDF])
         rows.insert(pdf_idx, [BTN_REPORT_ASSISTANT])
     return BaleClient.reply_keyboard(rows)
+
+
+
+def critical_items_menu() -> dict:
+    """Submenu under گزارش‌ها for اقلام بحرانی (owner/manager/officer)."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_CRITICAL_COUNTS],
+            [BTN_CRITICAL_REPORT],
+            [BTN_BACK_ANALYTICS],
+        ]
+    )
 
 
 def tundish_filter_menu() -> dict:

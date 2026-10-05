@@ -51,6 +51,7 @@ from bot.jalali import (
     TEHRAN,
     format_date,
     format_datetime,
+    format_month_year,
     format_month_year_range,
     month_year_to_gregorian_bounds,
     parse_month_year_range,
@@ -123,6 +124,7 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • همه گزارش‌های منوی تحلیل به‌صورت PDF و اکسل (.xlsx) ارسال می‌شوند (کپشن کوتاه در چت)
 • مصرف روزانه / بازه‌ای / پیشنهاد / بحرانی / مازاد / پیش‌بینی / ورودی انبار
 • مواد بحرانی — پوشش < CRITICAL_DAYS={critical} روز
+• اقلام بحرانی — تعداد تاندیش ماه × نرخ نوسازی/پچینگ منبع اصلی (PDF+اکسل)
 • اگر موجودی روزانه سایت ثبت شده باشد، برای «موجودی و مواد بحرانی» به‌عنوان منبع باقیمانده سایت استفاده می‌شود
 • سربرگ PDF (اختیاری): از «تنظیمات ربات» → «سربرگ PDF» آپلود کنید؛ روی همه صفحات گزارش اعمال می‌شود
 • دستیار هوشمند — فعلاً غیرفعال (گفتگوی محلی با Ollama؛ فقط با ASSISTANT_ENABLED=1 فعال می‌شود)
@@ -190,6 +192,8 @@ class BotApp:
         self._warehouse_ret_pending: dict[str, dict[str, Any]] = {}
         # report assistant free-text conversation (non-technician)
         self._report_assistant_pending: set[str] = set()
+        # اقلام بحرانی: year/month/counts entry
+        self._critical_pending: dict[str, dict[str, Any]] = {}
         self._bot_username: str | None = None
         ensure_dirs()
 
@@ -483,6 +487,9 @@ class BotApp:
 
     def _clear_report_assistant_pending(self, uid: str) -> None:
         self._report_assistant_pending.discard(str(uid))
+
+    def _clear_critical_pending(self, uid: str) -> None:
+        self._critical_pending.pop(str(uid), None)
 
     def _inventory_with_ledger(self, frame: pd.DataFrame | None) -> pd.DataFrame | None:
         """Apply inventory_ledger deltas onto a warehouse inventory frame."""
@@ -2134,6 +2141,7 @@ class BotApp:
             return
         self._clear_analysis_pending(user["bale_user_id"])
         self._clear_report_assistant_pending(str(user["bale_user_id"]))
+        self._clear_critical_pending(str(user["bale_user_id"]))
         session = self.db.get_or_create_session(user["bale_user_id"])
         done = self._effective_completeness(user, session)
         lines = [
@@ -2167,6 +2175,343 @@ class BotApp:
         if not self._require_files(message, user, "daily"):
             return
         self._ask_month_year_range(message, user, "daily")
+
+
+    def on_critical_items_menu(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_critical_pending(uid)
+        self._clear_analysis_pending(uid)
+        latest = self.db.list_monthly_tundish_counts(limit=1)
+        extra = ""
+        if latest:
+            r = latest[0]
+            from bot.jalali import format_month_year
+
+            label = format_month_year(int(r["jalali_year"]), int(r["jalali_month"]), named=True)
+            extra = (
+                f"\nآخرین ثبت: {label} — بیلت {r['count_billet']}، "
+                f"بلوم {r['count_bloom']}، اسلب {r['count_slab']}"
+            )
+        self._reply(
+            message,
+            "🚨 اقلام بحرانی\n"
+            "۱) تعداد تاندیش بیلت/بلوم/اسلب ماه را ثبت کنید\n"
+            "۲) گزارش PDF و اکسل را بگیرید\n"
+            "نقش‌های مجاز: مالک، مدیر، کاردان مسئول."
+            f"{extra}",
+            kb.critical_items_menu(),
+        )
+
+    def on_critical_counts_start(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._critical_pending[uid] = {
+            "mode": "counts",
+            "await": "year",
+        }
+        years = year_choices_around()
+        self._reply(
+            message,
+            "سال شمسی مورد نظر برای تعداد تاندیش را انتخاب کنید:",
+            kb.year_picker_menu(years),
+        )
+
+    def on_critical_report_start(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._critical_pending[uid] = {
+            "mode": "report",
+            "await": "year",
+        }
+        years = year_choices_around()
+        self._reply(
+            message,
+            "سال شمسی گزارش اقلام بحرانی را انتخاب کنید:",
+            kb.year_picker_menu(years),
+        )
+
+    def on_critical_flow_text(self, message: dict, text: str) -> bool:
+        """Consume year/month/count steps for اقلام بحرانی. Returns True if handled."""
+        uid = self._uid(message)
+        pending = self._critical_pending.get(uid)
+        if not pending:
+            return False
+        await_kind = pending.get("await")
+        if await_kind not in {
+            "year",
+            "month",
+            "count_billet",
+            "count_bloom",
+            "count_slab",
+        }:
+            return False
+
+        user = self._user_or_deny(message)
+        if not user:
+            return True
+        if self._deny_technician(message, user):
+            self._clear_critical_pending(uid)
+            return True
+
+        # Back / cancel from critical submenu
+        if text in {
+            kb.BTN_BACK_CRITICAL,
+            kb.BTN_BACK_ANALYTICS,
+            kb.BTN_BACK_MAIN,
+            kb.BTN_BACK_PREV,
+            kb.BTN_CANCEL_PENDING,
+            kb.BTN_CRITICAL_ITEMS,
+            kb.BTN_CRITICAL_COUNTS,
+            kb.BTN_CRITICAL_REPORT,
+        }:
+            return False  # let button handlers take over
+
+        mode = pending.get("mode")
+        raw = (text or "").strip()
+
+        if await_kind == "year":
+            digits = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+            if not digits.isdigit() or len(digits) != 4:
+                self._reply(
+                    message,
+                    "سال را از دکمه‌ها انتخاب کنید یا یک سال چهاررقمی بفرستید.",
+                    kb.year_picker_menu(year_choices_around()),
+                )
+                return True
+            pending["year"] = int(digits)
+            pending["await"] = "month"
+            self._critical_pending[uid] = pending
+            self._reply(
+                message,
+                f"ماه گزارش برای سال {digits} را انتخاب کنید:",
+                kb.month_picker_menu(),
+            )
+            return True
+
+        if await_kind == "month":
+            from bot.jalali import PERSIAN_MONTH_NAME_TO_NUM, PERSIAN_MONTH_NAMES
+
+            month = PERSIAN_MONTH_NAME_TO_NUM.get(raw)
+            if month is None:
+                digits = raw.translate(
+                    str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+                )
+                if digits.isdigit() and 1 <= int(digits) <= 12:
+                    month = int(digits)
+            if month is None:
+                self._reply(
+                    message,
+                    "ماه را از دکمه‌ها انتخاب کنید.",
+                    kb.month_picker_menu(),
+                )
+                return True
+            pending["month"] = int(month)
+            year = int(pending["year"])
+            if mode == "report":
+                self._critical_pending[uid] = pending
+                self._run_critical_items_report(message, user, year, int(month))
+                return True
+            # counts mode — load existing and ask billet
+            existing = self.db.get_monthly_tundish_counts(year, int(month))
+            hint = ""
+            if existing:
+                hint = (
+                    f"\nمقادیر فعلی: بیلت {existing['count_billet']}، "
+                    f"بلوم {existing['count_bloom']}، اسلب {existing['count_slab']}"
+                )
+            pending["await"] = "count_billet"
+            self._critical_pending[uid] = pending
+            name = PERSIAN_MONTH_NAMES.get(int(month), str(month))
+            self._reply(
+                message,
+                f"تعداد تاندیش بیلت در {name} {year} را بفرستید (عدد صحیح ≥ ۰):{hint}",
+                kb.critical_items_menu(),
+            )
+            return True
+
+        if await_kind in {"count_billet", "count_bloom", "count_slab"}:
+            digits = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+            if not digits.isdigit():
+                label = {
+                    "count_billet": "بیلت",
+                    "count_bloom": "بلوم",
+                    "count_slab": "اسلب",
+                }[await_kind]
+                self._reply(
+                    message,
+                    f"لطفاً تعداد تاندیش {label} را به‌صورت عدد صحیح (≥ ۰) بفرستید.",
+                    kb.critical_items_menu(),
+                )
+                return True
+            val = int(digits)
+            pending[await_kind] = val
+            if await_kind == "count_billet":
+                pending["await"] = "count_bloom"
+                self._critical_pending[uid] = pending
+                self._reply(
+                    message,
+                    "تعداد تاندیش بلوم را بفرستید (عدد صحیح ≥ ۰):",
+                    kb.critical_items_menu(),
+                )
+                return True
+            if await_kind == "count_bloom":
+                pending["await"] = "count_slab"
+                self._critical_pending[uid] = pending
+                self._reply(
+                    message,
+                    "تعداد تاندیش اسلب را بفرستید (عدد صحیح ≥ ۰):",
+                    kb.critical_items_menu(),
+                )
+                return True
+            # count_slab — save
+            year = int(pending["year"])
+            month = int(pending["month"])
+            billet = int(pending["count_billet"])
+            bloom = int(pending["count_bloom"])
+            slab = val
+            try:
+                saved = self.db.upsert_monthly_tundish_counts(
+                    jalali_year=year,
+                    jalali_month=month,
+                    count_billet=billet,
+                    count_bloom=bloom,
+                    count_slab=slab,
+                    updated_by=user["bale_user_id"],
+                )
+            except ValueError as exc:
+                self._clear_critical_pending(uid)
+                self._reply(message, str(exc), kb.critical_items_menu())
+                return True
+            self._clear_critical_pending(uid)
+            from bot.jalali import format_month_year
+
+            label = format_month_year(year, month, named=True)
+            log_activity(
+                self.db,
+                user,
+                "critical_tundish_counts_saved",
+                jalali_year=year,
+                jalali_month=month,
+            )
+            self._reply(
+                message,
+                f"✅ تعداد تاندیش برای {label} ذخیره شد.\n"
+                f"بیلت: {saved.get('count_billet', billet)} | "
+                f"بلوم: {saved.get('count_bloom', bloom)} | "
+                f"اسلب: {saved.get('count_slab', slab)}\n"
+                "می‌توانید «تولید گزارش اقلام بحرانی» را بزنید.",
+                kb.critical_items_menu(),
+            )
+            return True
+
+        return False
+
+    def _run_critical_items_report(
+        self, message: dict, user: dict, year: int, month: int
+    ) -> None:
+        from analytics.critical_items import (
+            TundishMonthCounts,
+            build_critical_items_rows,
+            report_footer_notes,
+            report_subtitle,
+            report_title,
+            rows_for_simple_report,
+        )
+        from bot.jalali import format_month_year
+
+        uid = str(user["bale_user_id"])
+        self._clear_critical_pending(uid)
+        stored = self.db.get_monthly_tundish_counts(year, month)
+        if not stored:
+            label = format_month_year(year, month, named=True)
+            self._reply(
+                message,
+                f"برای {label} تعداد تاندیش ثبت نشده است.\n"
+                "ابتدا «ثبت تعداد تاندیش ماهانه» را انجام دهید.",
+                kb.critical_items_menu(),
+            )
+            return
+        counts = TundishMonthCounts(
+            jalali_year=year,
+            jalali_month=month,
+            count_billet=int(stored["count_billet"]),
+            count_bloom=int(stored["count_bloom"]),
+            count_slab=int(stored["count_slab"]),
+        )
+        inv = load_primary_inventory(self.db, user)
+        inv = self._inventory_with_ledger(inv)
+        if inv is None or inv.empty:
+            self._reply(
+                message,
+                "منبع اصلی یافت نشد. ابتدا فایل منبع اصلی را آپلود کنید.",
+                kb.critical_items_menu(),
+            )
+            return
+        df = build_critical_items_rows(inv, counts)
+        if df is None or df.empty:
+            self._reply(
+                message,
+                "قلمی با نرخ نوسازی/پچینگ/سطح ریخته‌گری و نیاز مثبت "
+                "برای این تعداد تاندیش یافت نشد.",
+                kb.critical_items_menu(),
+            )
+            return
+        title = report_title(counts)
+        subtitle = report_subtitle(counts, row_count=len(df))
+        notes = report_footer_notes(counts)
+        rows = rows_for_simple_report(df)
+        sections = [
+            {
+                "title": None,
+                "columns": [
+                    "کد چهاررقمی",
+                    "ردیف",
+                    "کد و شرح کالا",
+                    "موجودی",
+                    "واحد",
+                    "نیاز",
+                    "حد تحمل(روز)",
+                ],
+                "rows": rows,
+                "empty_message": "داده‌ای نیست.",
+                "header_bg": "#b71c1c",
+            },
+            {
+                "title": "توضیحات",
+                "columns": ["توضیح"],
+                "rows": [{"توضیح": n} for n in notes],
+                "empty_message": "",
+                "header_bg": "#546e7a",
+            },
+        ]
+        self._send_simple_pdf_report(
+            message,
+            title=title,
+            subtitle=subtitle,
+            sections=sections,
+            filename_stem="critical_items",
+            output_name="لیست_اقلام_بحرانی.pdf",
+            caption=title,
+            reply_ok=f"گزارش اقلام بحرانی ({len(rows)} قلم) ارسال شد.",
+            reply_markup=kb.critical_items_menu(),
+            log_user=user,
+            log_action="report_critical_items",
+        )
 
     def on_remaining_critical(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -5797,6 +6142,10 @@ class BotApp:
         if self.on_main_source_flow_text(message, text):
             return
 
+        # اقلام بحرانی year/month/count text
+        if self.on_critical_flow_text(message, text):
+            return
+
         # category code entry (plain 4-digit text while awaiting)
         if self.on_category_code_text(message, text):
             return
@@ -6004,6 +6353,7 @@ class BotApp:
                 self._clear_material_req_pending(uid)
                 self._clear_warehouse_ret_pending(uid)
                 self._clear_report_assistant_pending(uid)
+                self._clear_critical_pending(uid)
                 self._bot_settings_pending.pop(uid, None)
                 self._await_category_code.discard(uid)
                 self._main_source_pending.pop(uid, None)
@@ -6017,6 +6367,15 @@ class BotApp:
             return
         if text == kb.BTN_REMAINING:
             self.on_remaining_critical(message)
+            return
+        if text == kb.BTN_CRITICAL_ITEMS or text == kb.BTN_BACK_CRITICAL:
+            self.on_critical_items_menu(message)
+            return
+        if text == kb.BTN_CRITICAL_COUNTS:
+            self.on_critical_counts_start(message)
+            return
+        if text == kb.BTN_CRITICAL_REPORT:
+            self.on_critical_report_start(message)
             return
         if text == kb.BTN_SURPLUS:
             self.on_surplus_report(message)

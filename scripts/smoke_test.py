@@ -746,7 +746,107 @@ def _test_shroud_casting_labels() -> None:
     print("shroud casting labels OK", result.get("updated"), result.get("shroud_forced"))
 
 
+
+
+def _test_critical_items_report() -> None:
+    """اقلام بحرانی: rates×counts, real stock, days cover, DB counts."""
+    import tempfile
+
+    import pandas as pd
+
+    from analytics.critical_items import (
+        TundishMonthCounts,
+        build_critical_items_rows,
+        monthly_need_for_rates,
+        report_title,
+    )
+    from bot.jalali import days_in_jalali_month
+    from db.models import Database
+
+    assert days_in_jalali_month(1405, 6) == 31
+    assert days_in_jalali_month(1403, 12) in {29, 30}
+
+    counts = TundishMonthCounts(1405, 6, count_billet=70, count_bloom=0, count_slab=100)
+    # per billet 200+200=400 → 70*400=28000; slab 170+170=340 → 100*340=34000; total 62000
+    need = monthly_need_for_rates(
+        billet_renovation=200,
+        billet_patching=200,
+        bloom_renovation=0,
+        bloom_patching=0,
+        slab_renovation=170,
+        slab_patching=170,
+        casting_floor=0,
+        counts=counts,
+    )
+    assert need == 62000, need
+    # casting_floor × total tundishes
+    need_cf = monthly_need_for_rates(
+        billet_renovation=0,
+        billet_patching=0,
+        bloom_renovation=0,
+        bloom_patching=0,
+        slab_renovation=0,
+        slab_patching=0,
+        casting_floor=1,
+        counts=counts,
+    )
+    assert need_cf == 170, need_cf
+
+    inv = pd.DataFrame(
+        {
+            "category_code": ["1203", "1203", "1638", "9999"],
+            "id": ["A", "B", "C", "D"],
+            "product_name": ["بتن بیلت", "بتن اسلب", "صفحه بیلت", "بدون نرخ"],
+            "keyword": ["بتن 85", "بتن 85 اسلب", "صفحه", "سایر"],
+            "quantity": [10000, 9000, 0, 500],
+            "priority": [1, 2, 1, 1],
+            "unit": ["Kg", "Kg", "No", "Kg"],
+            "critical_point": [None, None, None, None],
+            "billet_renovation": [200, 0, 1, 0],
+            "billet_patching": [200, 0, 1, 0],
+            "bloom_renovation": [0, 0, 0, 0],
+            "bloom_patching": [0, 0, 0, 0],
+            "slab_renovation": [0, 170, 0, 0],
+            "slab_patching": [0, 170, 0, 0],
+            "casting_floor": [0, 0, 0, 0],
+        }
+    )
+    df = build_critical_items_rows(inv, counts)
+    assert not df.empty
+    codes = set(df["کد چهاررقمی"].astype(str))
+    assert "1203" in codes and "1638" in codes and "9999" not in codes
+    row1203 = df.loc[df["کد چهاررقمی"].astype(str) == "1203"].iloc[0]
+    assert int(row1203["موجودی"]) == 19000
+    assert int(row1203["نیاز"]) == 62000
+    # days_cover = 19000 / (62000/31) ≈ 9.5 → 9 or 10
+    assert int(row1203["حد تحمل(روز)"]) in {9, 10}
+    assert "لیست اقلام بحرانی" in report_title(counts)
+    assert "شهریور" in report_title(counts)
+
+    with tempfile.TemporaryDirectory() as td:
+        db = Database(Path(td) / "t.db")
+        db.upsert_monthly_tundish_counts(
+            jalali_year=1405,
+            jalali_month=6,
+            count_billet=70,
+            count_bloom=0,
+            count_slab=100,
+            updated_by="1644670601",
+        )
+        got = db.get_monthly_tundish_counts(1405, 6)
+        assert got and int(got["count_billet"]) == 70 and int(got["count_slab"]) == 100
+        # empty need → empty frame (no blank PDF path for callers)
+        empty = build_critical_items_rows(
+            inv, TundishMonthCounts(1405, 6, 0, 0, 0)
+        )
+        # casting_floor-only / rate rows with 0 counts: need from casting only if cf>0
+        # our inv has no casting_floor; billet/slab rates × 0 = 0 → empty
+        assert empty.empty
+    print("critical_items report OK")
+
+
 def main() -> int:
+    _test_critical_items_report()
     _test_shroud_casting_labels()
     _test_casting_floor_priority_rules()
     make_samples()

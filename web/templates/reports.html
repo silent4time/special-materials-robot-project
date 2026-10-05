@@ -3,7 +3,7 @@
 {% block content %}
 <div class="card">
   <h1>گزارش‌های PDF و اکسل</h1>
-  <p class="muted">فرمول‌ها از <code>analytics.tundish</code> و خروجی از <code>pdf.generator</code> / <code>excel.simple_report</code> — بدون کپی منطق.</p>
+  <p class="muted">فرمول‌ها از <code>analytics.tundish</code> / <code>analytics.critical_items</code> و خروجی از <code>pdf.generator</code> / <code>excel.simple_report</code> — بدون کپی منطق.</p>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
   <p class="muted">
@@ -25,5 +25,55 @@
     <a class="btn" href="/reports/user-activity">فعالیت کاربران (PDF)</a>
     <a class="btn" href="/reports/user-activity.xlsx">فعالیت کاربران (اکسل)</a>
   </div>
+</div>
+
+<div class="card" id="critical-items">
+  <h2>🚨 اقلام بحرانی نسوز تاندیش</h2>
+  <p class="muted">
+    همان منطق ربات: نیاز ماهانه ≈ تعداد تاندیش × (نوسازی+پچینگ) + سطح ریخته‌گری.
+    نقش‌های مجاز: مالک، مدیر، کاردان مسئول.
+  </p>
+  <form method="post" action="/reports/critical-items/counts" class="form-grid">
+    <label>سال شمسی
+      <input type="number" name="jalali_year" min="1390" max="1500" required
+             value="{{ critical_year }}">
+    </label>
+    <label>ماه
+      <select name="jalali_month" required>
+        {% for num, name in month_names %}
+        <option value="{{ num }}" {% if num == critical_month %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>تعداد تاندیش بیلت
+      <input type="number" name="count_billet" min="0" step="1" required
+             value="{{ counts.count_billet if counts else 0 }}">
+    </label>
+    <label>تعداد تاندیش بلوم
+      <input type="number" name="count_bloom" min="0" step="1" required
+             value="{{ counts.count_bloom if counts else 0 }}">
+    </label>
+    <label>تعداد تاندیش اسلب
+      <input type="number" name="count_slab" min="0" step="1" required
+             value="{{ counts.count_slab if counts else 0 }}">
+    </label>
+    <div class="report-actions">
+      <button type="submit" class="btn">ذخیره تعداد تاندیش</button>
+    </div>
+  </form>
+  <form method="get" class="report-actions" style="margin-top:1rem">
+    <input type="hidden" name="jalali_year" value="{{ critical_year }}">
+    <input type="hidden" name="jalali_month" value="{{ critical_month }}">
+    <button class="btn" formaction="/reports/critical-items">دانلود گزارش (PDF)</button>
+    <button class="btn" formaction="/reports/critical-items.xlsx">دانلود گزارش (اکسل)</button>
+  </form>
+  {% if recent_counts %}
+  <p class="muted" style="margin-top:1rem">ثبت‌های اخیر:</p>
+  <ul class="muted">
+    {% for r in recent_counts %}
+    <li>{{ r.label }} — بیلت {{ r.count_billet }}، بلوم {{ r.count_bloom }}، اسلب {{ r.count_slab }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
 </div>
 {% endblock %}

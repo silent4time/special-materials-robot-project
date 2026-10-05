@@ -322,3 +322,18 @@ def year_choices_around(today: jdatetime.date | None = None, before: int = 3, af
     """Years for reply-keyboard picker (newest last)."""
     today = today or jalali_today()
     return list(range(today.year - before, today.year + after + 1))
+
+
+def days_in_jalali_month(year: int, month: int) -> int:
+    """Number of days in a Jalali month (1..12). Esfand is 29 or 30."""
+    y, m = int(year), int(month)
+    if m < 1 or m > 12:
+        raise ValueError(f"ماه نامعتبر: {month}")
+    if m <= 6:
+        return 31
+    if m <= 11:
+        return 30
+    # Esfand: next Farvardin 1 minus this Esfand 1
+    next_first = jdatetime.date(y + 1, 1, 1).togregorian()
+    this_first = jdatetime.date(y, 12, 1).togregorian()
+    return (next_first - this_first).days

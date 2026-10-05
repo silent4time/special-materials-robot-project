@@ -704,14 +704,14 @@ def drop_priority_zero_materials(
 
 
 def critical_point_category_totals(inventory_df: pd.DataFrame | None) -> pd.DataFrame:
-    """Per category_code stock total for the future critical-point report.
+    """Per category_code stock total for critical-point / اقلام بحرانی.
 
     Rule (spec): sum quantity over rows with the same کد دسته بندی, EXCLUDING
     rows with quantity < 100 OR priority 0. Returns category_code,
     total_quantity, row_count.
 
-    TODO(critical-items): the monthly tundish-count input and tonnage-need
-    report are not built yet — waiting for the user's sample formats.
+    Used by ``analytics.critical_items`` for threshold highlighting; display
+    stock in the critical-items report is the unfiltered real sum.
     """
     cols = ["category_code", "total_quantity", "row_count"]
     if (

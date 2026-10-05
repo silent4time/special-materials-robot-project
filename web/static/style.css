@@ -161,3 +161,21 @@ td input[type="number"] { max-width: 110px; }
   font-size: .78rem;
 }
 .report-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; }
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: .75rem 1rem;
+  align-items: end;
+  margin-top: .75rem;
+}
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+  font-size: .9rem;
+}
+.form-grid input, .form-grid select {
+  width: 100%;
+}
+

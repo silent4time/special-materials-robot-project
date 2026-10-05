@@ -277,6 +277,19 @@ class Database:
                     ON user_activity(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_user_activity_user
                     ON user_activity(bale_user_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS monthly_tundish_counts (
+                    jalali_year INTEGER NOT NULL,
+                    jalali_month INTEGER NOT NULL,
+                    count_billet INTEGER NOT NULL DEFAULT 0,
+                    count_bloom INTEGER NOT NULL DEFAULT 0,
+                    count_slab INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT,
+                    PRIMARY KEY (jalali_year, jalali_month)
+                );
+                CREATE INDEX IF NOT EXISTS idx_monthly_tundish_counts_updated
+                    ON monthly_tundish_counts(updated_at DESC);
                 """
             )
             self._migrate_users_role_check(conn)
@@ -1920,6 +1933,89 @@ class Database:
                 (str(file_type),),
             ).fetchone()
             return dict(row) if row else None
+
+
+    # ---------- monthly tundish counts (اقلام بحرانی) ----------
+
+    def upsert_monthly_tundish_counts(
+        self,
+        *,
+        jalali_year: int,
+        jalali_month: int,
+        count_billet: int,
+        count_bloom: int,
+        count_slab: int,
+        updated_by: str | int | None = None,
+    ) -> dict[str, Any]:
+        """Persist monthly billet/bloom/slab tundish counts (integers ≥ 0)."""
+        y, m = int(jalali_year), int(jalali_month)
+        if m < 1 or m > 12:
+            raise ValueError(f"ماه نامعتبر: {jalali_month}")
+        for label, val in (
+            ("بیلت", count_billet),
+            ("بلوم", count_bloom),
+            ("اسلب", count_slab),
+        ):
+            if int(val) < 0:
+                raise ValueError(f"تعداد تاندیش {label} نمی‌تواند منفی باشد.")
+        now = _utcnow()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO monthly_tundish_counts
+                    (jalali_year, jalali_month, count_billet, count_bloom, count_slab,
+                     updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(jalali_year, jalali_month) DO UPDATE SET
+                    count_billet = excluded.count_billet,
+                    count_bloom = excluded.count_bloom,
+                    count_slab = excluded.count_slab,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+                """,
+                (
+                    y,
+                    m,
+                    int(count_billet),
+                    int(count_bloom),
+                    int(count_slab),
+                    now,
+                    str(updated_by) if updated_by is not None else None,
+                ),
+            )
+            row = conn.execute(
+                """
+                SELECT * FROM monthly_tundish_counts
+                WHERE jalali_year = ? AND jalali_month = ?
+                """,
+                (y, m),
+            ).fetchone()
+        return dict(row) if row else {}
+
+    def get_monthly_tundish_counts(
+        self, jalali_year: int, jalali_month: int
+    ) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM monthly_tundish_counts
+                WHERE jalali_year = ? AND jalali_month = ?
+                """,
+                (int(jalali_year), int(jalali_month)),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_monthly_tundish_counts(self, limit: int = 24) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM monthly_tundish_counts
+                ORDER BY jalali_year DESC, jalali_month DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     # ---------- user activity log ----------
 

@@ -3,19 +3,52 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import FileResponse, RedirectResponse
 
 from bot.activity import log_activity
+from bot.jalali import PERSIAN_MONTH_NAMES, format_month_year, jalali_today
 from db.models import Database
-from web.deps import get_db, require_non_technician
+from web.deps import get_db, require_materials_user, require_non_technician
 from web.services import reports as report_svc
-from web.services.data import data_completeness, load_frames
+from web.services.data import data_completeness
 from web.templating import render
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _critical_context(db: Database, request: Request) -> dict:
+    today = jalali_today()
+    try:
+        year = int(request.query_params.get("jalali_year") or today.year)
+    except ValueError:
+        year = today.year
+    try:
+        month = int(request.query_params.get("jalali_month") or today.month)
+    except ValueError:
+        month = today.month
+    if month < 1 or month > 12:
+        month = today.month
+    counts = db.get_monthly_tundish_counts(year, month)
+    recent = []
+    for r in db.list_monthly_tundish_counts(limit=6):
+        recent.append(
+            {
+                **r,
+                "label": format_month_year(
+                    int(r["jalali_year"]), int(r["jalali_month"]), named=True
+                ),
+            }
+        )
+    return {
+        "critical_year": year,
+        "critical_month": month,
+        "counts": counts,
+        "recent_counts": recent,
+        "month_names": [(n, PERSIAN_MONTH_NAMES[n]) for n in range(1, 13)],
+    }
 
 
 @router.get("")
@@ -25,17 +58,110 @@ async def reports_page(
     user=Depends(require_non_technician),
     db: Database = Depends(get_db),
 ):
-    return render(
-        request,
-        "reports.html",
-        {
-            "user": user,
-            "completeness": data_completeness(db, user),
-            "site_stock_date": db.get_latest_site_stock_date(),
-            "message": request.query_params.get("msg"),
-            "error": request.query_params.get("err"),
-        },
+    ctx = {
+        "user": user,
+        "completeness": data_completeness(db, user),
+        "site_stock_date": db.get_latest_site_stock_date(),
+        "message": request.query_params.get("msg"),
+        "error": request.query_params.get("err"),
+    }
+    ctx.update(_critical_context(db, request))
+    return render(request, "reports.html", ctx)
+
+
+@router.post("/critical-items/counts")
+async def save_critical_counts(
+    request: Request,
+    jalali_year: int = Form(...),
+    jalali_month: int = Form(...),
+    count_billet: int = Form(...),
+    count_bloom: int = Form(...),
+    count_slab: int = Form(...),
+    user=Depends(require_materials_user),
+    db: Database = Depends(get_db),
+):
+    try:
+        db.upsert_monthly_tundish_counts(
+            jalali_year=jalali_year,
+            jalali_month=jalali_month,
+            count_billet=count_billet,
+            count_bloom=count_bloom,
+            count_slab=count_slab,
+            updated_by=user["bale_user_id"],
+        )
+    except ValueError as exc:
+        return RedirectResponse(
+            f"/reports?err={quote(str(exc))}"
+            f"&jalali_year={jalali_year}&jalali_month={jalali_month}",
+            status_code=303,
+        )
+    log_activity(
+        db,
+        user,
+        "critical_tundish_counts_saved",
+        jalali_year=jalali_year,
+        jalali_month=jalali_month,
     )
+    label = format_month_year(jalali_year, jalali_month, named=True)
+    return RedirectResponse(
+        f"/reports?msg={quote('تعداد تاندیش برای ' + label + ' ذخیره شد.')}"
+        f"&jalali_year={jalali_year}&jalali_month={jalali_month}",
+        status_code=303,
+    )
+
+
+@router.get("/critical-items")
+async def critical_items_pdf(
+    request: Request,
+    user=Depends(require_materials_user),
+    db: Database = Depends(get_db),
+):
+    today = jalali_today()
+    try:
+        year = int(request.query_params.get("jalali_year") or today.year)
+        month = int(request.query_params.get("jalali_month") or today.month)
+    except ValueError:
+        return RedirectResponse(
+            f"/reports?err={quote('سال/ماه نامعتبر')}", status_code=303
+        )
+    path, _xlsx, err = report_svc.generate_critical_items_files(
+        db, user, jalali_year=year, jalali_month=month
+    )
+    if err or not path:
+        return RedirectResponse(
+            f"/reports?err={quote(err or 'خطا')}"
+            f"&jalali_year={year}&jalali_month={month}",
+            status_code=303,
+        )
+    log_activity(db, user, "report_critical_items")
+    return FileResponse(path, media_type="application/pdf", filename=path.name)
+
+
+@router.get("/critical-items.xlsx")
+async def critical_items_xlsx(
+    request: Request,
+    user=Depends(require_materials_user),
+    db: Database = Depends(get_db),
+):
+    today = jalali_today()
+    try:
+        year = int(request.query_params.get("jalali_year") or today.year)
+        month = int(request.query_params.get("jalali_month") or today.month)
+    except ValueError:
+        return RedirectResponse(
+            f"/reports?err={quote('سال/ماه نامعتبر')}", status_code=303
+        )
+    _pdf, path, err = report_svc.generate_critical_items_files(
+        db, user, jalali_year=year, jalali_month=month
+    )
+    if err or not path:
+        return RedirectResponse(
+            f"/reports?err={quote(err or 'خطا')}"
+            f"&jalali_year={year}&jalali_month={month}",
+            status_code=303,
+        )
+    log_activity(db, user, "report_critical_items_xlsx")
+    return FileResponse(path, media_type=_XLSX, filename=path.name)
 
 
 @router.get("/remaining-critical")
