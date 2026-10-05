@@ -121,7 +121,9 @@ def test_service(tmp: Path) -> None:
         out = mgh.store_month_set(db, f, filenames={k: v.name for k, v in f.items()}, user=user, source="t")
         assert out.ok, out.error_fa
     model = mgh.build_history_model(mgh.load_history(db))
-    assert model.n_months == 2 and any("حداقل" in w for w in model.warnings())
+    assert model.n_months == 2
+    # Continuous 2 months → no gap alarm (old «حداقل ۳ ماه» removed)
+    assert not any("وقفه" in w for w in model.warnings())
     res = mgh.scenario_forecast(model, 6)
     assert res.ok and "میانگین" in str(res.sections[0]["rows"][0]["روش"]), res.sections[0]["rows"][0]
 
@@ -135,7 +137,7 @@ def test_service(tmp: Path) -> None:
     months = mgh.load_history(db)
     assert [m.label for m in months] == ["تیر 1405", "مرداد 1405", "شهریور 1405"], [m.label for m in months]
     model = mgh.build_history_model(months)
-    assert model.n_months == 3 and not any("حداقل" in w for w in model.warnings())
+    assert model.n_months == 3 and not any("وقفه" in w for w in model.warnings())
     billet = model.sections["billet"]
     # billet tons = 24000×(1+1.1+1.2)=79200 ; tundish = 40×3.3=132 → 600 t/tundish
     assert abs(billet.total_tons - 79200) < 0.5, billet.total_tons
@@ -269,7 +271,7 @@ def test_bot_flow(tmp: Path) -> None:
     send("701", kb.BTN_MG_START)
     for k in ("production", "billet_consumption", "bloom_consumption", "slab_consumption"):
         txt, btns = doc("701", files[k])
-    assert "ذخیره شد" in txt and "1 از حداقل 3" in txt, txt
+    assert "ذخیره شد" in txt and "ماه" in txt, txt
 
     # bulk: two months, shuffled order + one unknown file
     f5 = write_month(tmp / "b5", "مرداد", 1.1)
@@ -281,7 +283,7 @@ def test_bot_flow(tmp: Path) -> None:
         txt, _ = doc("701", pth)
     assert "مرداد 1405" in txt and "ذخیره شد" in txt, txt
     txt, _ = doc("701", f6["bloom_consumption"])
-    assert "شهریور 1405" in txt and "کافی است" in txt, txt
+    assert "شهریور 1405" in txt and "ماه" in txt, txt
     txt, _ = send("701", kb.BTN_MG_BULK_DONE)
     assert "پایان" in txt
     assert len(db.list_main_goal_months()) == 3

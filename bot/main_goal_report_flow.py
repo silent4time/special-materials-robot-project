@@ -26,6 +26,8 @@ from bot.activity import log_activity
 from bot.jalali import tehran_now
 from config import REPORT_DIR, UPLOAD_DIR, ensure_dirs
 from services import main_goal_history as mgh
+from services import main_goal_persist as mgp
+from services import main_goal_production_ocr as mgocr
 from services import main_goal_report as mg
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -44,6 +46,14 @@ _MENU_BTNS = {
     kb.BTN_MG_SCN_TARGET,
     kb.BTN_MG_SCN_FORECAST,
     kb.BTN_MG_RECENT,
+    kb.BTN_MG_INPUTS,
+    kb.BTN_MG_INPUT_PROD,
+    kb.BTN_MG_INPUT_PROD_XLSX,
+    kb.BTN_MG_INPUT_BILLET,
+    kb.BTN_MG_INPUT_BLOOM,
+    kb.BTN_MG_INPUT_SLAB,
+    kb.BTN_MG_INPUT_CORRECT,
+    kb.BTN_MG_REPORT_REQ,
 }
 # Buttons that only make sense inside a pending step
 _STEP_BTNS = {
@@ -57,6 +67,21 @@ _STEP_BTNS = {
     kb.BTN_MG_P6,
     kb.BTN_MG_P12,
     *kb.MG_SECTION_BUTTONS.keys(),
+    kb.BTN_MG_RANGE_3,
+    kb.BTN_MG_RANGE_6,
+    kb.BTN_MG_RANGE_12,
+    kb.BTN_MG_RANGE_CUSTOM,
+    kb.BTN_MG_CONFIRM_PARTIAL,
+}
+_RANGE_BTNS = {
+    kb.BTN_MG_RANGE_3: 3,
+    kb.BTN_MG_RANGE_6: 6,
+    kb.BTN_MG_RANGE_12: 12,
+}
+_INPUT_SECTION = {
+    kb.BTN_MG_INPUT_BILLET: "billet",
+    kb.BTN_MG_INPUT_BLOOM: "bloom",
+    kb.BTN_MG_INPUT_SLAB: "slab",
 }
 _PERIOD_BTN_MONTHS = {kb.BTN_MG_P1: 1, kb.BTN_MG_P3: 3, kb.BTN_MG_P6: 6, kb.BTN_MG_P12: 12}
 
@@ -141,6 +166,24 @@ class MainGoalReportFlow:
         if text == kb.BTN_MG_RECENT:
             self.show_recent(message)
             return True
+        if text == kb.BTN_MG_INPUTS:
+            self.open_inputs(message)
+            return True
+        if text == kb.BTN_MG_INPUT_PROD:
+            self.start_prod_photo(message)
+            return True
+        if text == kb.BTN_MG_INPUT_PROD_XLSX:
+            self.start_prod_xlsx(message)
+            return True
+        if text in _INPUT_SECTION:
+            self.start_cons_xlsx(message, _INPUT_SECTION[text])
+            return True
+        if text == kb.BTN_MG_INPUT_CORRECT:
+            self.start_prod_correct(message)
+            return True
+        if text == kb.BTN_MG_REPORT_REQ:
+            self.start_range_report(message)
+            return True
 
         p = self.pending.get(uid)
         if not p:
@@ -196,6 +239,32 @@ class MainGoalReportFlow:
             return self._on_scn_confirm(message, p, text)
         if mode == "fc_months":
             return self._on_fc_months(message, p, text)
+        if mode == "prod_photo":
+            self._reply(
+                message,
+                "در انتظار عکس آمار تولید (screenshot) هستید — Photo بفرستید.",
+                kb.main_goal_upload_menu(),
+            )
+            return True
+        if mode == "prod_xlsx":
+            self._reply(message, "در انتظار فایل Excel آمار تولید (.xlsx) هستید.", kb.main_goal_upload_menu())
+            return True
+        if mode == "cons_xlsx":
+            sec = p.get("section") or "billet"
+            self._reply(
+                message,
+                f"در انتظار اکسل مصرف تاندیش {mg.SECTION_LABEL_FA[sec]} (.xlsx) هستید.",
+                kb.main_goal_upload_menu(),
+            )
+            return True
+        if mode == "prod_correct":
+            return self._on_prod_correct(message, p, text)
+        if mode == "range_pick":
+            return self._on_range_pick(message, p, text)
+        if mode == "range_custom":
+            return self._on_range_custom(message, p, text)
+        if mode == "range_confirm":
+            return self._on_range_confirm(message, p, text)
         return True
 
     # ------------------------------------------------------------ menu / history
@@ -209,11 +278,9 @@ class MainGoalReportFlow:
         self._reply(
             message,
             f"🎯 {mg.TITLE_FA}\n{mg.SUBTITLE_FA}\n\n"
-            "مرحله ۱ — سابقه: برای دقت، فایل‌های ۴گانهٔ حداقل ۳ ماه اخیر را آپلود کنید "
-            "(هر ماه: آمار تولید، مصرف تاندیش بیلت، بلوم، اسلب — هر ۴ فایل یک ماه باید بازهٔ یکسان داشته باشند).\n"
-            "مرحله ۲ — سناریو:\n"
-            "  🎯 سناریو ۱: تناژ هدف در یک بازه و بخش → تاندیش و مواد لازم\n"
-            "  🔮 سناریو ۲: پیش‌بینی N ماه آینده با روند فعلی → تناژ و مواد هر بخش\n\n"
+            "الف) ثبت ورودی — عکس آمار تولید (OCR) و اکسل مصرف تاندیش هر بخش، جداگانه در DB.\n"
+            "ب) درخواست گزارش — بازه ۳/۶/۱۲ ماهه یا بازهٔ سفارشی جلالی؛ محاسبه از سابقهٔ DB.\n"
+            "سناریوهای تناژ هدف / پیش‌بینی همچنان در دسترس‌اند. آپلود ۴ فایل یک‌جا هم کار می‌کند.\n\n"
             f"{hist}",
             kb.main_goal_menu(),
         )
@@ -345,8 +412,12 @@ class MainGoalReportFlow:
         """Return True if this document belonged to the main-goal upload flow."""
         uid = self.app._uid(message)
         p = self.pending.get(uid)
-        if not p or p.get("await") not in {"file", "bulk"}:
+        if not p or p.get("await") not in {"file", "bulk", "prod_xlsx", "cons_xlsx", "prod_photo"}:
             return False
+        if p.get("await") in {"prod_xlsx", "cons_xlsx"}:
+            return self._handle_input_document(message, p)
+        if p.get("await") == "prod_photo":
+            return self.handle_photo(message)
 
         user = self._user(message)
         if not user:
@@ -710,3 +781,407 @@ class MainGoalReportFlow:
             self._reply(message, result.summary + f"\n\nخطا در تولید PDF/اکسل: {exc}", kb.main_goal_menu())
         log_activity(self.db, user, f"report_{stem_prefix}")
         return True
+
+    # ------------------------------------------------------------ الف) ثبت ورودی
+    def open_inputs(self, message: dict) -> None:
+        user = self._user(message)
+        if not user:
+            return
+        self.clear(str(user["bale_user_id"]))
+        overview = mgp.month_completeness(self.db)
+        lines = ["📥 ثبت ورودی گزارش هدف اصلی", "عکس تولید → OCR → DB | اکسل تاندیش → DB", ""]
+        if overview:
+            lines.append("وضعیت ماه‌ها:")
+            for o in overview[-8:]:
+                status = "✅ کامل" if o["complete"] else ("⚠ ناقص: " + "، ".join(o["missing"]))
+                lines.append(f"• {o['label']}: {status}")
+        else:
+            lines.append("هنوز ورودی‌ای در DB نیست.")
+        self._reply(message, "\n".join(lines), kb.main_goal_inputs_menu())
+
+    def start_prod_photo(self, message: dict) -> None:
+        user = self._user(message)
+        if not user:
+            return
+        batch = tehran_now().strftime("%Y%m%d_%H%M%S")
+        self.pending[str(user["bale_user_id"])] = {"await": "prod_photo", "batch": batch}
+        self._reply(
+            message,
+            "📸 عکس آمار تولید ماهانه (screenshot از otsteel.ksc.ir یا مشابه) را بفرستید.\n"
+            "نگاشت CCM: ۱و۲=اسلب، ۳=بلوم، ۴و۵=بیلت.\n"
+            "پس از OCR می‌توانید اعداد را دستی اصلاح کنید.",
+            kb.main_goal_upload_menu(),
+        )
+
+    def start_prod_xlsx(self, message: dict) -> None:
+        user = self._user(message)
+        if not user:
+            return
+        batch = tehran_now().strftime("%Y%m%d_%H%M%S")
+        self.pending[str(user["bale_user_id"])] = {"await": "prod_xlsx", "batch": batch}
+        self._reply(message, "📄 فایل Excel آمار تولید (.xlsx) را بفرستید.", kb.main_goal_upload_menu())
+
+    def start_cons_xlsx(self, message: dict, section: str) -> None:
+        user = self._user(message)
+        if not user:
+            return
+        batch = tehran_now().strftime("%Y%m%d_%H%M%S")
+        self.pending[str(user["bale_user_id"])] = {
+            "await": "cons_xlsx",
+            "batch": batch,
+            "section": section,
+        }
+        self._reply(
+            message,
+            f"📤 اکسل مصرف تاندیش {mg.SECTION_LABEL_FA[section]} را بفرستید "
+            f"(نام پیشنهادی شامل ماه جلالی، مثلاً «مصرف تاندیش {mg.SECTION_LABEL_FA[section]} شهریور ۱۴۰۵.xlsx»).",
+            kb.main_goal_upload_menu(),
+        )
+
+    def start_prod_correct(self, message: dict) -> None:
+        user = self._user(message)
+        if not user:
+            return
+        self.pending[str(user["bale_user_id"])] = {"await": "prod_correct"}
+        self._reply(
+            message,
+            "✏️ اصلاح دستی تولید — یک خط به این شکل بفرستید:\n"
+            "شهریور ۱۴۰۵ | اسلب 99300 | بلوم 18500 | بیلت 33600 | ذوب 920\n"
+            "(بخش‌های خالی اختیاری‌اند)",
+            kb.main_goal_cancel_menu(),
+        )
+
+    def handle_photo(self, message: dict) -> bool:
+        """Handle production screenshot while awaiting prod_photo."""
+        uid = self.app._uid(message)
+        p = self.pending.get(uid)
+        if not p or p.get("await") != "prod_photo":
+            return False
+        user = self._user(message)
+        if not user:
+            self.clear(uid)
+            return True
+        file_id = self.app._extract_image_file_id(message)
+        if not file_id:
+            self._reply(message, "تصویر معتبر دریافت نشد. Photo بفرستید.", kb.main_goal_upload_menu())
+            return True
+        dest_dir = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / str(p["batch"])
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / "production.png"
+        try:
+            self.app.client.download_file(file_id, dest)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("main_goal photo download failed")
+            self._reply(message, f"دانلود عکس ناموفق: {exc}", kb.main_goal_upload_menu())
+            return True
+        self._reply(message, "⏳ در حال OCR عکس تولید…", kb.main_goal_upload_menu())
+        try:
+            ocr_res = mgocr.ocr_production_image(dest)
+            out = mgp.store_production_from_ocr(
+                self.db, dest, user=user, source="bot", filename="production.png", ocr_result=ocr_res
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("main_goal OCR store failed")
+            self._reply(message, f"خطا در OCR/ذخیره: {exc}", kb.main_goal_menu())
+            self.clear(uid)
+            return True
+        if not out.ok:
+            # keep pending for correction
+            p["await"] = "prod_correct"
+            p["ocr_draft"] = {
+                "path": str(dest),
+                "raw": (out.ocr_result.ocr_raw_text if out.ocr_result else ""),
+                "confidence": (out.ocr_result.ocr_confidence if out.ocr_result else None),
+                "year": out.ocr_result.year if out.ocr_result else None,
+                "month": out.ocr_result.month if out.ocr_result else None,
+                "slab": out.ocr_result.slab_tons if out.ocr_result else 0,
+                "bloom": out.ocr_result.bloom_tons if out.ocr_result else 0,
+                "billet": out.ocr_result.billet_tons if out.ocr_result else 0,
+                "melt": out.ocr_result.melt_count if out.ocr_result else None,
+                "ccm": dict(out.ocr_result.ccm_tons) if out.ocr_result else {},
+            }
+            self.pending[uid] = p
+            self._reply(
+                message,
+                (out.error_fa or "OCR ناقص بود.") + "\n\n" + (out.summary or "")
+                + "\n\n✏️ اصلاح دستی را به شکل "
+                "«شهریور ۱۴۰۵ | اسلب 99300 | بلوم 18500 | بیلت 33600 | ذوب 920» بفرستید.",
+                kb.main_goal_cancel_menu(),
+            )
+            return True
+        self.clear(uid)
+        log_activity(self.db, user, "main_goal_store_production_ocr")
+        miss = out.missing_parts
+        extra = ("\n⚠ هنوز ناقص: " + "، ".join(miss)) if miss else "\n✅ همه ورودی‌های این ماه کامل است."
+        self._reply(message, out.summary + extra, kb.main_goal_inputs_menu())
+        return True
+
+    def _handle_input_document(self, message: dict, p: dict) -> bool:
+        uid = self.app._uid(message)
+        user = self._user(message)
+        if not user:
+            self.clear(uid)
+            return True
+        doc = message.get("document") or {}
+        file_name = (doc.get("file_name") or "").strip()
+        file_id = doc.get("file_id")
+        if not file_id or not file_name.lower().endswith(".xlsx"):
+            self._reply(message, "فقط فایل .xlsx بفرستید.", kb.main_goal_upload_menu())
+            return True
+        dest_dir = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / str(p["batch"])
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        kind = "production" if p["await"] == "prod_xlsx" else f"{p.get('section')}_consumption"
+        dest = dest_dir / f"{kind}.xlsx"
+        try:
+            self.app.client.download_file(file_id, dest)
+        except Exception as exc:  # noqa: BLE001
+            self._reply(message, f"دانلود ناموفق: {exc}", kb.main_goal_upload_menu())
+            return True
+        try:
+            if p["await"] == "prod_xlsx":
+                out = mgp.store_production_from_excel(
+                    self.db, dest, user=user, source="bot", filename=file_name
+                )
+                act = "main_goal_store_production_xlsx"
+            else:
+                # Prefer post-cast sequence log; fall back to material-consumption sheet
+                from services import main_goal_sequences as seq
+
+                kind = seq.detect_section_from_file(dest, filename=file_name)
+                parsed = seq.parse_sequence_excel(dest)
+                if parsed.ok:
+                    out = mgp.store_sequences_from_excel(
+                        self.db,
+                        dest,
+                        user=user,
+                        source="bot",
+                        filename=file_name,
+                        section=p.get("section") or kind,
+                    )
+                    act = "main_goal_store_sequences"
+                else:
+                    out = mgp.store_consumption_from_excel(
+                        self.db,
+                        dest,
+                        p["section"],
+                        user=user,
+                        source="bot",
+                        filename=file_name,
+                        inventory=self._inventory(user),
+                    )
+                    act = "main_goal_store_consumption"
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("input store failed")
+            self._reply(message, f"خطا: {exc}", kb.main_goal_menu())
+            self.clear(uid)
+            return True
+        self.clear(uid)
+        if not out.ok:
+            self._reply(message, out.error_fa or "خطا", kb.main_goal_inputs_menu())
+            return True
+        log_activity(self.db, user, act)
+        miss = out.missing_parts
+        extra = ("\n⚠ هنوز ناقص: " + "، ".join(miss)) if miss else "\n✅ همه ورودی‌های این ماه کامل است."
+        self._reply(message, out.summary + extra, kb.main_goal_inputs_menu())
+        return True
+
+    def _on_prod_correct(self, message: dict, p: dict, text: str) -> bool:
+        uid = self.app._uid(message)
+        user = self._user(message)
+        if not user:
+            self.clear(uid)
+            return True
+        parsed = _parse_manual_production(text)
+        if not parsed:
+            self._reply(
+                message,
+                "فرمت نامعتبر. مثال:\nشهریور ۱۴۰۵ | اسلب 99300 | بلوم 18500 | بیلت 33600 | ذوب 920",
+                kb.main_goal_cancel_menu(),
+            )
+            return True
+        draft = p.get("ocr_draft") or {}
+        base = mgocr.ProductionOCRResult(
+            ok=False,
+            year=draft.get("year"),
+            month=draft.get("month"),
+            period_key=None,
+            slab_tons=float(draft.get("slab") or 0),
+            bloom_tons=float(draft.get("bloom") or 0),
+            billet_tons=float(draft.get("billet") or 0),
+            melt_count=draft.get("melt"),
+            ccm_tons={int(k): float(v) for k, v in (draft.get("ccm") or {}).items()},
+            ocr_raw_text=str(draft.get("raw") or ""),
+            ocr_confidence=draft.get("confidence"),
+        )
+        if base.year and base.month:
+            base.period_key = f"m:{int(base.year):04d}-{int(base.month):02d}"
+        fixed = mgocr.apply_manual_corrections(base, **parsed)
+        if not fixed.ok:
+            self._reply(message, fixed.error_fa or "اصلاح ناقص است.", kb.main_goal_cancel_menu())
+            return True
+        # store without requiring the image path
+        path = Path(draft["path"]) if draft.get("path") else None
+        if path and path.is_file():
+            out = mgp.store_production_from_ocr(
+                self.db,
+                path,
+                user=user,
+                source="bot",
+                filename=path.name,
+                ocr_result=fixed,
+                manual_corrected=True,
+            )
+        else:
+            # create a placeholder path under uploads
+            dest_dir = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / "manual"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            placeholder = dest_dir / f"{fixed.period_key}.txt"
+            placeholder.write_text(fixed.ocr_raw_text or text, encoding="utf-8")
+            out = mgp.store_production_from_ocr(
+                self.db,
+                placeholder,
+                user=user,
+                source="bot",
+                filename=placeholder.name,
+                ocr_result=fixed,
+                manual_corrected=True,
+            )
+        self.clear(uid)
+        if not out.ok:
+            self._reply(message, out.error_fa or "ذخیره ناموفق", kb.main_goal_inputs_menu())
+            return True
+        log_activity(self.db, user, "main_goal_store_production_manual")
+        miss = out.missing_parts
+        extra = ("\n⚠ هنوز ناقص: " + "، ".join(miss)) if miss else "\n✅ همه ورودی‌های این ماه کامل است."
+        self._reply(message, out.summary + extra, kb.main_goal_inputs_menu())
+        return True
+
+    # ------------------------------------------------------------ ب) درخواست گزارش بازه
+    def start_range_report(self, message: dict) -> None:
+        user = self._user(message)
+        if not user:
+            return
+        months = self._history_gate(message)
+        if months is None:
+            return
+        self.pending[str(user["bale_user_id"])] = {"await": "range_pick"}
+        self._reply(
+            message,
+            "📊 درخواست گزارش از سابقهٔ DB\n"
+            f"{mgh.history_count_line(len(months))}\n\n"
+            "بازه را انتخاب کنید:\n"
+            "• ۳ ماهه / ۶ ماهه / یکساله — آخرین N ماه ذخیره‌شده\n"
+            "• بازه ورودی کاربر — مثلاً «از تیر ۱۴۰۵ تا شهریور ۱۴۰۵»",
+            kb.main_goal_range_menu(),
+        )
+
+    def _on_range_pick(self, message: dict, p: dict, text: str) -> bool:
+        if text == kb.BTN_MG_RANGE_CUSTOM:
+            p["await"] = "range_custom"
+            self._reply(
+                message,
+                "بازه جلالی را بنویسید (مثلاً «از تیر ۱۴۰۵ تا شهریور ۱۴۰۵» یا «شهریور ۱۴۰۵»):",
+                kb.main_goal_cancel_menu(),
+            )
+            return True
+        n = _RANGE_BTNS.get(text)
+        spec = mgp.range_last_n(n) if n else mgp.parse_range_choice(text)
+        if not spec:
+            self._reply(message, "یکی از گزینه‌های بازه را انتخاب کنید.", kb.main_goal_range_menu())
+            return True
+        return self._prepare_range(message, p, spec)
+
+    def _on_range_custom(self, message: dict, p: dict, text: str) -> bool:
+        spec = mgp.parse_range_choice(text)
+        if not spec or spec.kind != "custom":
+            # also accept last_n phrasing
+            if not spec:
+                self._reply(
+                    message,
+                    "بازه معتبر نیست. مثال: از تیر ۱۴۰۵ تا شهریور ۱۴۰۵",
+                    kb.main_goal_cancel_menu(),
+                )
+                return True
+        return self._prepare_range(message, p, spec)
+
+    def _prepare_range(self, message: dict, p: dict, spec) -> bool:
+        uid = self.app._uid(message)
+        user = self._user(message)
+        if not user:
+            self.clear(uid)
+            return True
+        months = mgh.load_history(self.db)
+        selected, warns = mgp.filter_months_by_range(months, spec)
+        if not selected:
+            self.clear(uid)
+            self._reply(
+                message,
+                "در این بازه هیچ ماهی در DB نیست. ابتدا ورودی‌ها را ثبت کنید.",
+                kb.main_goal_menu(),
+            )
+            return True
+        if warns:
+            p["await"] = "range_confirm"
+            p["range_spec"] = {
+                "kind": spec.kind,
+                "n_months": spec.n_months,
+                "start": spec.start,
+                "end": spec.end,
+                "label_fa": spec.label_fa,
+            }
+            self.pending[uid] = p
+            self._reply(
+                message,
+                "⚠ دادهٔ بازه ناقص است:\n"
+                + "\n".join(f"• {w}" for w in warns)
+                + f"\n\n{len(selected)} ماه موجود است. با دادهٔ موجود ادامه دهیم؟",
+                kb.main_goal_partial_confirm_menu(),
+            )
+            return True
+        return self._run_range(message, user, spec)
+
+    def _on_range_confirm(self, message: dict, p: dict, text: str) -> bool:
+        if text != kb.BTN_MG_CONFIRM_PARTIAL:
+            self._reply(message, "برای ادامه «✅ ادامه با دادهٔ موجود» را بزنید یا انصراف دهید.", kb.main_goal_partial_confirm_menu())
+            return True
+        uid = self.app._uid(message)
+        user = self._user(message)
+        raw = p.get("range_spec") or {}
+        if raw.get("kind") == "custom" and raw.get("start") and raw.get("end"):
+            spec = mgp.range_custom(tuple(raw["start"]), tuple(raw["end"]))
+        else:
+            spec = mgp.range_last_n(int(raw.get("n_months") or 3))
+        self.clear(uid)
+        if not user:
+            return True
+        return self._run_range(message, user, spec)
+
+    def _run_range(self, message: dict, user: dict, spec) -> bool:
+        model, result, _warns = mgp.build_range_report(
+            self.db, spec, inventory=self._inventory(user), require_complete=False
+        )
+        return self._deliver(message, user, model, result, stem_prefix="main_goal_range")
+
+
+def _parse_manual_production(text: str) -> dict | None:
+    """Parse 'شهریور ۱۴۰۵ | اسلب 99300 | بلوم 18500 | بیلت 33600 | ذوب 920'."""
+    from bot.jalali import parse_month_year_token
+
+    s = mg.normalize_text(text)
+    if not s:
+        return None
+    out: dict = {}
+    tok = parse_month_year_token(s)
+    if tok:
+        out["year"], out["month"] = tok
+    for label, key in (("اسلب", "slab_tons"), ("بلوم", "bloom_tons"), ("بیلت", "billet_tons"), ("ذوب", "melt_count")):
+        m = __import__("re").search(rf"{label}\s*[:=]?\s*([\d٬,]+(?:\.\d+)?)", s)
+        if m:
+            v = mgh.parse_number(m.group(1))
+            if v is not None:
+                out[key] = v
+    if "year" not in out or "month" not in out:
+        return None
+    if not any(k in out for k in ("slab_tons", "bloom_tons", "billet_tons")):
+        return None
+    return out

@@ -48,6 +48,7 @@
     <label for="add_{{ key }}">{{ labels.get(key, key) }}{% if required %} *{% endif %}</label>
     <input id="add_{{ key }}" name="{{ key }}" type="text"{% if required %} required{% endif %}{% if key == 'priority' %} value="1"{% endif %}>
     {% endfor %}
+    <label><input type="checkbox" name="overwrite" value="1"> اگر شناسه تکراری بود، رکورد قبلی جایگزین شود</label>
     <p style="margin-top:1rem"><button type="submit">افزودن رکورد</button></p>
   </form>
 </div>

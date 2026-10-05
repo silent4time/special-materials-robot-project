@@ -146,6 +146,19 @@ BTN_MG_RECENT = "📜 آخرین گزارش‌های هدف اصلی"
 BTN_MG_CANCEL = "✖️ انصراف از گزارش هدف اصلی"
 BTN_MG_SKIP_TARGET = "⏭ بدون تناژ هدف"
 BTN_MG_BACK = "⬅️ بازگشت به هدف اصلی"
+BTN_MG_INPUTS = "📥 ثبت ورودی (عکس تولید / اکسل تاندیش)"
+BTN_MG_INPUT_PROD = "📸 آپلود عکس آمار تولید"
+BTN_MG_INPUT_PROD_XLSX = "📄 آپلود اکسل آمار تولید"
+BTN_MG_INPUT_BILLET = "📤 اکسل مصرف تاندیش بیلت"
+BTN_MG_INPUT_BLOOM = "📤 اکسل مصرف تاندیش بلوم"
+BTN_MG_INPUT_SLAB = "📤 اکسل مصرف تاندیش اسلب"
+BTN_MG_INPUT_CORRECT = "✏️ اصلاح دستی تولید"
+BTN_MG_REPORT_REQ = "📊 درخواست گزارش از سابقه"
+BTN_MG_RANGE_3 = "۳ ماهه"
+BTN_MG_RANGE_6 = "۶ ماهه"
+BTN_MG_RANGE_12 = "یکساله"
+BTN_MG_RANGE_CUSTOM = "بازه ورودی کاربر"
+BTN_MG_CONFIRM_PARTIAL = "✅ ادامه با دادهٔ موجود"
 BTN_USER_ACTIVITY = "📋 گزارش فعالیت کاربران"
 BTN_REPORT_ASSISTANT = "🤖 دستیار هوشمند"
 BTN_END_ASSISTANT = "پایان گفتگو"
@@ -550,6 +563,8 @@ def main_goal_menu() -> dict:
     """Submenu under گزارش‌ها for گزارش هدف اصلی (owner/manager/officer)."""
     return BaleClient.reply_keyboard(
         [
+            [BTN_MG_INPUTS],
+            [BTN_MG_REPORT_REQ],
             [BTN_MG_START],
             [BTN_MG_BULK],
             [BTN_MG_HISTORY],
@@ -557,6 +572,43 @@ def main_goal_menu() -> dict:
             [BTN_MG_SCN_FORECAST],
             [BTN_MG_RECENT],
             [BTN_BACK_ANALYTICS],
+        ]
+    )
+
+
+def main_goal_inputs_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MG_INPUT_PROD],
+            [BTN_MG_INPUT_PROD_XLSX],
+            [BTN_MG_INPUT_BILLET],
+            [BTN_MG_INPUT_BLOOM],
+            [BTN_MG_INPUT_SLAB],
+            [BTN_MG_INPUT_CORRECT],
+            [BTN_MG_HISTORY],
+            [BTN_MG_BACK],
+        ]
+    )
+
+
+def main_goal_range_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MG_RANGE_3, BTN_MG_RANGE_6],
+            [BTN_MG_RANGE_12],
+            [BTN_MG_RANGE_CUSTOM],
+            [BTN_MG_CANCEL],
+            [BTN_MG_BACK],
+        ]
+    )
+
+
+def main_goal_partial_confirm_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MG_CONFIRM_PARTIAL],
+            [BTN_MG_CANCEL],
+            [BTN_MG_BACK],
         ]
     )
 

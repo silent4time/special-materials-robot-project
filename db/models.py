@@ -390,6 +390,126 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_main_goal_months_sort
                     ON main_goal_months(sort_key);
+
+                -- Normalized production inputs (photo OCR / Excel / manual)
+                CREATE TABLE IF NOT EXISTS main_goal_production (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    period_key TEXT NOT NULL UNIQUE,
+                    period_label TEXT NOT NULL,
+                    year INTEGER,
+                    month INTEGER,
+                    sort_key TEXT NOT NULL,
+                    slab_tons REAL NOT NULL DEFAULT 0,
+                    bloom_tons REAL NOT NULL DEFAULT 0,
+                    billet_tons REAL NOT NULL DEFAULT 0,
+                    total_tons REAL NOT NULL DEFAULT 0,
+                    melt_count REAL,
+                    melt_weight_kg REAL,
+                    product_weight_kg REAL,
+                    slab_count REAL,
+                    bloom_billet_count REAL,
+                    melts_per_day REAL,
+                    report_tab TEXT,
+                    ccm1_tons REAL,
+                    ccm2_tons REAL,
+                    ccm3_tons REAL,
+                    ccm4_tons REAL,
+                    ccm5_tons REAL,
+                    source_type TEXT NOT NULL DEFAULT 'ocr',
+                    source_path TEXT,
+                    source_filename TEXT,
+                    ocr_raw_text TEXT,
+                    ocr_confidence REAL,
+                    ocr_fields_json TEXT,
+                    manual_corrected INTEGER NOT NULL DEFAULT 0,
+                    notes_json TEXT,
+                    missing_json TEXT,
+                    bale_user_id TEXT NOT NULL,
+                    actor_display_name TEXT,
+                    source TEXT NOT NULL DEFAULT 'bot',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    created_at_tehran TEXT NOT NULL,
+                    jalali_date TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_main_goal_production_sort
+                    ON main_goal_production(sort_key);
+
+                -- Normalized tundish consumption per section (from Excel)
+                CREATE TABLE IF NOT EXISTS main_goal_consumption (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    period_key TEXT NOT NULL,
+                    period_label TEXT NOT NULL,
+                    year INTEGER,
+                    month INTEGER,
+                    sort_key TEXT NOT NULL,
+                    section TEXT NOT NULL,
+                    tundish_count REAL,
+                    melt_count REAL,
+                    patch_count REAL,
+                    renovate_count REAL,
+                    source_path TEXT,
+                    source_filename TEXT,
+                    notes_json TEXT,
+                    missing_json TEXT,
+                    bale_user_id TEXT NOT NULL,
+                    actor_display_name TEXT,
+                    source TEXT NOT NULL DEFAULT 'bot',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    created_at_tehran TEXT NOT NULL,
+                    jalali_date TEXT NOT NULL,
+                    UNIQUE(period_key, section)
+                );
+                CREATE INDEX IF NOT EXISTS idx_main_goal_consumption_period
+                    ON main_goal_consumption(period_key, section);
+                CREATE INDEX IF NOT EXISTS idx_main_goal_consumption_sort
+                    ON main_goal_consumption(sort_key);
+
+                CREATE TABLE IF NOT EXISTS main_goal_consumption_materials (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    consumption_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    quantity REAL NOT NULL DEFAULT 0,
+                    unit TEXT NOT NULL DEFAULT 'kg',
+                    item_id TEXT,
+                    keyword TEXT,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (consumption_id) REFERENCES main_goal_consumption(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_main_goal_cons_mats
+                    ON main_goal_consumption_materials(consumption_id);
+
+                CREATE TABLE IF NOT EXISTS main_goal_tundish_sequences (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    period_key TEXT NOT NULL,
+                    period_label TEXT NOT NULL,
+                    year INTEGER,
+                    month INTEGER,
+                    section TEXT NOT NULL,
+                    machine TEXT,
+                    tundish_no TEXT,
+                    operator TEXT,
+                    melt_count REAL,
+                    sequence_minutes REAL,
+                    isg TEXT,
+                    first_melt_no TEXT,
+                    first_cast_start TEXT,
+                    last_melt_no TEXT,
+                    last_cast_end TEXT,
+                    shroud_replaced INTEGER NOT NULL DEFAULT 0,
+                    outer_nozzle_replaced INTEGER NOT NULL DEFAULT 0,
+                    tube_changer INTEGER NOT NULL DEFAULT 0,
+                    source_path TEXT,
+                    source_filename TEXT,
+                    source TEXT NOT NULL DEFAULT 'bot',
+                    bale_user_id TEXT NOT NULL,
+                    actor_display_name TEXT,
+                    created_at TEXT NOT NULL,
+                    jalali_date TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_main_goal_seq_period
+                    ON main_goal_tundish_sequences(period_key, section);
                 """
             )
             self._migrate_users_role_check(conn)
@@ -474,6 +594,12 @@ class Database:
             ("catalog_group_assignments", "assigned_by", "TEXT"),
             ("reports", "created_by", "TEXT"),
             ("site_stock_entries", "actor_display_name", "TEXT"),
+            ("main_goal_production", "melt_weight_kg", "REAL"),
+            ("main_goal_production", "product_weight_kg", "REAL"),
+            ("main_goal_production", "slab_count", "REAL"),
+            ("main_goal_production", "bloom_billet_count", "REAL"),
+            ("main_goal_production", "melts_per_day", "REAL"),
+            ("main_goal_production", "report_tab", "TEXT"),
         ]
         for table, column, coltype in additions:
             try:
@@ -2673,7 +2799,355 @@ class Database:
 
     def delete_main_goal_month(self, month_id: int) -> bool:
         with self.connect() as conn:
+            row = conn.execute(
+                "SELECT period_key FROM main_goal_months WHERE id = ?", (int(month_id),)
+            ).fetchone()
+            period_key = str(row["period_key"]) if row else None
             cur = conn.execute(
                 "DELETE FROM main_goal_months WHERE id = ?", (int(month_id),)
             )
+            deleted = cur.rowcount > 0
+        if period_key:
+            self.delete_main_goal_inputs_by_key(period_key)
+        return deleted
+
+    # ------------------------------------------------------------------ main goal normalized production
+    def upsert_main_goal_production(self, **kw) -> tuple[dict, bool]:
+        """Insert/replace one production month. Returns (row, replaced)."""
+        now = _utcnow()
+        period_key = kw["period_key"]
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT id FROM main_goal_production WHERE period_key = ?", (period_key,)
+            ).fetchone()
+            cols = (
+                "period_label", "year", "month", "sort_key",
+                "slab_tons", "bloom_tons", "billet_tons", "total_tons", "melt_count",
+                "melt_weight_kg", "product_weight_kg", "slab_count", "bloom_billet_count",
+                "melts_per_day", "report_tab",
+                "ccm1_tons", "ccm2_tons", "ccm3_tons", "ccm4_tons", "ccm5_tons",
+                "source_type", "source_path", "source_filename",
+                "ocr_raw_text", "ocr_confidence", "ocr_fields_json", "manual_corrected",
+                "notes_json", "missing_json",
+                "bale_user_id", "actor_display_name", "source",
+                "created_at_tehran", "jalali_date",
+            )
+            vals = [kw.get(c) for c in cols]
+            vals[cols.index("bale_user_id")] = str(kw["bale_user_id"])
+            vals[cols.index("manual_corrected")] = int(kw.get("manual_corrected") or 0)
+            if existing:
+                set_clause = ", ".join(f"{c} = ?" for c in cols) + ", updated_at = ?"
+                conn.execute(
+                    f"UPDATE main_goal_production SET {set_clause} WHERE id = ?",
+                    (*vals, now, int(existing["id"])),
+                )
+                rid = int(existing["id"])
+            else:
+                col_list = "period_key, " + ", ".join(cols) + ", created_at, updated_at"
+                placeholders = ", ".join("?" for _ in range(len(cols) + 3))
+                cur = conn.execute(
+                    f"INSERT INTO main_goal_production ({col_list}) VALUES ({placeholders})",
+                    (period_key, *vals, now, now),
+                )
+                rid = int(cur.lastrowid)
+        return (self.get_main_goal_production(rid) or {}), bool(existing)
+
+    def get_main_goal_production(self, prod_id: int) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM main_goal_production WHERE id = ?", (int(prod_id),)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_main_goal_production_by_key(self, period_key: str) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM main_goal_production WHERE period_key = ?", (period_key,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_main_goal_production(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM main_goal_production ORDER BY sort_key ASC, id ASC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_main_goal_production(self, prod_id: int) -> bool:
+        with self.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM main_goal_production WHERE id = ?", (int(prod_id),)
+            )
             return cur.rowcount > 0
+
+    def delete_main_goal_production_by_key(self, period_key: str) -> bool:
+        with self.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM main_goal_production WHERE period_key = ?", (period_key,)
+            )
+            return cur.rowcount > 0
+
+    # ------------------------------------------------------------------ main goal normalized consumption
+    def upsert_main_goal_consumption(
+        self,
+        *,
+        materials: list[dict[str, Any]] | None = None,
+        **kw,
+    ) -> tuple[dict, bool]:
+        """Insert/replace one section consumption (+ replace material rows)."""
+        now = _utcnow()
+        period_key = kw["period_key"]
+        section = kw["section"]
+        materials = materials or []
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT id FROM main_goal_consumption WHERE period_key = ? AND section = ?",
+                (period_key, section),
+            ).fetchone()
+            cols = (
+                "period_label", "year", "month", "sort_key",
+                "tundish_count", "melt_count", "patch_count", "renovate_count",
+                "source_path", "source_filename", "notes_json", "missing_json",
+                "bale_user_id", "actor_display_name", "source",
+                "created_at_tehran", "jalali_date",
+            )
+            vals = [kw.get(c) for c in cols]
+            vals[cols.index("bale_user_id")] = str(kw["bale_user_id"])
+            if existing:
+                set_clause = ", ".join(f"{c} = ?" for c in cols) + ", updated_at = ?"
+                conn.execute(
+                    f"UPDATE main_goal_consumption SET {set_clause} WHERE id = ?",
+                    (*vals, now, int(existing["id"])),
+                )
+                rid = int(existing["id"])
+                conn.execute(
+                    "DELETE FROM main_goal_consumption_materials WHERE consumption_id = ?",
+                    (rid,),
+                )
+            else:
+                col_list = "period_key, section, " + ", ".join(cols) + ", created_at, updated_at"
+                placeholders = ", ".join("?" for _ in range(len(cols) + 4))
+                cur = conn.execute(
+                    f"INSERT INTO main_goal_consumption ({col_list}) VALUES ({placeholders})",
+                    (period_key, section, *vals, now, now),
+                )
+                rid = int(cur.lastrowid)
+            for i, m in enumerate(materials):
+                conn.execute(
+                    """
+                    INSERT INTO main_goal_consumption_materials
+                        (consumption_id, name, quantity, unit, item_id, keyword, sort_order)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        rid,
+                        str(m.get("name") or ""),
+                        float(m.get("quantity") or 0),
+                        str(m.get("unit") or "kg"),
+                        m.get("item_id"),
+                        m.get("keyword"),
+                        int(m.get("sort_order", i)),
+                    ),
+                )
+        return (self.get_main_goal_consumption(rid) or {}), bool(existing)
+
+    def get_main_goal_consumption(self, cons_id: int) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM main_goal_consumption WHERE id = ?", (int(cons_id),)
+            ).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            mats = conn.execute(
+                """
+                SELECT name, quantity, unit, item_id, keyword, sort_order
+                FROM main_goal_consumption_materials
+                WHERE consumption_id = ?
+                ORDER BY sort_order ASC, id ASC
+                """,
+                (int(cons_id),),
+            ).fetchall()
+        d["materials"] = [dict(m) for m in mats]
+        return d
+
+    def list_main_goal_consumption(
+        self, *, period_key: str | None = None
+    ) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            if period_key:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM main_goal_consumption
+                    WHERE period_key = ?
+                    ORDER BY section ASC
+                    """,
+                    (period_key,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM main_goal_consumption
+                    ORDER BY sort_key ASC, section ASC, id ASC
+                    """
+                ).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                mats = conn.execute(
+                    """
+                    SELECT name, quantity, unit, item_id, keyword, sort_order
+                    FROM main_goal_consumption_materials
+                    WHERE consumption_id = ?
+                    ORDER BY sort_order ASC, id ASC
+                    """,
+                    (int(d["id"]),),
+                ).fetchall()
+                d["materials"] = [dict(m) for m in mats]
+                out.append(d)
+        return out
+
+    def delete_main_goal_consumption(self, cons_id: int) -> bool:
+        with self.connect() as conn:
+            conn.execute(
+                "DELETE FROM main_goal_consumption_materials WHERE consumption_id = ?",
+                (int(cons_id),),
+            )
+            cur = conn.execute(
+                "DELETE FROM main_goal_consumption WHERE id = ?", (int(cons_id),)
+            )
+            return cur.rowcount > 0
+
+    def delete_main_goal_inputs_by_key(self, period_key: str) -> None:
+        """Delete normalized production + consumptions + sequences for a period."""
+        with self.connect() as conn:
+            ids = [
+                int(r["id"])
+                for r in conn.execute(
+                    "SELECT id FROM main_goal_consumption WHERE period_key = ?",
+                    (period_key,),
+                ).fetchall()
+            ]
+            for cid in ids:
+                conn.execute(
+                    "DELETE FROM main_goal_consumption_materials WHERE consumption_id = ?",
+                    (cid,),
+                )
+            conn.execute(
+                "DELETE FROM main_goal_consumption WHERE period_key = ?", (period_key,)
+            )
+            try:
+                conn.execute(
+                    "DELETE FROM main_goal_tundish_sequences WHERE period_key = ?",
+                    (period_key,),
+                )
+            except Exception:
+                pass
+            conn.execute(
+                "DELETE FROM main_goal_production WHERE period_key = ?", (period_key,)
+            )
+
+    def list_main_goal_period_keys_union(self) -> list[str]:
+        """All period_keys seen in production, consumption, or legacy months."""
+        with self.connect() as conn:
+            keys = set()
+            for table in (
+                "main_goal_production",
+                "main_goal_consumption",
+                "main_goal_months",
+            ):
+                try:
+                    rows = conn.execute(f"SELECT DISTINCT period_key FROM {table}").fetchall()
+                except sqlite3.OperationalError:
+                    continue
+                keys.update(str(r["period_key"]) for r in rows if r["period_key"])
+        return sorted(keys)
+
+    def replace_main_goal_sequences(
+        self,
+        *,
+        period_key: str,
+        section: str,
+        rows: list[dict],
+        meta: dict,
+    ) -> int:
+        """Replace all sequence rows for (period_key, section); return count inserted."""
+        now = _utcnow()
+        with self.connect() as conn:
+            conn.execute(
+                "DELETE FROM main_goal_tundish_sequences WHERE period_key = ? AND section = ?",
+                (period_key, section),
+            )
+            n = 0
+            for r in rows:
+                conn.execute(
+                    """
+                    INSERT INTO main_goal_tundish_sequences
+                        (period_key, period_label, year, month, section, machine, tundish_no,
+                         operator, melt_count, sequence_minutes, isg, first_melt_no,
+                         first_cast_start, last_melt_no, last_cast_end,
+                         shroud_replaced, outer_nozzle_replaced, tube_changer,
+                         source_path, source_filename, source, bale_user_id,
+                         actor_display_name, created_at, jalali_date)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        period_key,
+                        meta.get("period_label"),
+                        meta.get("year"),
+                        meta.get("month"),
+                        section,
+                        r.get("machine"),
+                        r.get("tundish_no"),
+                        r.get("operator"),
+                        r.get("melt_count"),
+                        r.get("sequence_minutes"),
+                        r.get("isg"),
+                        r.get("first_melt_no"),
+                        r.get("first_cast_start"),
+                        r.get("last_melt_no"),
+                        r.get("last_cast_end"),
+                        int(r.get("shroud_replaced") or 0),
+                        int(r.get("outer_nozzle_replaced") or 0),
+                        int(r.get("tube_changer") or 0),
+                        meta.get("source_path"),
+                        meta.get("source_filename"),
+                        meta.get("source") or "bot",
+                        str(meta.get("bale_user_id")),
+                        meta.get("actor_display_name"),
+                        now,
+                        meta.get("jalali_date") or "",
+                    ),
+                )
+                n += 1
+        return n
+
+    def list_main_goal_sequences(
+        self, *, period_key: str | None = None, section: str | None = None
+    ) -> list[dict]:
+        with self.connect() as conn:
+            q = "SELECT * FROM main_goal_tundish_sequences WHERE 1=1"
+            args: list = []
+            if period_key:
+                q += " AND period_key = ?"
+                args.append(period_key)
+            if section:
+                q += " AND section = ?"
+                args.append(section)
+            q += " ORDER BY id ASC"
+            return [dict(r) for r in conn.execute(q, args).fetchall()]
+
+    def aggregate_sequences(self, period_key: str, section: str) -> dict:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS tundish_count,
+                       COALESCE(SUM(melt_count), 0) AS melt_count,
+                       COALESCE(SUM(shroud_replaced), 0) AS shroud_replacements,
+                       COALESCE(SUM(outer_nozzle_replaced), 0) AS nozzle_replacements
+                FROM main_goal_tundish_sequences
+                WHERE period_key = ? AND section = ?
+                """,
+                (period_key, section),
+            ).fetchone()
+        return dict(row) if row else {}

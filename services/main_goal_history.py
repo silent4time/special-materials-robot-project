@@ -156,7 +156,12 @@ def month_record_from_row(row: dict) -> MonthRecord:
 
 
 def load_history(db: Any) -> list[MonthRecord]:
-    return [month_record_from_row(r) for r in db.list_main_goal_months()]
+    """Prefer normalized production/consumption tables; legacy months as fallback."""
+    try:
+        from services import main_goal_persist as mgp
+        return mgp.load_history_from_db(db, include_incomplete=True)
+    except Exception:  # noqa: BLE001
+        return [month_record_from_row(r) for r in db.list_main_goal_months()]
 
 
 # ---------------------------------------------------------------- store a month set
@@ -192,13 +197,38 @@ class StoreOutcome:
         return "\n".join(lines)
 
 
-def history_count_line(n: int) -> str:
-    if n >= MIN_RECOMMENDED_MONTHS:
-        return f"📚 ماه‌های ذخیره‌شده: {n} — برای سناریوها کافی است (حداقل {MIN_RECOMMENDED_MONTHS} ماه)."
-    return (
-        f"⚠ ماه‌های ذخیره‌شده: {n} از حداقل {MIN_RECOMMENDED_MONTHS} ماه پیشنهادی — "
-        "برای دقت بیشتر، فایل‌های ماه‌های دیگر را هم آپلود کنید (محاسبه با دادهٔ موجود هم ممکن است)."
+
+def consecutive_month_gap_warning(months: list[MonthRecord]) -> str | None:
+    """Warn only when Jalali months in DB have a hole (e.g. Tir+Shahrivar without Mordad)."""
+    dated = sorted(
+        {(int(m.year), int(m.month)) for m in months if m.kind == "month" and m.year and m.month}
     )
+    if len(dated) < 2:
+        return None
+    missing = []
+    for (y1, m1), (y2, m2) in zip(dated, dated[1:]):
+        cy, cm = y1, m1
+        while True:
+            cm += 1
+            if cm > 12:
+                cm = 1
+                cy += 1
+            if (cy, cm) >= (y2, m2):
+                break
+            missing.append(format_month_year(cy, cm, named=True))
+    if not missing:
+        return None
+    return "وقفه در ماه‌های متوالی سابقه: " + "، ".join(missing) + " — لطفاً ماه‌های جاافتاده را ثبت کنید."
+
+
+def history_count_line(n: int, *, gap_warning: str | None = None) -> str:
+    """Status line. Does NOT alarm merely because n < 3; gap_warning is separate."""
+    base = f"📚 ماه‌های ذخیره‌شده: {n}."
+    if gap_warning:
+        return base + "\n⚠ " + gap_warning
+    if n >= 1:
+        return base + " سری ماه‌ها پیوسته است (هشدار فقط در صورت وقفه در ماه‌های متوالی)."
+    return base + " هنوز ماهی ثبت نشده."
 
 
 def _safe_dir_name(period_key: str) -> str:
@@ -257,6 +287,11 @@ def store_month_set(
         created_at_tehran=now.isoformat(),
         jalali_date=format_date(now),
     )
+    # Also persist normalized production + consumption rows for DB-backed reports
+    try:
+        _persist_normalized_from_result(db, result, file_meta, user=user, source=source)
+    except Exception:  # noqa: BLE001
+        pass
     return StoreOutcome(ok=True, error_fa=None, result=result, row=row, replaced=replaced)
 
 
@@ -358,10 +393,9 @@ class HistoryModel:
 
     def warnings(self) -> list[str]:
         out: list[str] = []
-        if self.n_months < MIN_RECOMMENDED_MONTHS:
-            out.append(
-                f"فقط {self.n_months} ماه سابقه موجود است (حداقل {MIN_RECOMMENDED_MONTHS} ماه برای دقت توصیه می‌شود)."
-            )
+        gap = consecutive_month_gap_warning(self.months)
+        if gap:
+            out.append(gap)
         for sec in SECTIONS:
             sm = self.sections[sec]
             if sm.tons_per_tundish is None and sm.total_tons > 0:
@@ -1007,5 +1041,5 @@ def history_overview_text(months: list[MonthRecord]) -> str:
     lines = [f"📚 ماه‌های ذخیره‌شده ({len(months)}):"]
     for i, m in enumerate(months, 1):
         lines.append(f"{i}) {m.label} — {m.production.total_tons:,.0f} تن — ثبت {m.jalali_date} ({m.actor})")
-    lines.append(history_count_line(len(months)))
+    lines.append(history_count_line(len(months), gap_warning=consecutive_month_gap_warning(months)))
     return "\n".join(lines)

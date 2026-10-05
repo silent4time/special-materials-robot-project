@@ -389,8 +389,13 @@ def add_row(
     record: Mapping[str, Any],
     *,
     bale_user_id: str | int,
+    allow_update: bool = False,
 ) -> dict[str, Any]:
-    """Append a new inventory row (or merge if id already exists)."""
+    """Append a new inventory row.
+
+    If ``id`` (شناسه مواد) already exists and ``allow_update`` is False, raises
+    ValueError so bot/web can ask the user to confirm overwrite or edit instead.
+    """
     item_id = _cell_str(record.get("id"))
     if not item_id:
         raise ValueError("شناسه (id) الزامی است.")
@@ -399,6 +404,11 @@ def add_row(
         df = ensure_inventory_columns(pd.DataFrame())
 
     idx, _existing = find_row_by_id(df, item_id)
+    if idx is not None and not allow_update:
+        raise ValueError(
+            f"شناسه «{item_id}» از قبل در منبع اصلی هست. "
+            "برای ویرایش از «✏️ ویرایش رکورد» استفاده کنید یا با تأیید جایگزینی دوباره بفرستید."
+        )
     row_data = {col: "" for col in INVENTORY_COLUMNS}
     row_data["priority"] = 1
     row_data["quantity"] = None

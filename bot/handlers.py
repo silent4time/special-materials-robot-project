@@ -2016,6 +2016,30 @@ class BotApp:
             )
             return True
 
+        if mode == "add_confirm_overwrite":
+            ans = text.strip().casefold()
+            if ans not in {"بله", "بلی", "yes", "y", "آره", "اره"}:
+                self._clear_main_source_pending(uid)
+                self._reply(message, "افزودن رکورد لغو شد (شناسه تکراری).", kb.inventory_edit_menu())
+                return True
+            draft = dict(pending.get("draft") or {})
+            try:
+                result = main_source_svc.add_row(
+                    self.db, draft, bale_user_id=uid, allow_update=True
+                )
+            except (KeyError, ValueError) as exc:
+                self._clear_main_source_pending(uid)
+                self._reply(message, str(exc), kb.inventory_edit_menu())
+                return True
+            self._clear_main_source_pending(uid)
+            log_activity(self.db, user, "add_main_source_record_overwrite")
+            self._reply(
+                message,
+                "✅ رکورد جایگزین شد.\n" + main_source_svc.format_row_fa(result.get("row") or {}),
+                kb.inventory_edit_menu(),
+            )
+            return True
+
         if mode == "add_fields":
             fields = list(pending.get("fields") or main_source_svc.INVENTORY_COLUMNS)
             idx = int(pending.get("field_idx") or 0)
@@ -2041,11 +2065,32 @@ class BotApp:
             if idx >= len(fields):
                 try:
                     result = main_source_svc.add_row(
-                        self.db, draft, bale_user_id=uid
+                        self.db, draft, bale_user_id=uid, allow_update=False
                     )
-                except (KeyError, ValueError) as exc:
+                except ValueError as exc:
+                    msg = str(exc)
+                    if "از قبل در منبع اصلی" in msg:
+                        self._main_source_pending[uid] = {
+                            "mode": "add_confirm_overwrite",
+                            "draft": draft,
+                            "fields": fields,
+                        }
+                        self._reply(
+                            message,
+                            msg + "\n\nبرای جایگزینی کامل رکورد «بله» بفرستید؛ وگرنه انصراف.",
+                            kb.cancel_pending_menu(),
+                        )
+                        return True
+                    self._reply(message, msg, kb.cancel_pending_menu())
+                    self._main_source_pending[uid] = {
+                        "mode": "add_fields",
+                        "fields": fields,
+                        "field_idx": 0,
+                        "draft": {},
+                    }
+                    return True
+                except KeyError as exc:
                     self._reply(message, str(exc), kb.cancel_pending_menu())
-                    # keep pending so user can retry last field? reset to start
                     self._main_source_pending[uid] = {
                         "mode": "add_fields",
                         "fields": fields,
@@ -6119,7 +6164,9 @@ class BotApp:
             return
 
         if message.get("photo"):
-            # Photo outside settings flow — ignore politely if registered
+            if self.main_goal_report.handle_photo(message):
+                return
+            # Photo outside known flows — ignore politely if registered
             return
 
         if not text:

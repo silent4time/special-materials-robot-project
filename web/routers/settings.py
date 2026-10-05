@@ -178,10 +178,12 @@ async def main_source_add(
         }
         if not record.get("priority"):
             record["priority"] = "1"
+        overwrite = str(form.get("overwrite") or "").strip() in {"1", "on", "true", "yes"}
         result = main_source_svc.add_row(
             db,
             record,
             bale_user_id=user["bale_user_id"],
+            allow_update=overwrite,
         )
         log_activity(db, user, "web_add_main_source_record")
         action = "به‌روز" if result.get("action") == "updated" else "اضافه"
