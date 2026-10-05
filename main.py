@@ -16,6 +16,9 @@ from bot.bale_api import BaleAPIError, BaleClient
 from bot.handlers import BotApp
 from config import ADMIN_BALE_USER_ID, BALE_BOT_TOKEN, ensure_dirs
 from db.models import Database
+from services import mandatory_reminders
+
+REMINDER_TICK_SECONDS = 60
 
 logging.basicConfig(
     level=logging.INFO,
@@ -68,11 +71,16 @@ def main() -> int:
             logger.warning("deleteWebhook: %s", exc)
 
         logger.info("Polling started…")
+        last_reminder_tick = 0.0
         while True:
             try:
                 updates = client.get_updates()
                 for upd in updates:
                     app.handle_update(upd)
+                # یادآور گزارش‌های الزامی (never raises; respects DB settings)
+                if time.monotonic() - last_reminder_tick >= REMINDER_TICK_SECONDS:
+                    last_reminder_tick = time.monotonic()
+                    mandatory_reminders.tick(client, db)
             except BaleAPIError as exc:
                 logger.error("API error: %s", exc)
                 time.sleep(3)

@@ -31,6 +31,18 @@ BTN_SETTINGS_UPLOAD_LETTERHEAD = "📄 آپلود سربرگ PDF"
 BTN_SETTINGS_CLEAR_LETTERHEAD = "🗑 حذف سربرگ"
 BTN_SET_STOCK_GROUP = "📣 گروه گزارش موجودی روزانه"
 BTN_SETTINGS_CLEAR_STOCK_GROUP = "🗑 حذف گروه گزارش موجودی"
+# یادآور گزارش‌های ورودی الزامی (owner/manager)
+BTN_SET_REMINDERS = "🔔 یادآور گزارش‌های الزامی"
+BTN_RM_STATUS = "👁 وضعیت یادآور"
+BTN_RM_ENABLE = "✅ فعال‌سازی یادآور"
+BTN_RM_DISABLE = "⏸ غیرفعال‌سازی یادآور"
+BTN_RM_ROLES = "👥 نقش‌های دریافت‌کننده"
+BTN_RM_USERS = "👤 کاربران دریافت‌کننده"
+BTN_RM_SCHEDULE = "📅 زمان‌بندی یادآور"
+BTN_RM_SEND_NOW = "📨 ارسال یادآور همین حالا"
+BTN_RM_BACK = "⬅️ بازگشت به یادآور"
+RM_CHECK_ON = "✅ "
+RM_CHECK_OFF = "⬜ "
 BTN_BACK_BOT_SETTINGS = "⬅️ بازگشت به تنظیمات ربات"
 BTN_SETTINGS_VIEW = "👁 مشاهده"
 BTN_SETTINGS_EDIT_TEXT = "✏️ ویرایش متن"
@@ -106,7 +118,30 @@ BTN_CRITICAL_REPORT = "📄 تولید گزارش اقلام بحرانی"
 BTN_BACK_CRITICAL = "⬅️ بازگشت به اقلام بحرانی"
 BTN_MAIN_GOAL = "🎯 گزارش هدف اصلی"
 BTN_MG_MENU = BTN_MAIN_GOAL
-BTN_MG_START = "📤 آپلود چهار فایل هدف اصلی"
+BTN_MG_START = "📤 آپلود ۴ فایل یک ماه"
+BTN_MG_START_LEGACY = "📤 آپلود چهار فایل هدف اصلی"  # old keyboards still on clients
+BTN_MG_BULK = "📦 آپلود گروهی چند ماه (تشخیص خودکار)"
+BTN_MG_BULK_DONE = "✅ پایان آپلود گروهی"
+BTN_MG_HISTORY = "🗂 ماه‌های ذخیره‌شده"
+BTN_MG_DELETE = "🗑 حذف یک ماه از سابقه"
+BTN_MG_SCN_TARGET = "🎯 سناریو ۱: تناژ هدف"
+BTN_MG_SCN_FORECAST = "🔮 سناریو ۲: پیش‌بینی ماه‌های آینده"
+BTN_MG_ADD_SECTION = "➕ افزودن بخش دیگر"
+BTN_MG_COMPUTE = "✅ محاسبه سناریو"
+BTN_MG_SEC_BILLET = "بیلت"
+BTN_MG_SEC_BLOOM = "بلوم"
+BTN_MG_SEC_SLAB = "اسلب"
+BTN_MG_SEC_TOTAL = "کل (همه بخش‌ها)"
+MG_SECTION_BUTTONS = {
+    BTN_MG_SEC_BILLET: "billet",
+    BTN_MG_SEC_BLOOM: "bloom",
+    BTN_MG_SEC_SLAB: "slab",
+    BTN_MG_SEC_TOTAL: "total",
+}
+BTN_MG_P1 = "۱ ماه"
+BTN_MG_P3 = "۳ ماه"
+BTN_MG_P6 = "۶ ماه"
+BTN_MG_P12 = "۱۲ ماه"
 BTN_MG_RECENT = "📜 آخرین گزارش‌های هدف اصلی"
 BTN_MG_CANCEL = "✖️ انصراف از گزارش هدف اصلی"
 BTN_MG_SKIP_TARGET = "⏭ بدون تناژ هدف"
@@ -516,6 +551,10 @@ def main_goal_menu() -> dict:
     return BaleClient.reply_keyboard(
         [
             [BTN_MG_START],
+            [BTN_MG_BULK],
+            [BTN_MG_HISTORY],
+            [BTN_MG_SCN_TARGET],
+            [BTN_MG_SCN_FORECAST],
             [BTN_MG_RECENT],
             [BTN_BACK_ANALYTICS],
         ]
@@ -530,6 +569,66 @@ def main_goal_upload_menu() -> dict:
             [BTN_BACK_ANALYTICS],
         ]
     )
+
+
+def main_goal_bulk_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MG_BULK_DONE],
+            [BTN_MG_CANCEL],
+        ]
+    )
+
+
+def main_goal_history_menu(*, can_delete: bool = False) -> dict:
+    rows = [[BTN_MG_START], [BTN_MG_BULK]]
+    if can_delete:
+        rows.append([BTN_MG_DELETE])
+    rows.append([BTN_MG_BACK])
+    return BaleClient.reply_keyboard(rows)
+
+
+def main_goal_period_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MG_P1, BTN_MG_P3],
+            [BTN_MG_P6, BTN_MG_P12],
+            [BTN_MG_CANCEL],
+        ]
+    )
+
+
+def main_goal_section_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MG_SEC_BILLET, BTN_MG_SEC_BLOOM, BTN_MG_SEC_SLAB],
+            [BTN_MG_SEC_TOTAL],
+            [BTN_MG_CANCEL],
+        ]
+    )
+
+
+def main_goal_targets_confirm_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MG_COMPUTE],
+            [BTN_MG_ADD_SECTION],
+            [BTN_MG_CANCEL],
+        ]
+    )
+
+
+def main_goal_horizon_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MG_P3, BTN_MG_P6, BTN_MG_P12],
+            [BTN_MG_CANCEL],
+        ]
+    )
+
+
+def main_goal_cancel_menu() -> dict:
+    return BaleClient.reply_keyboard([[BTN_MG_CANCEL]])
 
 
 def main_goal_target_menu() -> dict:
@@ -665,6 +764,7 @@ def bot_settings_menu() -> dict:
             [BTN_SET_LOGO],
             [BTN_SET_LETTERHEAD],
             [BTN_SET_STOCK_GROUP],
+            [BTN_SET_REMINDERS],
             [BTN_TR_SETTINGS],
             [BTN_BACK_MAIN],
         ]
@@ -707,6 +807,35 @@ def bot_settings_item_menu(*, include_text: bool = True) -> dict:
         ]
     )
     return BaleClient.reply_keyboard(rows)
+
+
+def reminder_settings_menu(enabled: bool) -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_RM_STATUS],
+            [BTN_RM_DISABLE if enabled else BTN_RM_ENABLE],
+            [BTN_RM_ROLES, BTN_RM_USERS],
+            [BTN_RM_SCHEDULE],
+            [BTN_RM_SEND_NOW],
+            [BTN_BACK_BOT_SETTINGS],
+        ]
+    )
+
+
+def reminder_roles_menu(selected: list[str] | set[str]) -> dict:
+    from config import ROLES
+
+    sel = set(selected or [])
+    rows = [
+        [(RM_CHECK_ON if key in sel else RM_CHECK_OFF) + label]
+        for key, label in ROLES.items()
+    ]
+    rows.append([BTN_RM_BACK])
+    return BaleClient.reply_keyboard(rows)
+
+
+def reminder_back_menu() -> dict:
+    return BaleClient.reply_keyboard([[BTN_RM_BACK]])
 
 
 BTN_INVITE_ENTER = "ورود به ربات"

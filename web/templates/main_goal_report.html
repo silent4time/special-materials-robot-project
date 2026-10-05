@@ -3,8 +3,8 @@
 {% block content %}
 <div class="card">
   <h1>🎯 {{ title_fa }}</h1>
-  <p class="muted">{{ subtitle_fa }}</p>
-  <p class="muted">{{ ccm_note }} — بازه از نام فایل / شیت / سربرگ خوانده می‌شود؛ اگر بازه‌ها یکسان نباشند محاسبه انجام نمی‌شود.</p>
+  <p class="muted">{{ subtitle_fa }} — {{ ccm_note }}</p>
+  <p class="muted">مرحله ۱: آپلود سابقهٔ ماهانه (هر ماه ۴ فایل با بازهٔ یکسان؛ حداقل {{ min_months }} ماه برای دقت) ← مرحله ۲: انتخاب سناریو (تناژ هدف یا پیش‌بینی N ماه) ← PDF + اکسل.</p>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err" style="white-space:pre-wrap">{{ error }}</div>{% endif %}
   {% if summary %}<pre class="muted" style="white-space:pre-wrap">{{ summary }}</pre>{% endif %}
@@ -17,18 +17,90 @@
 </div>
 
 <div class="card">
-  <h2>آپلود چهار فایل Excel (یک بازه)</h2>
-  <form method="post" action="/reports/main-goal/run" enctype="multipart/form-data" class="form-grid">
+  <h2>📚 ماه‌های ذخیره‌شده ({{ months|length }})</h2>
+  <div class="alert {% if months|length >= min_months %}ok{% else %}err{% endif %}">{{ history_line }}</div>
+  {% if missing_required %}
+  <p class="muted">ماه‌های الزامی ثبت‌نشده (طبق تنظیمات یادآور): {{ missing_required|join("، ") }}</p>
+  {% endif %}
+  {% if months %}
+  <table>
+    <thead><tr><th>#</th><th>ماه</th><th>بیلت (تن)</th><th>بلوم (تن)</th><th>اسلب (تن)</th><th>جمع</th><th>تاندیش ب/بل/ا</th><th>ثبت</th>{% if can_delete %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for m in months %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ m.label }}</td>
+        <td>{{ "{:,.0f}".format(m.production.billet_tons) }}</td>
+        <td>{{ "{:,.0f}".format(m.production.bloom_tons) }}</td>
+        <td>{{ "{:,.0f}".format(m.production.slab_tons) }}</td>
+        <td>{{ "{:,.0f}".format(m.production.total_tons) }}</td>
+        <td>
+          {% for sec in ["billet", "bloom", "slab"] %}{% set c = m.consumptions.get(sec) %}{{ (c.tundish_count|round(0)|int) if c and c.tundish_count is not none else "—" }}{% if not loop.last %} / {% endif %}{% endfor %}
+        </td>
+        <td>{{ m.jalali_date }} — {{ m.actor }} ({{ m.source }})</td>
+        {% if can_delete %}
+        <td>
+          <form method="post" action="/reports/main-goal/months/{{ m.id }}/delete" onsubmit="return confirm('ماه {{ m.label }} از سابقه حذف شود؟')">
+            <button type="submit" class="linkish">حذف</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>📤 آپلود ۴ فایل یک ماه</h2>
+  <p class="muted">بازه از نام فایل / شیت / سربرگ خوانده می‌شود؛ اگر بازهٔ ۴ فایل یکسان نباشد ذخیره نمی‌شود. آپلود دوبارهٔ همان ماه = جایگزینی.</p>
+  <form method="post" action="/reports/main-goal/months/upload" enctype="multipart/form-data" class="form-grid">
     {% for key, label in file_kinds %}
     <label>{{ label }}
       <input type="file" name="{{ key }}" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
     </label>
     {% endfor %}
-    <label>تناژ هدف (اختیاری — برای پیش‌بینی نیاز ≈ نرخ × تناژ)
-      <input type="number" name="target_tons" min="0" step="any" placeholder="مثلاً 50000">
+    <div class="report-actions"><button type="submit" class="btn">اعتبارسنجی و ذخیرهٔ ماه</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>📦 آپلود گروهی چند ماه (تشخیص خودکار)</h2>
+  <p class="muted">همهٔ فایل‌های چند ماه را یک‌جا انتخاب کنید (مثلاً ۱۲ فایل برای ۳ ماه). نوع و ماه هر فایل از نام فایل/شیت/سربرگ تشخیص داده می‌شود — مثال نام: «آمار تولید شهریور ۱۴۰۵.xlsx»، «مصرف تاندیش بیلت شهریور ۱۴۰۵.xlsx».</p>
+  <form method="post" action="/reports/main-goal/months/bulk" enctype="multipart/form-data" class="form-grid">
+    <label>فایل‌ها
+      <input type="file" name="files" multiple accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+    </label>
+    <div class="report-actions"><button type="submit" class="btn">بارگذاری و ذخیرهٔ ماه‌های کامل</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>🎯 سناریو ۱ — تناژ هدف</h2>
+  <p class="muted">تناژ مورد نظر را برای یک بازه و بخش وارد کنید؛ تعداد تاندیش و مواد لازم از نرخ‌های تاریخی تقریب زده می‌شود. «کل» (منهای بخش‌های واردشده) به نسبت سهم تاریخی بین بخش‌ها تقسیم می‌شود.</p>
+  {% if months|length < min_months %}<div class="alert err">کمتر از {{ min_months }} ماه سابقه — محاسبه با دادهٔ موجود انجام می‌شود ولی دقت کمتر است.</div>{% endif %}
+  <form method="post" action="/reports/main-goal/scenario/target" class="form-grid">
+    <label>بازهٔ زمانی (مثلاً «مهر ۱۴۰۵»، «۳ ماه»، «از مهر ۱۴۰۵ تا آذر ۱۴۰۵»)
+      <input type="text" name="period_text" placeholder="۳ ماه">
+    </label>
+    <label>بیلت (تن)<input type="text" inputmode="decimal" name="billet" placeholder="مثلاً 25000"></label>
+    <label>بلوم (تن)<input type="text" inputmode="decimal" name="bloom"></label>
+    <label>اسلب (تن)<input type="text" inputmode="decimal" name="slab"></label>
+    <label>کل (تن، اختیاری)<input type="text" inputmode="decimal" name="total"></label>
+    <div class="report-actions"><button type="submit" class="btn" {% if not months %}disabled{% endif %}>محاسبه و ساخت PDF + اکسل</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>🔮 سناریو ۲ — پیش‌بینی ماه‌های آینده با روند فعلی</h2>
+  <p class="muted">برای هر بخش تناژ ماهانه با روند خطی سابقه (≥{{ min_months }} ماه؛ وگرنه میانگین) پیش‌بینی و مواد لازم برآورد می‌شود.</p>
+  <form method="post" action="/reports/main-goal/scenario/forecast" class="form-grid">
+    <label>تعداد ماه آینده (۱ تا {{ max_forecast }})
+      <input type="number" name="months_ahead" min="1" max="{{ max_forecast }}" value="6" required>
     </label>
     <div class="report-actions">
-      <button type="submit" class="btn">محاسبه و ساخت گزارش</button>
+      <button type="submit" class="btn" {% if not months %}disabled{% endif %}>پیش‌بینی و ساخت PDF + اکسل</button>
       <a class="btn" href="/reports">بازگشت به گزارش‌ها</a>
     </div>
   </form>

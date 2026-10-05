@@ -210,6 +210,11 @@ class BotApp:
         from bot.main_goal_report_flow import MainGoalReportFlow
 
         self.main_goal_report = MainGoalReportFlow(self)
+
+        # یادآور گزارش‌های الزامی (تنظیمات ربات) — see bot/reminder_settings_flow.py
+        from bot.reminder_settings_flow import ReminderSettingsFlow
+
+        self.reminder_settings = ReminderSettingsFlow(self)
         ensure_dirs()
 
     # ---------- helpers ----------
@@ -6127,6 +6132,7 @@ class BotApp:
             # any slash command abandons unfinished drafts
             self.tundish_report.clear(self._uid(message))
             self.main_goal_report.clear(self._uid(message))
+            self.reminder_settings.clear(self._uid(message))
             mapping = {
                 "/start": lambda: self.cmd_start(message, args),
                 "/help": lambda: self.cmd_help(message),
@@ -6146,6 +6152,10 @@ class BotApp:
                 handler()
             else:
                 self._reply(message, "دستور ناشناخته. /help را ببینید.")
+            return
+
+        # یادآور گزارش‌های الزامی — settings (owner/manager)
+        if self.reminder_settings.handle_text(message, text):
             return
 
         # گزارش تاندیش بعد از ریخته‌گری — menu buttons + entry/settings flows
@@ -6387,6 +6397,8 @@ class BotApp:
                 self._clear_report_assistant_pending(uid)
                 self._clear_critical_pending(uid)
                 self.tundish_report.clear(uid)
+                self.main_goal_report.clear(uid)
+                self.reminder_settings.clear(uid)
                 self._bot_settings_pending.pop(uid, None)
                 self._await_category_code.discard(uid)
                 self._main_source_pending.pop(uid, None)

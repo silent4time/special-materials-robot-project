@@ -378,6 +378,79 @@ def compare_periods(
     return None
 
 
+# ---------------------------------------------------------------- file kind detection
+_PRODUCTION_NEEDLES = ("تولید", "production", "product", "آمارتولید")
+_CONSUMPTION_NEEDLES = ("مصرف", "تاندیش", "tundish", "consumption", "مواد")
+_SECTION_NEEDLES: dict[str, tuple[str, ...]] = {
+    "billet": ("بیلت", "billet"),
+    "bloom": ("بلوم", "bloom"),
+    "slab": ("اسلب", "slab"),
+}
+
+
+def _kind_from_text(text: str) -> str | None:
+    f = fold_key(text)
+    if not f:
+        return None
+    sections = [sec for sec, needles in _SECTION_NEEDLES.items() if any(n in f for n in needles)]
+    has_cons = any(fold_key(n) in f for n in _CONSUMPTION_NEEDLES)
+    has_prod = any(fold_key(n) in f for n in _PRODUCTION_NEEDLES)
+    if has_prod and not has_cons:
+        return "production"
+    if len(sections) == 1 and (has_cons or not has_prod):
+        return f"{sections[0]}_consumption"
+    if has_prod:
+        return "production"
+    return None
+
+
+def detect_file_kind(path: Path | str, *, filename: str | None = None) -> tuple[str | None, str]:
+    """Guess which of the 4 main-goal slots a file is (for bulk multi-month upload).
+
+    Order: filename → sheet names → header cells (tundish rows ⇒ consumption,
+    CCM/PRODUCT rows without tundish ⇒ production). Returns (kind|None, source).
+    """
+    path = Path(path)
+    name = filename or path.name
+    k = _kind_from_text(Path(name).stem)
+    if k:
+        return k, f"نام فایل «{name}»"
+    try:
+        xl = pd.ExcelFile(path)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"خواندن Excel ناموفق: {exc}"
+    for sheet in xl.sheet_names:
+        k = _kind_from_text(sheet)
+        if k:
+            return k, f"نام شیت «{sheet}»"
+    sec_hits = {sec: 0 for sec in _SECTION_NEEDLES}
+    tundish_rows = 0
+    ccm_hits = 0
+    for sheet in xl.sheet_names[:3]:
+        try:
+            df = pd.read_excel(path, sheet_name=sheet, header=None, dtype=object)
+        except Exception:  # noqa: BLE001
+            continue
+        for cell in _iter_cell_strings(df, max_rows=40, max_cols=20):
+            f = fold_key(cell)
+            if _is_tundish_count_label(cell):
+                tundish_rows += 1
+            if re.search(r"ccm\s*[1-5]", normalize_text(cell), re.I):
+                ccm_hits += 1
+            for sec, needles in _SECTION_NEEDLES.items():
+                if any(n in f for n in needles):
+                    sec_hits[sec] += 1
+    if tundish_rows:
+        best = max(sec_hits.items(), key=lambda kv: kv[1])
+        others = [v for s_, v in sec_hits.items() if s_ != best[0]]
+        if best[1] > 0 and all(best[1] > v for v in others):
+            return f"{best[0]}_consumption", "محتوای فایل (ردیف تاندیش + نام بخش)"
+        return None, "فایل مصرف تاندیش است ولی بخش (بیلت/بلوم/اسلب) تشخیص نشد"
+    if ccm_hits >= 2 or sum(1 for v in sec_hits.values() if v) >= 2:
+        return "production", "محتوای فایل (CCM / چند بخش)"
+    return None, "نوع فایل تشخیص نشد"
+
+
 # ---------------------------------------------------------------- load helpers
 def _read_all_sheets(path: Path | str) -> list[tuple[str, pd.DataFrame]]:
     path = Path(path)
@@ -494,6 +567,9 @@ def _skip_as_material(name: str) -> bool:
             return True
     if _is_tonnage_label(name) or _is_tundish_count_label(name) or _is_melt_count_label(name):
         return True
+    if parse_period_text(name) is not None and _MONTH_NAME_RE.search(normalize_text(name)):
+        # title rows like «مصرف تاندیش بیلت — شهریور ۱۴۰۵»
+        return True
     if _section_from_label(name) and len(f) < 12:
         # bare "اسلب" / "CCM1" as row label — not a material
         if re.fullmatch(r"(ccm)?[1-5]", f) or f in {"اسلب", "بلوم", "بیلت", "slab", "bloom", "billet"}:
@@ -501,11 +577,23 @@ def _skip_as_material(name: str) -> bool:
     return False
 
 
+_UNIT_WORDS_RE = re.compile(r"(kg|kgs|ton|tons|pcs|عدد|تن|کیلوگرم|کیلو)", re.I)
+
+
+def _cell_number(val: Any) -> float | None:
+    """Numeric value of a cell; text cells with real words (titles/labels) → None."""
+    if isinstance(val, str):
+        letters = _UNIT_WORDS_RE.sub("", normalize_text(val))
+        if re.search(r"[A-Za-z\u0600-\u06FF]{2,}", letters):
+            return None
+    return _to_float(val)
+
+
 def _pick_numeric_from_row(df: pd.DataFrame, r: int, prefer_last: bool = True) -> float | None:
     """Pick a quantity from a row — prefer Total/last numeric, else first."""
     nums: list[float] = []
     for c in range(df.shape[1]):
-        v = _to_float(df.iat[r, c])
+        v = _cell_number(df.iat[r, c])
         if v is not None:
             nums.append(v)
     if not nums:
@@ -537,7 +625,7 @@ def _month_column_index(df: pd.DataFrame, period: PeriodKey | None) -> int | Non
 
 def _value_at(df: pd.DataFrame, r: int, col: int | None) -> float | None:
     if col is not None and col < df.shape[1]:
-        v = _to_float(df.iat[r, col])
+        v = _cell_number(df.iat[r, col])
         if v is not None:
             return v
     return _pick_numeric_from_row(df, r, prefer_last=True)
@@ -872,6 +960,28 @@ class RateRow:
     per_ton: float | None
     per_melt: float | None
     need_for_period_tons: float | None  # = quantity (actual) / or rate×tons
+
+
+def match_inventory_stock(
+    mat: MaterialLine,
+    inventory: pd.DataFrame | None,
+) -> tuple[str | None, str | None, str | None, float | None]:
+    """Like ``_match_main_source`` but also returns current stock (موجودی) if matched."""
+    matched, iid, kw = _match_main_source(mat, inventory)
+    if not matched or inventory is None or inventory.empty:
+        return matched, iid, kw, None
+    qty_col = "quantity" if "quantity" in inventory.columns else None
+    if not qty_col:
+        return matched, iid, kw, None
+    stock: float | None = None
+    if iid and "id" in inventory.columns:
+        want = fold_key(iid)
+        for _, row in inventory.iterrows():
+            if fold_key(row.get("id")) == want:
+                v = _to_float(row.get(qty_col))
+                if v is not None:
+                    stock = (stock or 0.0) + v
+    return matched, iid, kw, stock
 
 
 def _match_main_source(

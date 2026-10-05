@@ -367,6 +367,29 @@ class Database:
                     ON main_goal_reports(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_main_goal_reports_period
                     ON main_goal_reports(period_key, created_at DESC);
+
+                -- گزارش هدف اصلی: سابقهٔ ماهانه (هر ماه = ۴ فایل با بازهٔ یکسان)
+                CREATE TABLE IF NOT EXISTS main_goal_months (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    period_key TEXT NOT NULL UNIQUE,
+                    period_label TEXT NOT NULL,
+                    period_kind TEXT NOT NULL DEFAULT 'month',
+                    year INTEGER,
+                    month INTEGER,
+                    sort_key TEXT NOT NULL,
+                    files_json TEXT NOT NULL,
+                    stats_json TEXT NOT NULL,
+                    summary_text TEXT,
+                    source TEXT NOT NULL DEFAULT 'bot',
+                    bale_user_id TEXT NOT NULL,
+                    actor_display_name TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    created_at_tehran TEXT NOT NULL,
+                    jalali_date TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_main_goal_months_sort
+                    ON main_goal_months(sort_key);
                 """
             )
             self._migrate_users_role_check(conn)
@@ -2565,3 +2588,92 @@ class Database:
                 (int(limit),),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------ main goal monthly history
+    def upsert_main_goal_month(
+        self,
+        *,
+        period_key: str,
+        period_label: str,
+        period_kind: str,
+        year: int | None,
+        month: int | None,
+        sort_key: str,
+        files_json: str,
+        stats_json: str,
+        summary_text: str | None,
+        source: str,
+        bale_user_id: str | int,
+        actor_display_name: str | None,
+        created_at_tehran: str,
+        jalali_date: str,
+    ) -> tuple[dict, bool]:
+        """Insert or replace one month set. Returns (row, replaced_existing)."""
+        now = _utcnow()
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT id FROM main_goal_months WHERE period_key = ?", (period_key,)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE main_goal_months
+                    SET period_label = ?, period_kind = ?, year = ?, month = ?,
+                        sort_key = ?, files_json = ?, stats_json = ?, summary_text = ?,
+                        source = ?, bale_user_id = ?, actor_display_name = ?,
+                        updated_at = ?, created_at_tehran = ?, jalali_date = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        period_label, period_kind, year, month, sort_key, files_json,
+                        stats_json, summary_text, source, str(bale_user_id),
+                        actor_display_name, now, created_at_tehran, jalali_date,
+                        int(existing["id"]),
+                    ),
+                )
+                rid = int(existing["id"])
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO main_goal_months
+                        (period_key, period_label, period_kind, year, month, sort_key,
+                         files_json, stats_json, summary_text, source, bale_user_id,
+                         actor_display_name, created_at, updated_at, created_at_tehran,
+                         jalali_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        period_key, period_label, period_kind, year, month, sort_key,
+                        files_json, stats_json, summary_text, source, str(bale_user_id),
+                        actor_display_name, now, now, created_at_tehran, jalali_date,
+                    ),
+                )
+                rid = int(cur.lastrowid)
+        return (self.get_main_goal_month(rid) or {}), bool(existing)
+
+    def get_main_goal_month(self, month_id: int) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM main_goal_months WHERE id = ?", (int(month_id),)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_main_goal_months(self) -> list[dict[str, Any]]:
+        """All stored month sets, oldest first (chronological)."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM main_goal_months ORDER BY sort_key ASC, id ASC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def main_goal_month_keys(self) -> set[str]:
+        with self.connect() as conn:
+            rows = conn.execute("SELECT period_key FROM main_goal_months").fetchall()
+        return {str(r["period_key"]) for r in rows}
+
+    def delete_main_goal_month(self, month_id: int) -> bool:
+        with self.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM main_goal_months WHERE id = ?", (int(month_id),)
+            )
+            return cur.rowcount > 0
