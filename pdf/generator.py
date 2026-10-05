@@ -129,6 +129,29 @@ def rtl(text: Any) -> str:
 
 
 
+# Letterhead header/footer bands (fraction of page height). The company
+# letterhead's logo + name sit in the top ~14 % and the address line in the
+# bottom ~7 %, so report content starts/ends outside those bands.
+LETTERHEAD_TOP_FRACTION = 0.155
+LETTERHEAD_BOTTOM_FRACTION = 0.085
+
+
+def _letterhead_margins(
+    letterhead_pdf: Path | str | None,
+    pagesize: tuple[float, float],
+    top: float,
+    bottom: float,
+) -> tuple[float, float]:
+    """(topMargin, bottomMargin) — enlarged when a letterhead PDF is in use."""
+    if not letterhead_pdf or not Path(letterhead_pdf).is_file():
+        return top, bottom
+    height = float(pagesize[1])
+    return (
+        max(top, height * LETTERHEAD_TOP_FRACTION),
+        max(bottom, height * LETTERHEAD_BOTTOM_FRACTION),
+    )
+
+
 def apply_letterhead(
     content_pdf: Path | str,
     letterhead_pdf: Path | str | None,
@@ -252,7 +275,7 @@ DISPLAY_COLUMNS = {
         "shared",
         "critical_point",
         "unit",
-        "other_areas",
+        "casting_floor",
         "billet_renovation",
         "billet_patching",
         "bloom_renovation",
@@ -292,7 +315,7 @@ HEADER_FA = {
     "origin": "سازنده",
     "shared": "اشتراکی",
     "critical_point": "نقطه بحرانی",
-    "other_areas": "سایر نواحی",
+    "casting_floor": "سطح ریخته گری",
     "billet_renovation": "نوسازی تاندیش بیلت",
     "billet_patching": "پچینگ تاندیش بیلت",
     "bloom_renovation": "نوسازی تاندیش بلوم",
@@ -514,13 +537,16 @@ def generate_report(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    _top, _bottom = _letterhead_margins(
+        letterhead_path, landscape(A4), 1.2 * cm, 1.2 * cm
+    )
     doc = SimpleDocTemplate(
         str(output_path),
         pagesize=landscape(A4),
         rightMargin=1.2 * cm,
         leftMargin=1.2 * cm,
-        topMargin=1.2 * cm,
-        bottomMargin=1.2 * cm,
+        topMargin=_top,
+        bottomMargin=_bottom,
         title="گزارش تاندیش",
     )
 
@@ -670,13 +696,16 @@ def generate_monthly_summary_pdf(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    _top, _bottom = _letterhead_margins(
+        letterhead_path, landscape(A4), 1.0 * cm, 1.0 * cm
+    )
     doc = SimpleDocTemplate(
         str(output_path),
         pagesize=landscape(A4),
         rightMargin=1.0 * cm,
         leftMargin=1.0 * cm,
-        topMargin=1.0 * cm,
-        bottomMargin=1.0 * cm,
+        topMargin=_top,
+        bottomMargin=_bottom,
         title=title,
     )
     story: list = []
@@ -903,13 +932,16 @@ def generate_simple_report_pdf(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    _top, _bottom = _letterhead_margins(
+        letterhead_path, landscape(A4), 1.0 * cm, 1.0 * cm
+    )
     doc = SimpleDocTemplate(
         str(output_path),
         pagesize=landscape(A4),
         rightMargin=1.0 * cm,
         leftMargin=1.0 * cm,
-        topMargin=1.0 * cm,
-        bottomMargin=1.0 * cm,
+        topMargin=_top,
+        bottomMargin=_bottom,
         title=title,
     )
     story: list = []

@@ -50,7 +50,7 @@ FIELD_LABELS_FA: dict[str, str] = {
     "shared": "اشتراکی",
     "critical_point": "نقطه بحرانی",
     "unit": "واحد",
-    "other_areas": "سایر نواحی",
+    "casting_floor": "سطح ریخته گری",
     "billet_renovation": "نوسازی تاندیش بیلت",
     "billet_patching": "پچینگ تاندیش بیلت",
     "bloom_renovation": "نوسازی تاندیش بلوم",

@@ -210,7 +210,7 @@ REQUIRED_COLUMNS = {
         "shared",
         "critical_point",
         "unit",
-        "other_areas",
+        "casting_floor",  # سطح ریخته گری (was other_areas / سایر نواحی)
         "billet_renovation",
         "billet_patching",
         "bloom_renovation",

@@ -604,16 +604,164 @@ def forecast(
     ).reset_index(drop=True)
 
 
+# ---------------------------------------------------------------------------
+# Priority (اولویت) in منبع اصلی
+# ---------------------------------------------------------------------------
+# 0 = «بدون اولویت»: the item is NOT used in request suggestions / material
+# requests (it is not the highest priority). 1 is highest, then 2, 3, ...
+# A blank cell is stored as 1 on upload.
+NO_PRIORITY = 0
+# Critical-point aggregation threshold (see critical_point_category_totals).
+CRITICAL_POINT_MIN_QTY = 100.0
+
+
+def _ana_key(value: object) -> str:
+    """Comparison key: yeh/kaf, collapsed spaces, casefold, drop trailing .0."""
+    if value is None:
+        return ""
+    try:
+        if bool(pd.isna(value)):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if not text or text.casefold() in {"nan", "none", "nat"}:
+        return ""
+    text = text.replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+    text = " ".join(text.split())
+    if text.endswith(".0") and text[:-2].lstrip("-").isdigit():
+        text = text[:-2]
+    return text.casefold()
+
+
+def _priority_values(series: pd.Series) -> pd.Series:
+    """Numeric priority; blank → 1 (same default as upload)."""
+    return pd.to_numeric(series, errors="coerce").fillna(1)
+
+
+def is_no_priority(value: object) -> bool:
+    """True when اولویت is 0 (excluded from suggestions)."""
+    num = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    return bool(pd.notna(num) and float(num) == float(NO_PRIORITY))
+
+
+def priority_excluded_keys(inventory_df: pd.DataFrame | None) -> set[str]:
+    """Normalized ids / product names whose every inventory row has priority 0.
+
+    An id (or name) that also appears on a row with priority ≥ 1 stays
+    eligible. Keys are compared with ``_ana_key``.
+    """
+    if (
+        inventory_df is None
+        or not isinstance(inventory_df, pd.DataFrame)
+        or inventory_df.empty
+        or "priority" not in inventory_df.columns
+    ):
+        return set()
+    prio = _priority_values(inventory_df["priority"])
+    zero_mask = prio == float(NO_PRIORITY)
+    out: set[str] = set()
+    for col in ("id", "product_name", "item_code_desc", "material_name"):
+        if col not in inventory_df.columns:
+            continue
+        keys = inventory_df[col].map(_ana_key)
+        zero_keys = set(keys[zero_mask]) - {""}
+        live_keys = set(keys[~zero_mask]) - {""}
+        out |= zero_keys - live_keys
+    return out
+
+
+def _material_is_excluded(material_name: object, excluded: set[str]) -> bool:
+    """Match «id - name» consumption labels against priority-0 keys."""
+    if not excluded:
+        return False
+    key = _ana_key(material_name)
+    if not key:
+        return False
+    if key in excluded:
+        return True
+    if " - " in key:
+        head, tail = key.split(" - ", 1)
+        if head.strip() in excluded or tail.strip() in excluded:
+            return True
+    return False
+
+
+def drop_priority_zero_materials(
+    df: pd.DataFrame | None,
+    inventory_df: pd.DataFrame | None,
+    *,
+    name_col: str = "material_name",
+) -> pd.DataFrame | None:
+    """Remove rows whose material maps to a priority-0 inventory item."""
+    if df is None or df.empty or name_col not in df.columns:
+        return df
+    excluded = priority_excluded_keys(inventory_df)
+    if not excluded:
+        return df
+    mask = df[name_col].map(lambda v: _material_is_excluded(v, excluded))
+    return df.loc[~mask].reset_index(drop=True)
+
+
+def critical_point_category_totals(inventory_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Per category_code stock total for the future critical-point report.
+
+    Rule (spec): sum quantity over rows with the same کد دسته بندی, EXCLUDING
+    rows with quantity < 100 OR priority 0. Returns category_code,
+    total_quantity, row_count.
+
+    TODO(critical-items): the monthly tundish-count input and tonnage-need
+    report are not built yet — waiting for the user's sample formats.
+    """
+    cols = ["category_code", "total_quantity", "row_count"]
+    if (
+        inventory_df is None
+        or inventory_df.empty
+        or "category_code" not in inventory_df.columns
+        or "quantity" not in inventory_df.columns
+    ):
+        return pd.DataFrame(columns=cols)
+    work = inventory_df.copy()
+    work["_qty"] = pd.to_numeric(work["quantity"], errors="coerce")
+    prio = (
+        _priority_values(work["priority"])
+        if "priority" in work.columns
+        else pd.Series(1, index=work.index)
+    )
+    keep = work["_qty"].notna() & (work["_qty"] >= CRITICAL_POINT_MIN_QTY) & (
+        prio != float(NO_PRIORITY)
+    )
+    work = work.loc[keep]
+    work["category_code"] = work["category_code"].map(_ana_key)
+    work = work.loc[work["category_code"] != ""]
+    if work.empty:
+        return pd.DataFrame(columns=cols)
+    out = (
+        work.groupby("category_code")
+        .agg(total_quantity=("_qty", "sum"), row_count=("_qty", "size"))
+        .reset_index()
+        .sort_values("category_code")
+    )
+    return out[cols].reset_index(drop=True)
+
+
 def suggest_requests(
     rates_df: pd.DataFrame | None,
     remaining_df: pd.DataFrame | None,
     days: int | float,
+    *,
+    inventory_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     suggest_qty = max(0, forecast_need - remaining_inventory) at material level.
     forecast_need uses sum of per-tundish avg_daily * days.
+
+    When ``inventory_df`` (منبع اصلی) is given, materials whose inventory
+    rows all have اولویت 0 are skipped (0 = not used in suggestions).
     """
     days = max(0.0, float(days))
+    if inventory_df is not None:
+        rates_df = drop_priority_zero_materials(rates_df, inventory_df)
     rates_m = _material_daily_avg(rates_df if rates_df is not None else pd.DataFrame())
     rem_m = _material_remaining(remaining_df if remaining_df is not None else pd.DataFrame())
     if rates_m.empty:

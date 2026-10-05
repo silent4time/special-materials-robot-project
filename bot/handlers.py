@@ -2082,7 +2082,12 @@ class BotApp:
         period = period_consumption(tank, start, end)
         crit = critical_materials(rates, rem, CRITICAL_DAYS)
         fc = forecast(rates_in_range if not rates_in_range.empty else rates, days)
-        sug = suggest_requests(rates_in_range if not rates_in_range.empty else rates, rem, days)
+        sug = suggest_requests(
+            rates_in_range if not rates_in_range.empty else rates,
+            rem,
+            days,
+            inventory_df=inv,
+        )
         return {
             "start": start,
             "end": end,
@@ -3057,7 +3062,12 @@ class BotApp:
             return
 
         if mode == "suggest":
-            sug = suggest_requests(use_rates, remaining(self._inventory_with_ledger(inv)), days)
+            sug = suggest_requests(
+                use_rates,
+                remaining(self._inventory_with_ledger(inv)),
+                days,
+                inventory_df=inv,
+            )
             title = f"پیشنهاد درخواست مواد — {label}"
             cols = [
                 "material_name",
@@ -4808,7 +4818,8 @@ class BotApp:
         rates_r = daily_rates(tank, monthly, start=start, end=end)
         use_rates = rates_r if rates_r is not None and not rates_r.empty else rates
         rem = remaining(inv)
-        sug = suggest_requests(use_rates, rem, days)
+        # اولویت 0 items are not proposed in a material request.
+        sug = suggest_requests(use_rates, rem, days, inventory_df=inv)
         if sug is None or sug.empty:
             return [], None
         positive = sug.loc[sug["suggest_qty"] > 0].copy()

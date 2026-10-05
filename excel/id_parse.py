@@ -53,3 +53,35 @@ def extract_product_name(raw: object) -> str:
 def split_item_code_desc(raw: object) -> tuple[str | None, str]:
     """Convenience: (id, product_name)."""
     return extract_item_id(raw), extract_product_name(raw)
+
+
+# ---------------------------------------------------------------------------
+# Contractor vs company (پیمانکار / شرکت) from شناسه مواد
+# ---------------------------------------------------------------------------
+# Plant rule (spec): a contractor material id has «0000» as its second group of
+# 4 characters from the left, e.g. ``3787 0000 9002G`` → پیمانکار, while
+# ``3781 2164 1302R`` → شرکت. The «پیمانکار / شرکت» column in منبع اصلی is
+# still the stored value; this helper is for checks / filling blanks.
+CONTRACTOR_ID_MARKER = "0000"
+CONTRACTOR_LABEL_FA = "پیمانکار"
+COMPANY_LABEL_FA = "شرکت"
+
+
+def is_contractor_material_id(raw: object) -> bool | None:
+    """True = contractor, False = company, None = id too short / blank."""
+    if raw is None:
+        return None
+    text = "".join(str(raw).split())
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    if not text or text.lower() == "nan" or len(text) < 8:
+        return None
+    return text[4:8] == CONTRACTOR_ID_MARKER
+
+
+def contractor_or_company_for_id(raw: object) -> str:
+    """«پیمانکار» / «شرکت» from the id, or "" when the id cannot tell."""
+    flag = is_contractor_material_id(raw)
+    if flag is None:
+        return ""
+    return CONTRACTOR_LABEL_FA if flag else COMPANY_LABEL_FA

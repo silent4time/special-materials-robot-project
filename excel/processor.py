@@ -14,6 +14,7 @@ from config import (
     REQUIRED_COLUMNS,
     TUNDISH_TYPES,
     TUNDISH_TYPE_LABELS,
+    UPLOAD_DIR,
     clean_excel_sheet_name,
 )
 from excel.id_parse import extract_item_id, extract_product_name
@@ -112,7 +113,17 @@ COLUMN_ALIASES = {
     "origin": ["origin", "سازنده"],
     "shared": ["shared", "اشتراکی"],
     "critical_point": ["critical_point", "نقطه بحرانی", "نقطه_بحرانی"],
-    "other_areas": ["other_areas", "سایر نواحی", "ساير نواحي"],
+    # Template column «سایر نواحی» was renamed «سطح ریخته گری». Old cleaned
+    # extracts (other_areas / سایر نواحی headers) migrate onto casting_floor.
+    "casting_floor": [
+        "casting_floor",
+        "سطح ریخته گری",
+        "سطح ریخته‌گری",
+        "سطح ریختهگری",
+        "other_areas",
+        "سایر نواحی",
+        "ساير نواحي",
+    ],
     "billet_renovation": ["billet_renovation", "نوسازی تاندیش بیلت"],
     "billet_patching": ["billet_patching", "پچینگ تاندیش بیلت"],
     "bloom_renovation": ["bloom_renovation", "نوسازی تاندیش بلوم"],
@@ -353,7 +364,7 @@ def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
         "shared",
         "critical_point",
         "unit",
-        "other_areas",
+        "casting_floor",
         "billet_renovation",
         "billet_patching",
         "bloom_renovation",
@@ -371,8 +382,9 @@ def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
         out["priority"] = 1
     else:
         prio = pd.to_numeric(out["priority"], errors="coerce")
-        # 0 is a real priority in the current template (including category 1800).
-        # Only a blank cell falls back to 1.
+        # 0 = «بدون اولویت»: stored, but excluded from request suggestions /
+        # material requests (see analytics.tundish.priority_excluded_keys).
+        # It is NOT the highest priority. Only a blank cell falls back to 1.
         out["priority"] = [1 if pd.isna(v) else int(v) for v in prio]
 
     out["quantity"] = pd.to_numeric(out["quantity"], errors="coerce")
@@ -413,7 +425,7 @@ def filter_warehouse_inventory_rows(
             reasons["bad_id"] += 1
             ok = False
         # priority 0 is stored, not a drop flag (template uses it widely,
-        # including every category-1800 surplus row).
+        # including every category-1800 surplus row). Suggestions skip it.
         del prio
         if qty is None or (isinstance(qty, float) and pd.isna(qty)):
             reasons["bad_quantity"] += 1
@@ -521,6 +533,33 @@ def _pick_excel_sheet(path: Path) -> str | int:
         if _sheet_has_warehouse_headers(headers):
             return name
     return names[0]
+
+
+def keep_only_detail_sheet(path: Path | str) -> list[str]:
+    """Drop every sheet except «ریز اطلاعات» from a saved منبع اصلی workbook.
+
+    Plant exports also carry Sheet1 / کل موجودی / Sheet3; only the detail
+    sheet is منبع اصلی. No-op (returns []) when the detail sheet is missing or
+    already alone. Returns the removed sheet names.
+    """
+    from openpyxl import load_workbook
+
+    path = Path(path)
+    if not path.is_file() or path.suffix.lower() not in {".xlsx", ".xlsm"}:
+        return []
+    wb = load_workbook(path, keep_vba=path.suffix.lower() == ".xlsm")
+    try:
+        names = list(wb.sheetnames)
+        if _DETAIL_SHEET not in names or len(names) == 1:
+            return []
+        removed = [n for n in names if n != _DETAIL_SHEET]
+        for name in removed:
+            del wb[name]
+        wb.active = 0
+        wb.save(path)
+        return removed
+    finally:
+        wb.close()
 
 
 def _read_raw_excel(path: Path) -> pd.DataFrame:
@@ -824,6 +863,13 @@ def extract_and_save_clean(
                 f"موجودی نامعتبر={drop_reasons.get('bad_quantity', 0)}."
             )
         clean_df = project_required_columns(filtered, file_type)
+        # Saved raw upload keeps only «ریز اطلاعات» (drop Sheet1 / کل موجودی / …).
+        # Only files under uploads/ are rewritten (never repo samples).
+        try:
+            if raw_path.resolve().is_relative_to(UPLOAD_DIR.resolve()):
+                keep_only_detail_sheet(raw_path)
+        except Exception:  # noqa: BLE001
+            pass
     else:
         filter_name = DEFAULT_ROW_FILTER
         if row_filter is None:

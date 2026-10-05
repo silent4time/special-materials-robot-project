@@ -569,6 +569,80 @@ def _test_simple_report_xlsx() -> None:
 
 
 
+def _test_casting_floor_priority_rules() -> None:
+    """سطح ریخته گری column, priority-0 exclusion, contractor id, critical totals."""
+    import tempfile
+
+    import openpyxl
+    import pandas as pd
+
+    from analytics.tundish import (
+        critical_point_category_totals,
+        priority_excluded_keys,
+        suggest_requests,
+    )
+    from excel.id_parse import contractor_or_company_for_id, is_contractor_material_id
+    from excel.processor import _normalize_columns, keep_only_detail_sheet
+
+    # Header rename + legacy migration
+    for header in ("سطح ریخته گری", "سطح ریخته\u200cگری", "other_areas", "سایر نواحی"):
+        out = _normalize_columns(pd.DataFrame({header: [1]}))
+        assert "casting_floor" in out.columns, header
+    assert "casting_floor" in REQUIRED_COLUMNS["product_inventory"]
+    assert "other_areas" not in REQUIRED_COLUMNS["product_inventory"]
+
+    # Contractor: second 4 chars from the left == 0000
+    assert is_contractor_material_id("378700009002G") is True
+    assert is_contractor_material_id("378121641302R") is False
+    assert is_contractor_material_id("12") is None
+    assert contractor_or_company_for_id("378700009002G") == "پیمانکار"
+    assert contractor_or_company_for_id("378121641302R") == "شرکت"
+
+    inv = pd.DataFrame(
+        {
+            "category_code": ["1203", "1203", "1203", "1207"],
+            "id": ["A1", "Z0", "S1", "B1"],
+            "product_name": ["ماده الف", "ماده صفر", "ماده کم", "ماده ب"],
+            "quantity": [500, 900, 50, 100],
+            "priority": [1, 0, 2, 3],
+        }
+    )
+    excl = priority_excluded_keys(inv)
+    assert "z0" in excl and "ماده صفر" in excl and "a1" not in excl
+    rates = pd.DataFrame(
+        {
+            "material_name": ["A1 - ماده الف", "Z0 - ماده صفر"],
+            "avg_daily": [10.0, 10.0],
+            "unit": ["KG", "KG"],
+        }
+    )
+    rem = pd.DataFrame({"material_name": [], "remaining_qty": [], "unit": []})
+    sug_all = suggest_requests(rates, rem, 5)
+    assert set(sug_all["material_name"]) == {"A1 - ماده الف", "Z0 - ماده صفر"}
+    sug = suggest_requests(rates, rem, 5, inventory_df=inv)
+    assert list(sug["material_name"]) == ["A1 - ماده الف"], sug
+
+    # Critical totals: same category, skip qty < 100 OR priority 0
+    tot = critical_point_category_totals(inv)
+    got = dict(zip(tot["category_code"], tot["total_quantity"]))
+    assert got == {"1203": 500.0, "1207": 100.0}, got
+
+    # Only «ریز اطلاعات» survives in a saved workbook
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "inv.xlsx"
+        wb = openpyxl.Workbook()
+        wb.active.title = "Sheet1"
+        wb.create_sheet("کل موجودی")
+        wb.create_sheet("ریز اطلاعات")["A1"] = "x"
+        wb.create_sheet("Sheet3")
+        wb.save(path)
+        removed = keep_only_detail_sheet(path)
+        assert set(removed) == {"Sheet1", "کل موجودی", "Sheet3"}
+        assert openpyxl.load_workbook(path).sheetnames == ["ریز اطلاعات"]
+        assert keep_only_detail_sheet(path) == []
+    print("casting_floor / priority-0 / contractor / critical totals OK")
+
+
 def _test_shroud_casting_labels() -> None:
     """Shroud محل استفاده is a casting-floor label, not plain اسلب."""
     import tempfile
@@ -674,6 +748,7 @@ def _test_shroud_casting_labels() -> None:
 
 def main() -> int:
     _test_shroud_casting_labels()
+    _test_casting_floor_priority_rules()
     make_samples()
     _test_simple_report_xlsx()
     _test_inbound_delta()
@@ -1101,7 +1176,7 @@ def main() -> int:
         "shared",
         "critical_point",
         "unit",
-        "other_areas",
+        "casting_floor",
         "billet_renovation",
         "billet_patching",
         "bloom_renovation",
