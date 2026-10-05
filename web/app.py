@@ -32,6 +32,7 @@ from web.routers import reports as reports_router
 from web.routers import settings as settings_router
 from web.routers import stock as stock_router
 from web.routers import tundish_report as tundish_report_router
+from web.routers import main_goal_report as main_goal_report_router
 
 WEB_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(WEB_DIR / "templates"))
@@ -91,6 +92,7 @@ def create_app() -> FastAPI:
     app.include_router(reports_router.router)
     app.include_router(settings_router.router)
     app.include_router(tundish_report_router.router)
+    app.include_router(main_goal_report_router.router)
 
     @app.get("/")
     async def root(request: Request):

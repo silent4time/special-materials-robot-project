@@ -32,6 +32,7 @@ ACTION_PHRASES: dict[str, str] = {
     "report_monthly_summary": "گزارش خلاصه مصرف ماهیانه را گرفت",
     "report_inbound": "گزارش ورودی به انبار را گرفت",
     "report_critical_items": "گزارش اقلام بحرانی را گرفت",
+    "report_main_goal": "گزارش هدف اصلی را گرفت",
     "critical_tundish_counts_saved": "تعداد تاندیش ماهانه اقلام بحرانی را ثبت کرد",
     "tundish_report_saved": "گزارش تاندیش بعد از ریخته‌گری ({group}) را ثبت کرد",
     "tundish_report_settings": "تنظیمات گزارش تاندیش بعد از ریخته‌گری را تغییر داد",

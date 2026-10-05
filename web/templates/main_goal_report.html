@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ title_fa }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>🎯 {{ title_fa }}</h1>
+  <p class="muted">{{ subtitle_fa }}</p>
+  <p class="muted">{{ ccm_note }} — بازه از نام فایل / شیت / سربرگ خوانده می‌شود؛ اگر بازه‌ها یکسان نباشند محاسبه انجام نمی‌شود.</p>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err" style="white-space:pre-wrap">{{ error }}</div>{% endif %}
+  {% if summary %}<pre class="muted" style="white-space:pre-wrap">{{ summary }}</pre>{% endif %}
+  {% if download_stem %}
+  <div class="report-actions">
+    <a class="btn" href="/reports/main-goal/download/{{ download_stem }}.pdf">دانلود PDF</a>
+    <a class="btn" href="/reports/main-goal/download/{{ download_stem }}.xlsx">دانلود اکسل</a>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>آپلود چهار فایل Excel (یک بازه)</h2>
+  <form method="post" action="/reports/main-goal/run" enctype="multipart/form-data" class="form-grid">
+    {% for key, label in file_kinds %}
+    <label>{{ label }}
+      <input type="file" name="{{ key }}" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+    </label>
+    {% endfor %}
+    <label>تناژ هدف (اختیاری — برای پیش‌بینی نیاز ≈ نرخ × تناژ)
+      <input type="number" name="target_tons" min="0" step="any" placeholder="مثلاً 50000">
+    </label>
+    <div class="report-actions">
+      <button type="submit" class="btn">محاسبه و ساخت گزارش</button>
+      <a class="btn" href="/reports">بازگشت به گزارش‌ها</a>
+    </div>
+  </form>
+</div>
+
+{% if recent %}
+<div class="card">
+  <h2>آخرین گزارش‌ها</h2>
+  <ul class="muted">
+    {% for r in recent %}
+    <li>{{ r.period_label or "—" }} — {{ r.jalali_date or "" }} — {{ r.actor_display_name or r.bale_user_id }} ({{ r.source }})</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endblock %}

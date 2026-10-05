@@ -104,6 +104,13 @@ BTN_CRITICAL_ITEMS = "🚨 اقلام بحرانی"
 BTN_CRITICAL_COUNTS = "📝 ثبت تعداد تاندیش ماهانه"
 BTN_CRITICAL_REPORT = "📄 تولید گزارش اقلام بحرانی"
 BTN_BACK_CRITICAL = "⬅️ بازگشت به اقلام بحرانی"
+BTN_MAIN_GOAL = "🎯 گزارش هدف اصلی"
+BTN_MG_MENU = BTN_MAIN_GOAL
+BTN_MG_START = "📤 آپلود چهار فایل هدف اصلی"
+BTN_MG_RECENT = "📜 آخرین گزارش‌های هدف اصلی"
+BTN_MG_CANCEL = "✖️ انصراف از گزارش هدف اصلی"
+BTN_MG_SKIP_TARGET = "⏭ بدون تناژ هدف"
+BTN_MG_BACK = "⬅️ بازگشت به هدف اصلی"
 BTN_USER_ACTIVITY = "📋 گزارش فعالیت کاربران"
 BTN_REPORT_ASSISTANT = "🤖 دستیار هوشمند"
 BTN_END_ASSISTANT = "پایان گفتگو"
@@ -473,6 +480,7 @@ def analytics_menu() -> dict:
         [BTN_PERIOD],
         [BTN_REMAINING],
         [BTN_CRITICAL_ITEMS],
+        [BTN_MAIN_GOAL],
         [BTN_SURPLUS],
         [BTN_INBOUND],
         [BTN_FORECAST],
@@ -499,6 +507,37 @@ def critical_items_menu() -> dict:
             [BTN_CRITICAL_COUNTS],
             [BTN_CRITICAL_REPORT],
             [BTN_BACK_ANALYTICS],
+        ]
+    )
+
+
+def main_goal_menu() -> dict:
+    """Submenu under گزارش‌ها for گزارش هدف اصلی (owner/manager/officer)."""
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MG_START],
+            [BTN_MG_RECENT],
+            [BTN_BACK_ANALYTICS],
+        ]
+    )
+
+
+def main_goal_upload_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MG_CANCEL],
+            [BTN_MG_BACK],
+            [BTN_BACK_ANALYTICS],
+        ]
+    )
+
+
+def main_goal_target_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_MG_SKIP_TARGET],
+            [BTN_MG_CANCEL],
+            [BTN_MG_BACK],
         ]
     )
 

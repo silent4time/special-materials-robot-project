@@ -345,6 +345,28 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_tundish_report_values_report
                     ON tundish_report_values(report_id);
+
+                -- گزارش هدف اصلی: uploads + periods + computed results
+                CREATE TABLE IF NOT EXISTS main_goal_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    period_key TEXT,
+                    period_label TEXT,
+                    period_json TEXT,
+                    files_json TEXT NOT NULL,
+                    results_json TEXT,
+                    summary_text TEXT,
+                    target_tons REAL,
+                    source TEXT NOT NULL DEFAULT 'bot',
+                    bale_user_id TEXT NOT NULL,
+                    actor_display_name TEXT,
+                    created_at TEXT NOT NULL,
+                    created_at_tehran TEXT NOT NULL,
+                    jalali_date TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_main_goal_reports_created
+                    ON main_goal_reports(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_main_goal_reports_period
+                    ON main_goal_reports(period_key, created_at DESC);
                 """
             )
             self._migrate_users_role_check(conn)
@@ -2475,3 +2497,71 @@ class Database:
                 (section, int(limit)),
             ).fetchall()
         return [str(r["steel_grade"]) for r in rows]
+
+    # ------------------------------------------------------------------ main goal report
+    def insert_main_goal_report(
+        self,
+        *,
+        period_key: str | None,
+        period_label: str | None,
+        period_json: str | None,
+        files_json: str,
+        results_json: str | None,
+        summary_text: str | None,
+        target_tons: float | None,
+        source: str,
+        bale_user_id: str | int,
+        actor_display_name: str | None,
+        created_at: str,
+        created_at_tehran: str,
+        jalali_date: str,
+    ) -> dict:
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO main_goal_reports
+                    (period_key, period_label, period_json, files_json, results_json,
+                     summary_text, target_tons, source, bale_user_id, actor_display_name,
+                     created_at, created_at_tehran, jalali_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    period_key,
+                    period_label,
+                    period_json,
+                    files_json,
+                    results_json,
+                    summary_text,
+                    target_tons,
+                    source,
+                    str(bale_user_id),
+                    actor_display_name,
+                    created_at,
+                    created_at_tehran,
+                    jalali_date,
+                ),
+            )
+            rid = int(cur.lastrowid)
+        return self.get_main_goal_report(rid) or {}
+
+    def get_main_goal_report(self, report_id: int):
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM main_goal_reports WHERE id = ?", (int(report_id),)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_main_goal_reports(self, *, limit: int = 20) -> list:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, period_key, period_label, summary_text, target_tons,
+                       source, bale_user_id, actor_display_name,
+                       created_at, created_at_tehran, jalali_date
+                FROM main_goal_reports
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+        return [dict(r) for r in rows]

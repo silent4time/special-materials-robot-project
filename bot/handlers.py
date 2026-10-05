@@ -205,6 +205,11 @@ class BotApp:
         from bot.tundish_report_flow import TundishReportFlow
 
         self.tundish_report = TundishReportFlow(self)
+
+        # گزارش هدف اصلی — see bot/main_goal_report_flow.py
+        from bot.main_goal_report_flow import MainGoalReportFlow
+
+        self.main_goal_report = MainGoalReportFlow(self)
         ensure_dirs()
 
     # ---------- helpers ----------
@@ -2152,6 +2157,7 @@ class BotApp:
         self._clear_analysis_pending(user["bale_user_id"])
         self._clear_report_assistant_pending(str(user["bale_user_id"]))
         self._clear_critical_pending(str(user["bale_user_id"]))
+        self.main_goal_report.clear(str(user["bale_user_id"]))
         session = self.db.get_or_create_session(user["bale_user_id"])
         done = self._effective_completeness(user, session)
         lines = [
@@ -6098,6 +6104,11 @@ class BotApp:
             if self.on_bot_settings_photo(message):
                 return
 
+        # گزارش هدف اصلی multi-file upload — before generic Excel slot handler
+        if message.get("document"):
+            if self.main_goal_report.handle_document(message):
+                return
+
         if message.get("document"):
             self.on_document(message)
             return
@@ -6113,8 +6124,9 @@ class BotApp:
             parts = text.split()
             cmd = parts[0].split("@")[0].lower()
             args = parts[1:]
-            # any slash command abandons an unfinished tundish-report draft
+            # any slash command abandons unfinished drafts
             self.tundish_report.clear(self._uid(message))
+            self.main_goal_report.clear(self._uid(message))
             mapping = {
                 "/start": lambda: self.cmd_start(message, args),
                 "/help": lambda: self.cmd_help(message),
@@ -6138,6 +6150,10 @@ class BotApp:
 
         # گزارش تاندیش بعد از ریخته‌گری — menu buttons + entry/settings flows
         if self.tundish_report.handle_text(message, text):
+            return
+
+        # گزارش هدف اصلی — 4-file upload + compute
+        if self.main_goal_report.handle_text(message, text):
             return
 
         # month/year range typed while awaiting (از YYYY/MM تا YYYY/MM)
@@ -6385,6 +6401,16 @@ class BotApp:
         if text == kb.BTN_REMAINING:
             self.on_remaining_critical(message)
             return
+        if text == kb.BTN_MAIN_GOAL or text == kb.BTN_MG_BACK:
+            self.main_goal_report.open_menu(message)
+            return
+        if text == kb.BTN_MG_START:
+            self.main_goal_report.start_upload(message)
+            return
+        if text == kb.BTN_MG_RECENT:
+            self.main_goal_report.show_recent(message)
+            return
+
         if text == kb.BTN_CRITICAL_ITEMS or text == kb.BTN_BACK_CRITICAL:
             self.on_critical_items_menu(message)
             return
