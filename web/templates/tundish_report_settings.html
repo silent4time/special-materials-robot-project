@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}تنظیمات {{ title_fa }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>⚙️ تنظیمات {{ title_fa }}</h1>
+  <p class="muted">مالک / مدیر — همان اقلامی که ربات بله می‌پرسد. <a href="/tundish-report?section={{ section }}">بازگشت به فرم</a></p>
+  <nav class="tabs">
+    {% for key, label in sections %}
+    <a href="/tundish-report/settings?section={{ key }}" class="{{ 'active' if key == section else '' }}">{{ label }}</a>
+    {% endfor %}
+  </nav>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+
+  <h2>اقلام {{ section_fa }}</h2>
+  <table>
+    <thead><tr><th>ترتیب</th><th>برچسب</th><th>نوع</th><th>گزینه‌ها (هر سطر یک گزینه)</th><th>اجباری</th><th></th></tr></thead>
+    <tbody>
+    {% for it in items %}
+      <tr>
+        {% set fid = 'edit_' ~ it.id %}
+        <td>
+          <form id="{{ fid }}" method="post" action="/tundish-report/settings/item/{{ it.id }}/edit">
+            <input type="hidden" name="section" value="{{ section }}">
+          </form>
+          <input form="{{ fid }}" name="position" type="number" min="1" value="{{ loop.index }}" style="width:4rem">
+        </td>
+        <td><input form="{{ fid }}" name="label" value="{{ it.label }}" maxlength="60" required></td>
+        <td>
+          <select form="{{ fid }}" name="item_type">
+            {% for k, v in item_types.items() %}<option value="{{ k }}" {% if it.item_type == k %}selected{% endif %}>{{ v }}</option>{% endfor %}
+          </select>
+        </td>
+        <td><textarea form="{{ fid }}" name="options" rows="3">{{ it.options | join('\n') }}</textarea></td>
+        <td><input form="{{ fid }}" type="checkbox" name="required" value="1" {% if it.required %}checked{% endif %}></td>
+        <td><button form="{{ fid }}" type="submit">ذخیره</button></td>
+      </tr>
+      <tr>
+        <td colspan="6" style="text-align:left">
+          <form method="post" action="/tundish-report/settings/item/{{ it.id }}/delete" onsubmit="return confirm('این قلم حذف شود؟')" style="display:inline">
+            <input type="hidden" name="section" value="{{ section }}">
+            <button type="submit" class="linkish">🗑 حذف «{{ it.label }}»</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">قلمی تعریف نشده است.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>➕ افزودن قلم</h2>
+  <form method="post" action="/tundish-report/settings/item/add">
+    <input type="hidden" name="section" value="{{ section }}">
+    <label>برچسب <input name="label" maxlength="60" required></label>
+    <label>نوع
+      <select name="item_type">{% for k, v in item_types.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+    </label>
+    <label>گزینه‌ها (برای انتخابی؛ هر سطر یا با «،»)<textarea name="options" rows="3"></textarea></label>
+    <label><input type="checkbox" name="required" value="1" checked> اجباری</label>
+    <p><button type="submit">افزودن</button></p>
+  </form>
+
+  <h2>🏭 خطوط / ماشین‌های {{ section_fa }}</h2>
+  <form method="post" action="/tundish-report/settings/lines">
+    <input type="hidden" name="section" value="{{ section }}">
+    <textarea name="lines" rows="3">{{ lines | join('\n') }}</textarea>
+    <p><button type="submit">ذخیره خطوط</button></p>
+  </form>
+</div>
+{% endblock %}

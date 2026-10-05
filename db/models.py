@@ -290,11 +290,67 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_monthly_tundish_counts_updated
                     ON monthly_tundish_counts(updated_at DESC);
+
+                -- گزارش تاندیش بعد از ریخته‌گری: configurable items per section
+                CREATE TABLE IF NOT EXISTS tundish_report_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    section TEXT NOT NULL CHECK(section IN ('slab','bloom','billet')),
+                    label TEXT NOT NULL,
+                    item_type TEXT NOT NULL CHECK(item_type IN ('choice','number','text')),
+                    options_json TEXT,
+                    required INTEGER NOT NULL DEFAULT 1,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_tundish_report_items_section
+                    ON tundish_report_items(section, sort_order, id);
+
+                -- One row per submitted post-casting tundish report
+                CREATE TABLE IF NOT EXISTS tundish_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    section TEXT NOT NULL,
+                    line TEXT,
+                    tundish_no TEXT,
+                    sequence INTEGER,
+                    melt_count INTEGER,
+                    steel_grade TEXT,
+                    fields_json TEXT NOT NULL,
+                    items_json TEXT NOT NULL,
+                    summary_text TEXT,
+                    raw_text TEXT,
+                    source TEXT NOT NULL DEFAULT 'bot',
+                    bale_user_id TEXT NOT NULL,
+                    actor_display_name TEXT,
+                    created_at TEXT NOT NULL,
+                    created_at_tehran TEXT NOT NULL,
+                    jalali_date TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_tundish_reports_created
+                    ON tundish_reports(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_tundish_reports_section
+                    ON tundish_reports(section, created_at DESC);
+
+                -- Normalized item answers (label/type snapshot at submit time)
+                CREATE TABLE IF NOT EXISTS tundish_report_values (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    report_id INTEGER NOT NULL REFERENCES tundish_reports(id) ON DELETE CASCADE,
+                    item_id INTEGER,
+                    label TEXT NOT NULL,
+                    item_type TEXT NOT NULL,
+                    value_text TEXT,
+                    value_num REAL,
+                    sort_order INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_tundish_report_values_report
+                    ON tundish_report_values(report_id);
                 """
             )
             self._migrate_users_role_check(conn)
             self._migrate_add_columns(conn)
             self._ensure_default_category_codes(conn)
+            self._ensure_tundish_report_seed(conn)
 
     def _ensure_default_category_codes(self, conn: sqlite3.Connection) -> None:
         """Insert missing DEFAULT_CATEGORY_CODES; backfill reserved surplus label.
@@ -2093,3 +2149,329 @@ class Database:
                 item["details"] = None
             out.append(item)
         return out
+
+    # ---------- گزارش تاندیش بعد از ریخته‌گری ----------
+
+    def _ensure_tundish_report_seed(self, conn: sqlite3.Connection) -> None:
+        """Seed default items once per section (flag in bot_settings).
+
+        The flag prevents re-seeding after an admin deletes every item.
+        """
+        from services.tundish_report_defaults import DEFAULT_ITEMS
+
+        now = _utcnow()
+        for section, items in DEFAULT_ITEMS.items():
+            flag = f"tundish_report_seeded:{section}"
+            row = conn.execute(
+                "SELECT value FROM bot_settings WHERE key = ?", (flag,)
+            ).fetchone()
+            if row:
+                continue
+            has_any = conn.execute(
+                "SELECT 1 FROM tundish_report_items WHERE section = ? LIMIT 1",
+                (section,),
+            ).fetchone()
+            if not has_any:
+                for order, it in enumerate(items, start=1):
+                    conn.execute(
+                        """
+                        INSERT INTO tundish_report_items
+                            (section, label, item_type, options_json, required,
+                             sort_order, created_at, updated_at, updated_by)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'bootstrap')
+                        """,
+                        (
+                            section,
+                            it["label"],
+                            it["item_type"],
+                            json.dumps(it.get("options") or [], ensure_ascii=False),
+                            1 if it.get("required", True) else 0,
+                            order,
+                            now,
+                            now,
+                        ),
+                    )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO bot_settings (key, value, updated_at, updated_by)
+                VALUES (?, '1', ?, 'bootstrap')
+                """,
+                (flag, now),
+            )
+
+    @staticmethod
+    def _tundish_item_row(row: sqlite3.Row | dict) -> dict[str, Any]:
+        item = dict(row)
+        raw = item.pop("options_json", None)
+        try:
+            opts = json.loads(raw) if raw else []
+        except (TypeError, ValueError, json.JSONDecodeError):
+            opts = []
+        item["options"] = [str(o) for o in opts if str(o).strip()]
+        item["required"] = bool(item.get("required"))
+        return item
+
+    def list_tundish_report_items(self, section: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM tundish_report_items
+                WHERE section = ?
+                ORDER BY sort_order, id
+                """,
+                (str(section),),
+            ).fetchall()
+        return [self._tundish_item_row(r) for r in rows]
+
+    def get_tundish_report_item(self, item_id: int) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM tundish_report_items WHERE id = ?", (int(item_id),)
+            ).fetchone()
+        return self._tundish_item_row(row) if row else None
+
+    def add_tundish_report_item(
+        self,
+        *,
+        section: str,
+        label: str,
+        item_type: str,
+        options: list[str] | None = None,
+        required: bool = True,
+        updated_by: str | int | None = None,
+    ) -> dict[str, Any]:
+        now = _utcnow()
+        with self.connect() as conn:
+            mx = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) FROM tundish_report_items WHERE section = ?",
+                (section,),
+            ).fetchone()[0]
+            cur = conn.execute(
+                """
+                INSERT INTO tundish_report_items
+                    (section, label, item_type, options_json, required, sort_order,
+                     created_at, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    section,
+                    label,
+                    item_type,
+                    json.dumps(list(options or []), ensure_ascii=False),
+                    1 if required else 0,
+                    int(mx or 0) + 1,
+                    now,
+                    now,
+                    str(updated_by) if updated_by is not None else None,
+                ),
+            )
+            new_id = int(cur.lastrowid)
+        return self.get_tundish_report_item(new_id) or {}
+
+    def update_tundish_report_item(
+        self,
+        item_id: int,
+        *,
+        label: str | None = None,
+        item_type: str | None = None,
+        options: list[str] | None = None,
+        required: bool | None = None,
+        updated_by: str | int | None = None,
+    ) -> Optional[dict[str, Any]]:
+        sets: list[str] = []
+        params: list[Any] = []
+        if label is not None:
+            sets.append("label = ?")
+            params.append(label)
+        if item_type is not None:
+            sets.append("item_type = ?")
+            params.append(item_type)
+        if options is not None:
+            sets.append("options_json = ?")
+            params.append(json.dumps(list(options), ensure_ascii=False))
+        if required is not None:
+            sets.append("required = ?")
+            params.append(1 if required else 0)
+        if not sets:
+            return self.get_tundish_report_item(item_id)
+        sets.extend(["updated_at = ?", "updated_by = ?"])
+        params.extend([_utcnow(), str(updated_by) if updated_by is not None else None])
+        params.append(int(item_id))
+        with self.connect() as conn:
+            conn.execute(
+                f"UPDATE tundish_report_items SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+        return self.get_tundish_report_item(item_id)
+
+    def delete_tundish_report_item(self, item_id: int) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT section FROM tundish_report_items WHERE id = ?", (int(item_id),)
+            ).fetchone()
+            if not row:
+                return False
+            conn.execute("DELETE FROM tundish_report_items WHERE id = ?", (int(item_id),))
+            section = row["section"]
+        self._renumber_tundish_items(section)
+        return True
+
+    def _renumber_tundish_items(self, section: str, ordered_ids: list[int] | None = None) -> None:
+        with self.connect() as conn:
+            if ordered_ids is None:
+                ordered_ids = [
+                    int(r["id"])
+                    for r in conn.execute(
+                        "SELECT id FROM tundish_report_items WHERE section = ? ORDER BY sort_order, id",
+                        (section,),
+                    ).fetchall()
+                ]
+            for pos, iid in enumerate(ordered_ids, start=1):
+                conn.execute(
+                    "UPDATE tundish_report_items SET sort_order = ? WHERE id = ? AND section = ?",
+                    (pos, int(iid), section),
+                )
+
+    def move_tundish_report_item(self, item_id: int, new_position: int) -> Optional[dict[str, Any]]:
+        """Move an item to 1-based ``new_position`` within its section."""
+        item = self.get_tundish_report_item(item_id)
+        if not item:
+            return None
+        ids = [int(it["id"]) for it in self.list_tundish_report_items(item["section"])]
+        ids.remove(int(item_id))
+        pos = max(1, min(int(new_position), len(ids) + 1))
+        ids.insert(pos - 1, int(item_id))
+        self._renumber_tundish_items(item["section"], ids)
+        return self.get_tundish_report_item(item_id)
+
+    def insert_tundish_report(
+        self,
+        *,
+        section: str,
+        fields: dict[str, Any],
+        items: list[dict[str, Any]],
+        summary_text: str | None,
+        raw_text: str | None,
+        source: str,
+        bale_user_id: str | int,
+        actor_display_name: str | None,
+        created_at: str,
+        created_at_tehran: str,
+        jalali_date: str,
+    ) -> dict[str, Any]:
+        def _int(v: Any) -> Optional[int]:
+            try:
+                return int(v) if v is not None and str(v).strip() != "" else None
+            except (TypeError, ValueError):
+                return None
+
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO tundish_reports
+                    (section, line, tundish_no, sequence, melt_count, steel_grade,
+                     fields_json, items_json, summary_text, raw_text, source,
+                     bale_user_id, actor_display_name, created_at,
+                     created_at_tehran, jalali_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    section,
+                    fields.get("line"),
+                    None if fields.get("tundish_no") is None else str(fields.get("tundish_no")),
+                    _int(fields.get("sequence")),
+                    _int(fields.get("melt_count")),
+                    fields.get("steel_grade"),
+                    json.dumps(fields, ensure_ascii=False),
+                    json.dumps(items, ensure_ascii=False),
+                    summary_text,
+                    raw_text,
+                    source,
+                    str(bale_user_id),
+                    actor_display_name,
+                    created_at,
+                    created_at_tehran,
+                    jalali_date,
+                ),
+            )
+            rid = int(cur.lastrowid)
+            for pos, it in enumerate(items, start=1):
+                val = it.get("value")
+                num: Optional[float] = None
+                if it.get("item_type") == "number" and val is not None:
+                    try:
+                        num = float(val)
+                    except (TypeError, ValueError):
+                        num = None
+                conn.execute(
+                    """
+                    INSERT INTO tundish_report_values
+                        (report_id, item_id, label, item_type, value_text, value_num, sort_order)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        rid,
+                        it.get("item_id"),
+                        it.get("label") or "",
+                        it.get("item_type") or "text",
+                        None if val is None else str(val),
+                        num,
+                        pos,
+                    ),
+                )
+        return self.get_tundish_report(rid) or {}
+
+    @staticmethod
+    def _tundish_report_row(row: sqlite3.Row | dict) -> dict[str, Any]:
+        rep = dict(row)
+        for key, out in (("fields_json", "fields"), ("items_json", "items")):
+            raw = rep.pop(key, None)
+            try:
+                rep[out] = json.loads(raw) if raw else ({} if out == "fields" else [])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                rep[out] = {} if out == "fields" else []
+        return rep
+
+    def get_tundish_report(self, report_id: int) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM tundish_reports WHERE id = ?", (int(report_id),)
+            ).fetchone()
+            if not row:
+                return None
+            rep = self._tundish_report_row(row)
+            vals = conn.execute(
+                "SELECT * FROM tundish_report_values WHERE report_id = ? ORDER BY sort_order, id",
+                (int(report_id),),
+            ).fetchall()
+        rep["values"] = [dict(v) for v in vals]
+        return rep
+
+    def list_tundish_reports(
+        self, *, section: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM tundish_reports"
+        params: list[Any] = []
+        if section:
+            sql += " WHERE section = ?"
+            params.append(section)
+        sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        params.append(int(limit))
+        with self.connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._tundish_report_row(r) for r in rows]
+
+    def recent_tundish_steel_grades(self, section: str, limit: int = 4) -> list[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT steel_grade, MAX(created_at) AS last_at
+                FROM tundish_reports
+                WHERE section = ? AND steel_grade IS NOT NULL AND TRIM(steel_grade) != ''
+                GROUP BY steel_grade
+                ORDER BY last_at DESC
+                LIMIT ?
+                """,
+                (section, int(limit)),
+            ).fetchall()
+        return [str(r["steel_grade"]) for r in rows]

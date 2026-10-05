@@ -24,7 +24,7 @@ def main() -> int:
 
     app = create_app()
     paths = list(app.openapi().get("paths", {}).keys())
-    needed = ["/login", "/home", "/stock", "/materials/request", "/materials/return", "/reports"]
+    needed = ["/login", "/home", "/stock", "/materials/request", "/materials/return", "/reports", "/tundish-report", "/tundish-report/settings"]
     for p in needed:
         assert p in paths or (p + "/") in paths, f"missing route {p} in {paths}"
     print("routes_ok", len(paths))

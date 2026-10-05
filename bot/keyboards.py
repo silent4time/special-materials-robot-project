@@ -247,12 +247,13 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
     """
     role = user.get("role") if isinstance(user, dict) else user if isinstance(user, str) else None
     if role == "technician":
-        return BaleClient.reply_keyboard([[BTN_SITE_STOCK], [BTN_HELP]])
+        return BaleClient.reply_keyboard([[BTN_SITE_STOCK], [BTN_TR_MENU], [BTN_HELP]])
 
     is_manager = bool(user) if isinstance(user, bool) else role in {"owner", "manager"}
     rows = [
         [BTN_UPLOAD_MENU],
         [BTN_SITE_STOCK],
+        [BTN_TR_MENU],
         [BTN_CATALOG_SETTINGS],
         [BTN_MATERIAL_REQUEST, BTN_WAREHOUSE_RETURN],
         [BTN_ANALYTICS],
@@ -625,6 +626,7 @@ def bot_settings_menu() -> dict:
             [BTN_SET_LOGO],
             [BTN_SET_LETTERHEAD],
             [BTN_SET_STOCK_GROUP],
+            [BTN_TR_SETTINGS],
             [BTN_BACK_MAIN],
         ]
     )
@@ -674,3 +676,154 @@ BTN_INVITE_ENTER = "ورود به ربات"
 def invite_url_button(url: str) -> dict:
     """Inline URL button for invite deep links (forwardable invite message)."""
     return BaleClient.inline_url_keyboard(BTN_INVITE_ENTER, url)
+
+
+# ---------------------------------------------------------------------------
+# گزارش تاندیش بعد از ریخته‌گری (all roles enter; owner/manager configure)
+# ---------------------------------------------------------------------------
+BTN_TR_MENU = "🧾 گزارش تاندیش بعد از ریخته‌گری"
+BTN_TR_SECTION = {
+    "slab": "🧾 گزارش تاندیش اسلب",
+    "bloom": "🧾 گزارش تاندیش بلوم",
+    "billet": "🧾 گزارش تاندیش بیلت",
+}
+TR_SECTION_BUTTONS = {v: k for k, v in BTN_TR_SECTION.items()}
+BTN_TR_RECENT = "📜 آخرین گزارش‌های تاندیش"
+BTN_TR_SETTINGS = "⚙️ تنظیمات گزارش تاندیش"
+BTN_TR_BACK = "⬅️ بازگشت به گزارش تاندیش"
+BTN_TR_MODE_STEP = "✍️ ورود مرحله‌ای"
+BTN_TR_MODE_TEXT = "📋 ورود سریع از متن"
+BTN_TR_SKIP = "⏭ رد کردن (اختیاری)"
+BTN_TR_PREV = "↩️ مرحله قبل"
+BTN_TR_CANCEL = "✖️ انصراف از گزارش تاندیش"
+BTN_TR_CONFIRM = "✅ تأیید و ثبت گزارش"
+BTN_TR_EDIT = "✏️ اصلاح یک مورد"
+
+BTN_TRS_SECTION = {
+    "slab": "⚙️ اقلام گزارش اسلب",
+    "bloom": "⚙️ اقلام گزارش بلوم",
+    "billet": "⚙️ اقلام گزارش بیلت",
+}
+TRS_SECTION_BUTTONS = {v: k for k, v in BTN_TRS_SECTION.items()}
+BTN_TRS_ADD = "➕ افزودن قلم گزارش"
+BTN_TRS_EDIT = "✏️ ویرایش قلم گزارش"
+BTN_TRS_DELETE = "🗑 حذف قلم گزارش"
+BTN_TRS_LINES = "🏭 خطوط / ماشین‌ها"
+BTN_TRS_BACK = "⬅️ بازگشت به تنظیمات گزارش تاندیش"
+BTN_TRS_BACK_SECTION = "⬅️ بازگشت به اقلام بخش"
+BTN_TRS_E_LABEL = "✏️ تغییر برچسب"
+BTN_TRS_E_TYPE = "🔤 تغییر نوع"
+BTN_TRS_E_OPTIONS = "📋 تغییر گزینه‌ها"
+BTN_TRS_E_REQUIRED = "❗ اجباری / اختیاری"
+BTN_TRS_E_ORDER = "🔢 تغییر ترتیب"
+BTN_TRS_DELETE_CONFIRM = "🗑 تأیید حذف قلم"
+BTN_TRS_TYPE_CHOICE = "انتخابی"
+BTN_TRS_TYPE_NUMBER = "عددی"
+BTN_TRS_TYPE_TEXT = "متنی"
+BTN_TRS_REQUIRED = "اجباری"
+BTN_TRS_OPTIONAL = "اختیاری"
+
+
+def tundish_report_menu(user: dict | None = None) -> dict:
+    """Submenu: three sections + recent + (owner/manager) settings."""
+    role = (user or {}).get("role")
+    rows = [
+        [BTN_TR_SECTION["slab"]],
+        [BTN_TR_SECTION["bloom"]],
+        [BTN_TR_SECTION["billet"]],
+        [BTN_TR_RECENT],
+    ]
+    if role in {"owner", "manager"}:
+        rows.append([BTN_TR_SETTINGS])
+    rows.append([BTN_BACK_MAIN])
+    return BaleClient.reply_keyboard(rows)
+
+
+def tundish_report_mode_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [[BTN_TR_MODE_STEP], [BTN_TR_MODE_TEXT], [BTN_TR_CANCEL]]
+    )
+
+
+def tundish_report_step_menu(options: list[str] | None = None, *, optional: bool = False, can_prev: bool = True) -> dict:
+    rows: list[list[str]] = []
+    opts = [_truncate_btn(o) for o in (options or [])]
+    # two buttons per row for short options, one per row for long ones
+    row: list[str] = []
+    for o in opts:
+        if len(o) > 18:
+            if row:
+                rows.append(row)
+                row = []
+            rows.append([o])
+            continue
+        row.append(o)
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if optional:
+        rows.append([BTN_TR_SKIP])
+    nav = [BTN_TR_PREV, BTN_TR_CANCEL] if can_prev else [BTN_TR_CANCEL]
+    rows.append(nav)
+    return BaleClient.reply_keyboard(rows)
+
+
+def tundish_report_confirm_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [[BTN_TR_CONFIRM], [BTN_TR_EDIT], [BTN_TR_CANCEL]]
+    )
+
+
+def tundish_report_settings_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_TRS_SECTION["slab"]],
+            [BTN_TRS_SECTION["bloom"]],
+            [BTN_TRS_SECTION["billet"]],
+            [BTN_TR_BACK],
+        ]
+    )
+
+
+def tundish_report_section_settings_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_TRS_ADD],
+            [BTN_TRS_EDIT, BTN_TRS_DELETE],
+            [BTN_TRS_LINES],
+            [BTN_TRS_BACK],
+        ]
+    )
+
+
+def tundish_report_item_edit_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [
+            [BTN_TRS_E_LABEL, BTN_TRS_E_TYPE],
+            [BTN_TRS_E_OPTIONS, BTN_TRS_E_REQUIRED],
+            [BTN_TRS_E_ORDER],
+            [BTN_TRS_BACK_SECTION],
+        ]
+    )
+
+
+def tundish_report_type_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [[BTN_TRS_TYPE_CHOICE, BTN_TRS_TYPE_NUMBER, BTN_TRS_TYPE_TEXT], [BTN_TRS_BACK_SECTION]]
+    )
+
+
+def tundish_report_required_menu() -> dict:
+    return BaleClient.reply_keyboard(
+        [[BTN_TRS_REQUIRED, BTN_TRS_OPTIONAL], [BTN_TRS_BACK_SECTION]]
+    )
+
+
+def tundish_report_back_section_menu() -> dict:
+    return BaleClient.reply_keyboard([[BTN_TRS_BACK_SECTION]])
+
+
+def tundish_report_delete_confirm_menu() -> dict:
+    return BaleClient.reply_keyboard([[BTN_TRS_DELETE_CONFIRM], [BTN_TRS_BACK_SECTION]])

@@ -846,6 +846,9 @@ def _test_critical_items_report() -> None:
 
 
 def main() -> int:
+    from scripts.smoke_tundish_report import main as _smoke_tundish_report
+
+    _smoke_tundish_report()
     _test_critical_items_report()
     _test_shroud_casting_labels()
     _test_casting_floor_priority_rules()

@@ -129,6 +129,12 @@ HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
 • سربرگ PDF (اختیاری): از «تنظیمات ربات» → «سربرگ PDF» آپلود کنید؛ روی همه صفحات گزارش اعمال می‌شود
 • دستیار هوشمند — فعلاً غیرفعال (گفتگوی محلی با Ollama؛ فقط با ASSISTANT_ENABLED=1 فعال می‌شود)
 
+🧾 گزارش تاندیش بعد از ریخته‌گری (همه نقش‌ها، از جمله تکنسین):
+• منوی اصلی → «🧾 گزارش تاندیش بعد از ریخته‌گری» → اسلب / بلوم / بیلت
+• ورود مرحله‌ای (شماره تاندیش، خط، سکوئنس، تعداد ذوب، مارک + اقلام بخش) یا «ورود سریع از متن»
+• پیش از ثبت، خلاصه نمایش داده می‌شود و قابل اصلاح است؛ ثبت با نام ثبت‌کننده و زمان تهران
+• تنظیم اقلام هر بخش (افزودن / ویرایش / حذف / ترتیب / خطوط): مالک و مدیر — «⚙️ تنظیمات گزارش تاندیش»
+
 درخواست مواد (مالک / مدیر / کاردان مسئول):
 • دکمه «🛒 درخواست مواد» در منوی اصلی
 • ورود تعداد روز پوشش (پیش‌فرض ۱)، بررسی پیشنهاد، تأیید یا اصلاح مقدار
@@ -195,6 +201,10 @@ class BotApp:
         # اقلام بحرانی: year/month/counts entry
         self._critical_pending: dict[str, dict[str, Any]] = {}
         self._bot_username: str | None = None
+        # گزارش تاندیش بعد از ریخته‌گری (entry + settings) — see bot/tundish_report_flow.py
+        from bot.tundish_report_flow import TundishReportFlow
+
+        self.tundish_report = TundishReportFlow(self)
         ensure_dirs()
 
     # ---------- helpers ----------
@@ -6103,6 +6113,8 @@ class BotApp:
             parts = text.split()
             cmd = parts[0].split("@")[0].lower()
             args = parts[1:]
+            # any slash command abandons an unfinished tundish-report draft
+            self.tundish_report.clear(self._uid(message))
             mapping = {
                 "/start": lambda: self.cmd_start(message, args),
                 "/help": lambda: self.cmd_help(message),
@@ -6122,6 +6134,10 @@ class BotApp:
                 handler()
             else:
                 self._reply(message, "دستور ناشناخته. /help را ببینید.")
+            return
+
+        # گزارش تاندیش بعد از ریخته‌گری — menu buttons + entry/settings flows
+        if self.tundish_report.handle_text(message, text):
             return
 
         # month/year range typed while awaiting (از YYYY/MM تا YYYY/MM)
@@ -6354,6 +6370,7 @@ class BotApp:
                 self._clear_warehouse_ret_pending(uid)
                 self._clear_report_assistant_pending(uid)
                 self._clear_critical_pending(uid)
+                self.tundish_report.clear(uid)
                 self._bot_settings_pending.pop(uid, None)
                 self._await_category_code.discard(uid)
                 self._main_source_pending.pop(uid, None)

@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}{{ title_fa }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>🧾 {{ title_fa }}</h1>
+  <p class="muted">همان منطق ربات بله (<code>services.tundish_report</code>). دسترسی: همه نقش‌ها.
+    {% if can_configure %} — <a href="/tundish-report/settings?section={{ section }}">⚙️ تنظیم اقلام</a>{% endif %}</p>
+  <nav class="tabs">
+    {% for key, label in sections %}
+    <a href="/tundish-report?section={{ key }}" class="{{ 'active' if key == section else '' }}">{{ label }}</a>
+    {% endfor %}
+  </nav>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if parsed_note %}<div class="alert ok">{{ parsed_note }}</div>{% endif %}
+  {% if errors %}<div class="alert err">{% for e in errors %}<div>{{ e }}</div>{% endfor %}</div>{% endif %}
+
+  <details {% if raw_text and not message %}open{% endif %}>
+    <summary>📋 ورود سریع از متن</summary>
+    <form method="post" action="/tundish-report/parse">
+      <input type="hidden" name="section" value="{{ section }}">
+      <textarea name="raw_text" rows="3" style="width:100%" placeholder="مثلاً: تاندیش 8 بیلت 1 بعلت محدودیت سکونس 12 ذوبه پایان یافت / مارک ذوب 4446 / ...">{{ raw_text }}</textarea>
+      <p><button type="submit">شناسایی و پر کردن فرم</button></p>
+    </form>
+  </details>
+
+  <form method="post" action="/tundish-report/submit">
+    <input type="hidden" name="section" value="{{ section }}">
+    <input type="hidden" name="raw_text" value="{{ raw_text }}">
+    <h2>{{ section_fa }} — فیلدهای ثابت</h2>
+    <table>
+      <tbody>
+      {% for f in fixed_fields %}
+        <tr>
+          <th style="width:35%"><label for="f_{{ f.key }}">{{ f.label }}</label></th>
+          <td>
+          {% if f.kind == 'line' %}
+            <select id="f_{{ f.key }}" name="{{ f.key }}" required>
+              <option value="">— انتخاب —</option>
+              {% for l in lines %}<option value="{{ l }}" {% if values.get(f.key) == l %}selected{% endif %}>{{ l }}</option>{% endfor %}
+            </select>
+          {% elif f.kind == 'int' %}
+            <input id="f_{{ f.key }}" name="{{ f.key }}" type="number" min="0" step="1" value="{{ values.get(f.key, '') }}" required>
+          {% else %}
+            <input id="f_{{ f.key }}" name="{{ f.key }}" list="grades" value="{{ values.get(f.key, '') }}" required>
+            <datalist id="grades">{% for g in recent_grades %}<option value="{{ g }}">{% endfor %}</datalist>
+          {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <h2>اقلام {{ section_fa }}</h2>
+    {% if not items %}<p class="muted">قلمی برای این بخش تعریف نشده است.</p>{% endif %}
+    <table>
+      <tbody>
+      {% for it in items %}
+        {% set key = 'item_' ~ it.id %}
+        {% set cur = values.get(key) %}
+        <tr>
+          <th style="width:35%">{{ it.label }} {% if not it.required %}<span class="muted">(اختیاری)</span>{% endif %}</th>
+          <td>
+          {% if it.item_type == 'choice' %}
+            <select name="{{ key }}">
+              <option value="">— انتخاب —</option>
+              {% for o in it.options %}<option value="{{ o }}" {% if cur == o %}selected{% endif %}>{{ o }}</option>{% endfor %}
+            </select>
+            <input name="{{ key }}_other" placeholder="سایر (متن کوتاه)" value="{{ cur if cur is not none and cur != '' and cur not in it.options else '' }}" style="max-width:12rem">
+          {% elif it.item_type == 'number' %}
+            <input name="{{ key }}" type="number" step="any" value="{{ cur if cur is not none else '' }}" {% if it.required %}required{% endif %}>
+          {% else %}
+            <input name="{{ key }}" value="{{ cur if cur is not none else '' }}" maxlength="300" {% if it.required %}required{% endif %}>
+          {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p style="margin-top:1rem"><button type="submit">✅ ثبت گزارش</button></p>
+  </form>
+</div>
+
+<div class="card">
+  <h2>گزارش‌های اخیر {{ section_fa }}</h2>
+  {% if not recent %}<p class="muted">هنوز گزارشی ثبت نشده است.</p>{% else %}
+  <table>
+    <thead><tr><th>#</th><th>زمان (تهران)</th><th>خط</th><th>تاندیش</th><th>سکوئنس</th><th>ذوب</th><th>مارک</th><th>اقلام</th><th>ثبت‌کننده</th><th>منبع</th></tr></thead>
+    <tbody>
+    {% for r in recent %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.created_at_tehran }}</td>
+        <td>{{ r.line }}</td>
+        <td>{{ r.tundish_no }}</td>
+        <td>{{ r.sequence }}</td>
+        <td>{{ r.melt_count }}</td>
+        <td>{{ r.steel_grade }}</td>
+        <td class="muted">{% for v in r['items'] %}{{ v.label }}: {{ v.value if v.value is not none else '—' }}{% if not loop.last %}؛ {% endif %}{% endfor %}</td>
+        <td>{{ r.actor_display_name or r.bale_user_id }}</td>
+        <td>{{ 'ربات' if r.source == 'bot' else ('وب' if r.source == 'web' else r.source) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}
