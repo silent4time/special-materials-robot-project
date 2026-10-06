@@ -14,12 +14,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
+import _smoke_isolation  # noqa: E402 - real uploads/ stays untouched
+
+_smoke_isolation.isolate_uploads()
 
 _ATT = Path("/home/box/agent-data/agents/8068822b-8774-4875-8e71-86ecdb5001a4/attachments")
 DEFAULT_FURNACE = [
     _ATT / "97a0ba5b628d1b077180d9b8010a49509a16145fe04be928fd5cf318f950a8ad.jpg",  # Tir 1405
     _ATT / "c7bcc51239d04d96bb4065ddd29c1d561ed5d5cf2c505359eb72a8ecf8a65421.jpg",  # Mordad 1405
     _ATT / "1b9ae892cd8ad2cb7ec065dcf9a12f20b4cae21faa5382a317863d7234628be4.jpg",  # Shahrivar 1405
+]
+# Real casting-tab («ریخته گری») phone photos of the monitor (1405-07-14): Tir, Mordad, stale-Mordad
+DEFAULT_CASTING_REAL = [
+    _ATT / "2764c911797a6fdf8864ce355cad11b4b22c6fd916eac88ecbe9143e5bdb1f98.jpg",
+    _ATT / "d406d891c1916c92d705c4118827c690d8571416bf7febbf3b7ed2ffcd218912.jpg",
+    _ATT / "e72eda7702fc8c526c92d39062598d9211bbc9ad29b63e0e022acc1e91d65aa3.jpg",
 ]
 CASTING_FIXTURE = ROOT / "samples" / "main_goal" / "shahrivar_1405_production_fixture.png"
 
@@ -64,6 +74,18 @@ CASTING_ROWS_RTL = """1405/04/01 1405/04/31
 80000 158 15800 100 CCM5
 """
 
+# Noisy OCR snippets from the real casting screenshots: subtotal rows «مجموع اسلب ها» /
+# «مجموع بلوم بیلت ها» + chart titles; header shows TODAY («سه شنبه ۱۴ مهر ۱۴۰۵»).
+CASTING_REAL_TEXTS = [
+    "برنامه ریزی و کنترل تولید فولادسازی - نمابش آماری اطلاعات تولید سه شنبه ۱۴ مهر ۱۳۰۵ &- ۵ 0\n"
+    "|| کوره پنیلی EER ۳ ی\nشماره CCM تعداد ذوب she x متوسط وزن محصول\n"
+    "مجموع اسلب ها FAR Ale VER ۷۰۸۵ ۰ ۱\nمجموع بلوم بیلت ها ۳۳۳ ۳ ۵۵ ۱۸۶ ۱۲ ۵ و ۹۷\n"
+    "وزن محصول به تفکیک ريخته گری (سالیانه) 133,736,625",
+    "6 2 ۵ ۸۵ ۲ & ده هن ۱۴ مهرا۱۳۰۵ | gs lol بنمهریزی و کنترل تولید فولاازی\n[ caves |] کوره ||\n"
+    "در 44 من را ۴ Fey مجموع اسلب ها || ۳\n| وزن محصول به تفکیک ريخته گری (سالیانه) EMH وزن محصول به تقکیک ريخته گری (ماهیانه)\n"
+    "203.234,623 ۱۳ 3 28,523,195",
+]
+
 UNKNOWN_TEXT = "گزارش روزانه انبار\n1405/06/10\nموجودی 1200 کیلوگرم\nکوره پاتیلی | ریخته گری"
 
 
@@ -95,6 +117,14 @@ def test_text() -> None:
     expect_sections(r, 99300, 18500, 33600)
     assert r.period_key == "m:1405-04" and r.ccm_melts.get(3) == 105, (r.period_key, r.ccm_melts)
 
+    for t in CASTING_REAL_TEXTS:
+        tab, ev = o.detect_report_tab(t)
+        assert tab == "casting" and not ev["furnace"], ev
+        r = o.parse_production_ocr_text(t)
+        assert r.report_tab == "casting" and not r.tab_rejected and not r.ok, (r.report_tab, r.tab_evidence)
+        assert r.period_key is None, f"header date (today, مهر) must not become the period: {r.period_key}"
+    assert o._detect_month("سه شنبه ۱۴ مهر ۱۴۰۵\nگزارش مهر ۱۴۰۵")[:2] == (1405, 7)
+
     # manual values never become «furnace»
     m = o.apply_manual_corrections(None, year=1405, month=6, slab_tons=1, bloom_tons=1, billet_tons=1)
     assert m.ok and m.report_tab == "manual"
@@ -124,6 +154,19 @@ def test_images(tmp: Path) -> None:
         assert not out2.ok and out2.tab_rejected
         print(f"  furnace image REJECTED: {p.name[:12]}… ({r.period_label or 'ماه؟'}) evidence={r.tab_evidence.get('furnace')}")
     assert db.list_main_goal_production() == [], "rejected images must not be stored"
+
+    for p in DEFAULT_CASTING_REAL:
+        if not p.is_file():
+            print(f"  ⚠ real casting image missing (skipped): {p.name[:12]}…")
+            continue
+        r = o.ocr_production_image(p)
+        assert r.report_tab == "casting" and not r.tab_rejected, (p.name, r.tab_evidence)
+        out = mgp.store_production_from_ocr(db, p, user=user, source="smoke", ocr_result=r)
+        if not out.ok:  # digits unreadable on moiré monitor photos → manual-correction path, nothing stored
+            assert not out.tab_rejected and out.needs_confirm, out
+        print(f"  real casting photo accepted as casting tab: {p.name[:12]}… ok={out.ok}")
+    with db.connect() as c:
+        c.execute("DELETE FROM main_goal_production")
 
     r = o.ocr_production_image(CASTING_FIXTURE)
     expect_sections(r, 99300, 18500, 33600)

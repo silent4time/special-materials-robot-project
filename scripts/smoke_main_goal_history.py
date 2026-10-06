@@ -9,6 +9,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
+import _smoke_isolation  # noqa: E402 - real uploads/ stays untouched
+
+_smoke_isolation.isolate_uploads()
 
 MONTHS = [("تیر", 4, 1.00), ("مرداد", 5, 1.10), ("شهریور", 6, 1.20)]
 

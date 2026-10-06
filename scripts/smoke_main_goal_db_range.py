@@ -8,6 +8,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
+import _smoke_isolation  # noqa: E402 - real uploads/ stays untouched
+
+_smoke_isolation.isolate_uploads()
 
 from openpyxl import Workbook
 
@@ -90,6 +94,32 @@ def main() -> int:
         assert parsed.ok and parsed.section == "slab" and parsed.tundish_count == 5, parsed
         out = mgp.store_sequences_from_excel(db, sp, user=user, source="smoke", section="slab")
         assert out.ok, out.error_fa
+
+        # multi-month × multi-section log → split by start month × machine section;
+        # earliest-month straddle (starts 03/31, ends 04/01) folds into Tir.
+        mp = Path(tmp) / "mixed_seq.xlsx"
+        wb = Workbook(); ws = wb.active
+        ws.append(["ماشین", "تاندیش", "تاندیشکار", "تعداد ذوب", "مدت سکوئنس", "ISG",
+                   "ذوب اول سکوئنس", None, "ذوب آخر سکوئنس", None, "تعویض شرود", "تعویض نازل بیرونی"])
+        ws.append([None, None, None, None, None, None, "شماره ذوب", "شروع ریخته گری", "شماره ذوب", "پایان ریخته گری", None, None])
+        mixed = [("اسلب 1", "1405/06/20 01:00", "1405/06/20 09:00", 6),
+                 ("بیلت 2", "1405/06/21 01:00", "1405/06/21 09:00", 9),
+                 ("اسلب 2", "1405/05/03 01:00", "1405/05/03 09:00", 7),
+                 ("بلوم", "1405/04/09 01:00", "1405/04/09 05:00", 4),
+                 ("اسلب 1", "1405/04/02 01:00", "1405/04/02 07:00", 5),
+                 ("اسلب 1", "1405/03/31 18:18", "1405/04/01 04:49", 3)]
+        for i, (mach, st, en, melts) in enumerate(mixed):
+            ws.append([mach, 20 + i, 1, melts, 120, "1", 60000000 + i, st, 60000100 + i, en, "دارد", "ندارد"])
+        wb.save(mp)
+        out = mgp.store_sequences_from_excel(db, mp, user=user, source="smoke", section="slab")
+        assert out.ok, out.error_fa
+        got = {(c["period_key"], c["section"]): c["tundish_count"] for c in db.list_main_goal_consumption()}
+        assert got.get(("m:1405-06", "slab")) == 1 and got.get(("m:1405-06", "billet")) == 1, got
+        assert got.get(("m:1405-05", "slab")) == 1 and got.get(("m:1405-04", "bloom")) == 1, got
+        assert got.get(("m:1405-04", "slab")) == 2, got  # 04/02 + folded 03/31 straddle
+        assert not any(pk == "m:1405-03" for pk, _ in got), got
+        assert "لبه فایل" in out.summary and "چند بخشی" in out.summary, out.summary
+        print("mixed sequence log split OK:", sorted(got.items()))
 
         # range report last 3
         spec = mgp.range_last_n(3)

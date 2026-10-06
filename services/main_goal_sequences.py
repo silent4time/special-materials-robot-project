@@ -277,3 +277,64 @@ def parse_sequence_excel(path: Path | str) -> SequenceParseResult:
         rows=rows,
         notes=[f"{len(rows)} سکوئنس، جمع ذوب {sum(r.melt_count or 0 for r in rows):g}"],
     )
+
+
+# ---------------------------------------------------------------- split by month × section
+def _ym(raw: str) -> tuple[int, int] | None:
+    m = re.search(r"(14\d{2})\s*[/\-]\s*(0?[1-9]|1[0-2])(?!\d)", _norm(raw))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def row_period(r: SequenceRow) -> tuple[int, int] | None:
+    """Month a sequence belongs to = month of its FIRST cast start (fallback: last cast end)."""
+    return _ym(r.first_cast_start) or _ym(r.last_cast_end)
+
+
+def _next_month(y: int, m: int) -> tuple[int, int]:
+    return (y + 1, 1) if m == 12 else (y, m + 1)
+
+
+def split_rows_by_period_section(
+    parsed: SequenceParseResult, section: str | None = None
+) -> tuple[dict[tuple[int, int, str], list[SequenceRow]], list[str]]:
+    """Group sequence rows → {(year, month, section): rows}.
+
+    * month: start month of each sequence (``row_period``); undated rows use the file month.
+    * section: each row's own machine (اسلب ۱/۲ → slab, بلوم → bloom, بیلت ۱/۲ → billet). A
+      caller-chosen ``section`` only overrides when the file holds a single section.
+    * export-edge straddle: in the EARLIEST month of the file, a section whose rows all
+      started there but ended in the next month (e.g. one slab sequence 03/31 18:18 → 04/01)
+      is folded into the next month instead of creating a one-row month.
+    """
+    notes: list[str] = []
+    secs = {r.section for r in parsed.rows if r.section}
+    override = section if (section and len(secs) <= 1) else None
+    if section and len(secs) > 1:
+        notes.append(
+            "فایل چند بخشی است؛ هر ردیف بر اساس ماشین خودش (اسلب/بلوم/بیلت) ذخیره شد "
+            f"(بخش انتخابی «{mg.SECTION_LABEL_FA.get(section, section)}» فقط برای فایل تک‌بخشی اعمال می‌شود)."
+        )
+    fallback = (parsed.year, parsed.month) if parsed.year and parsed.month else None
+    groups: dict[tuple[int, int, str], list[SequenceRow]] = {}
+    for r in parsed.rows:
+        ym = row_period(r) or fallback
+        sec = override or r.section
+        if not ym or not sec:
+            continue
+        groups.setdefault((ym[0], ym[1], sec), []).append(r)
+    if len({(y, m) for y, m, _ in groups}) > 1:
+        first = min((y, m) for y, m, _ in groups)
+        nxt = _next_month(*first)
+        for key in [k for k in groups if (k[0], k[1]) == first]:
+            rows = groups[key]
+            if rows and all(_ym(r.last_cast_end) == nxt for r in rows):
+                groups.pop(key)
+                groups.setdefault((nxt[0], nxt[1], key[2]), []).extend(rows)
+                notes.append(
+                    f"{len(rows)} سکوئنس {mg.SECTION_LABEL_FA.get(key[2], key[2])} که در "
+                    f"{format_month_year(first[0], first[1], named=True)} شروع و در "
+                    f"{format_month_year(nxt[0], nxt[1], named=True)} تمام شده (لبه فایل) "
+                    f"به {format_month_year(nxt[0], nxt[1], named=True)} منظور شد."
+                )
+    return dict(sorted(groups.items())), notes
+

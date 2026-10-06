@@ -8,6 +8,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
+import _smoke_isolation  # noqa: E402 - real uploads/ stays untouched
+
+_smoke_isolation.isolate_uploads()
 
 
 def _write_samples(tmp: Path) -> dict[str, Path]:

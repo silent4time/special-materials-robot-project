@@ -897,17 +897,75 @@ def store_sequences_from_excel(
     filename: str | None = None,
     section: str | None = None,
 ) -> InputStoreOutcome:
-    """Parse post-cast sequence log → sequence rows + consumption aggregate for section."""
+    """Parse post-cast sequence log → sequence rows + consumption aggregate.
+
+    Rows are split by (start month × machine section) — a multi-month / multi-section log
+    stores each (month, section) separately (replacing that pair only). ``section`` applies
+    only to single-section files (see ``split_rows_by_period_section``).
+    """
     from services import main_goal_sequences as seq
 
     path = Path(path)
     parsed = seq.parse_sequence_excel(path)
     if not parsed.ok:
         return InputStoreOutcome(ok=False, error_fa=parsed.error_fa or "خواندن سکوئنس ناموفق")
-    sec = section or parsed.section
-    if not sec:
+    if not (section or parsed.section):
         return InputStoreOutcome(ok=False, error_fa="بخش (اسلب/بلوم/بیلت) از فایل تشخیص داده نشد")
-    dest_dir = UPLOAD_DIR / HISTORY_DIR_NAME / _safe_dir(parsed.period_key or "seq")
+    groups, split_notes = seq.split_rows_by_period_section(parsed, section)
+    if not groups:
+        return InputStoreOutcome(ok=False, error_fa="هیچ ردیف سکوئنس با ماه/بخش معتبر یافت نشد")
+
+    lines: list[str] = []
+    touched: list[str] = []
+    for (year, month, sec), rows in groups.items():
+        period_key = f"m:{year:04d}-{month:02d}"
+        label = format_month_year(year, month, named=True)
+        n, agg = _store_sequence_group(
+            db, path, period_key=period_key, period_label=label, year=year, month=month,
+            section=sec, rows=rows, user=user, source=source, filename=filename,
+            notes=split_notes,
+        )
+        if period_key not in touched:
+            touched.append(period_key)
+        lines.append(
+            f"• {mg.SECTION_LABEL_FA[sec]} «{label}»: سکوئنس/تاندیش {n} | جمع ذوب {agg.get('melt_count') or 0:g} | "
+            f"تعویض شرود {agg.get('shroud_replacements') or 0:g} | نازل بیرونی {agg.get('nozzle_replacements') or 0:g}"
+        )
+    for pk in touched:
+        sync_month_aggregate(db, pk, user=user, source=source)
+    last_key = touched[-1]
+    last_label = next(format_month_year(y, m, named=True) for (y, m, _s) in reversed(list(groups)))
+    head = (
+        "✅ سکوئنس‌های تاندیش ذخیره شد"
+        + (f" ({len(groups)} ماه×بخش):" if len(groups) > 1 else ":")
+    )
+    summary = "\n".join([head, *lines, *(f"ℹ {t}" for t in split_notes)])
+    return InputStoreOutcome(
+        ok=True,
+        period_key=last_key,
+        period_label=last_label,
+        summary=summary,
+        missing_parts=_missing_parts(db, last_key),
+    )
+
+
+def _store_sequence_group(
+    db: Any,
+    path: Path,
+    *,
+    period_key: str,
+    period_label: str,
+    year: int,
+    month: int,
+    section: str,
+    rows: list,
+    user: dict,
+    source: str,
+    filename: str | None,
+    notes: list[str],
+) -> tuple[int, dict]:
+    sec = section
+    dest_dir = UPLOAD_DIR / HISTORY_DIR_NAME / _safe_dir(period_key)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{sec}_sequences.xlsx"
     try:
@@ -918,9 +976,9 @@ def store_sequences_from_excel(
 
     now = tehran_now()
     meta = {
-        "period_label": parsed.period_label,
-        "year": parsed.year,
-        "month": parsed.month,
+        "period_label": period_label,
+        "year": year,
+        "month": month,
         "source_path": str(dest),
         "source_filename": filename or path.name,
         "source": source,
@@ -928,7 +986,7 @@ def store_sequences_from_excel(
         "actor_display_name": user.get("display_name"),
         "jalali_date": format_date(now),
     }
-    rows = [
+    row_dicts = [
         {
             "machine": r.machine,
             "tundish_no": r.tundish_no,
@@ -944,12 +1002,12 @@ def store_sequences_from_excel(
             "outer_nozzle_replaced": r.outer_nozzle_replaced,
             "tube_changer": r.tube_changer,
         }
-        for r in parsed.rows
+        for r in rows
     ]
     n = db.replace_main_goal_sequences(
-        period_key=parsed.period_key, section=sec, rows=rows, meta=meta
+        period_key=period_key, section=sec, rows=row_dicts, meta=meta
     )
-    agg = db.aggregate_sequences(parsed.period_key, sec)
+    agg = db.aggregate_sequences(period_key, sec)
     # Also upsert consumption aggregate (tundish_count = sequence rows)
     materials = [
         {
@@ -965,12 +1023,13 @@ def store_sequences_from_excel(
             "sort_order": 1,
         },
     ]
+    melt_sum = sum(float(r.melt_count or 0) for r in rows)
     db.upsert_main_goal_consumption(
-        period_key=parsed.period_key,
-        period_label=parsed.period_label,
-        year=parsed.year,
-        month=parsed.month,
-        sort_key=period_sort_key(parsed.year, parsed.month, parsed.period_key),
+        period_key=period_key,
+        period_label=period_label,
+        year=year,
+        month=month,
+        sort_key=period_sort_key(year, month, period_key),
         section=sec,
         tundish_count=float(agg.get("tundish_count") or n),
         melt_count=float(agg.get("melt_count") or 0),
@@ -979,7 +1038,7 @@ def store_sequences_from_excel(
         source_path=str(dest),
         source_filename=filename or path.name,
         notes_json=json.dumps(
-            parsed.notes + [f"از لاگ سکوئنس ({n} ردیف)"],
+            [f"{n} سکوئنس، جمع ذوب {melt_sum:g}", *notes, f"از لاگ سکوئنس ({n} ردیف)"],
             ensure_ascii=False,
         ),
         missing_json=json.dumps([], ensure_ascii=False),
@@ -990,16 +1049,4 @@ def store_sequences_from_excel(
         jalali_date=format_date(now),
         materials=materials,
     )
-    sync_month_aggregate(db, parsed.period_key, user=user, source=source)
-    return InputStoreOutcome(
-        ok=True,
-        period_key=parsed.period_key,
-        period_label=parsed.period_label,
-        summary=(
-            f"✅ سکوئنس‌های تاندیش {mg.SECTION_LABEL_FA[sec]} «{parsed.period_label}» ذخیره شد.\n"
-            f"تعداد سکوئنس/تاندیش: {n} | جمع ذوب: {agg.get('melt_count') or 0:g}\n"
-            f"تعویض شرود: {agg.get('shroud_replacements') or 0:g} | "
-            f"نازل بیرونی: {agg.get('nozzle_replacements') or 0:g}"
-        ),
-        missing_parts=_missing_parts(db, parsed.period_key),
-    )
+    return n, agg

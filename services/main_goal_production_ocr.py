@@ -211,6 +211,8 @@ def _detect_month(text: str) -> tuple[int | None, int | None, str]:
         # prefer the first start date
         y, mo = ranges[0]
         return int(y), int(mo), "ym-slash"
+    # The page header shows TODAY («سه شنبه ۱۴ مهر ۱۴۰۵») — never the report period.
+    n = re.sub(r"(?:(?:یک|دو|سه|چهار|پنج)\s*)?(?:شنبه|جمعه)\s*\d{1,2}\s*\S+\s*\d{4}", " ", n)
     tok = parse_month_year_token(n)
     if tok:
         return tok[0], tok[1], "month-name"
@@ -225,10 +227,10 @@ def _detect_month(text: str) -> tuple[int | None, int | None, str]:
         if mm:
             return int(mm.group(1)), num, f"latin:{name}"
     for name, num in PERSIAN_MONTH_NAME_TO_NUM.items():
-        if name in n:
-            ym = re.search(r"(14\d{2})", n)
-            if ym:
-                return int(ym.group(1)), num, f"fa:{name}"
+        # «مهر ۱۴۰۵» as a period label; «۱۴ مهر ۱۴۰۵» (day before the name) is today's header date
+        mm = re.search(rf"(?<!\d)(?<!\d\s){name}\s*(14\d{{2}})(?!\d)", n)
+        if mm:
+            return int(mm.group(1)), num, f"fa:{name}"
     return None, None, "not-found"
 
 
@@ -388,7 +390,16 @@ _FURNACE_STRONG = {
     "by_furnaces_chart": r"تف\S{0,3}ی?\S{0,2}\s*کوره\s*ها|کوره\s*ها\s*\(",
     "count_to_slab": r"(?:تعداد\s*)?(?<!\S)به\s*اسلب",
     # combined «بلوم بیلت» (furnace destination) — not «بلوم» + «بیلت ۱/۲» machines
-    "count_to_bloom_billet": r"بلوم\s*/?\s*ب[^\s\d]{0,2}لت(?!\s*[-_]?\s*[12](?!\d))",
+    # NOT the casting subtotal row «مجموع بلوم بیلت ها» (real casting screenshot, 1405-07)
+    "count_to_bloom_billet": r"(?<!مجموع )(?<!مجموع)بلوم\s*/?\s*ب[^\s\d]{0,2}لت(?!\s*[-_]?\s*[12](?!\d))(?!\s*ها)",
+}
+# Strong casting-tab markers seen on real «ریخته گری» screenshots (otsteel productionstatistics):
+# chart titles «وزن محصول به تفکیک ریخته گری (ماهیانه/سالیانه)», subtotal rows and the CCM header.
+_CASTING_STRONG = {
+    "by_casting_chart": r"تف\S{0,3}ی?\S{0,2}\s*ری?خ\S{0,2}ه\s*گری",
+    "slab_subtotal": r"مجموع\s*اسلب",
+    "bloom_billet_subtotal": r"مجموع\s*بلوم",
+    "ccm_no_header": r"شماره\s*ccm|ccm\s*شماره",
 }
 _FURNACE_WEAK = {
     "melt_weight": r"وزن\s*م[ذد]اب",
@@ -456,6 +467,7 @@ def detect_report_tab(text: str) -> tuple[str, dict[str, Any]]:
     for key, pat in _CASTING_WEAK.items():
         if re.search(pat, n, flags=re.I):
             ev["casting_weak"].append(key)
+    ev["casting_strong"] = [k for k, pat in _CASTING_STRONG.items() if re.search(pat, n, flags=re.I)]
     ccms: set[int] = set()
     for line in n.splitlines():
         for _pos, no in _ccm_tokens(line):
@@ -463,9 +475,12 @@ def detect_report_tab(text: str) -> tuple[str, dict[str, Any]]:
     ev["ccms"] = sorted(ccms)
     f_strong = len(ev["furnace"])
     f_score = f_strong + (0.5 if ev["furnace_weak"] else 0)
-    c_score = (len(ccms) if len(ccms) >= 2 else 0) + 0.5 * len(ev["casting_weak"])
+    c_score = (len(ccms) if len(ccms) >= 2 else 0) + 0.5 * len(ev["casting_weak"]) + len(ev["casting_strong"])
     ev["furnace_score"], ev["casting_score"] = f_score, c_score
-    if f_strong >= 2 and len(ccms) < 3:
+    c_strong = len(ev["casting_strong"])
+    if c_strong >= 1 and f_strong == 0:
+        tab = "casting"
+    elif f_strong >= 2 and len(ccms) < 3:
         tab = "furnace"
     elif len(ccms) >= 3 and f_strong == 0:
         tab = "casting"
