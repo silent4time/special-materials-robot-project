@@ -65,9 +65,11 @@
   <form method="get" class="report-actions" style="margin-top:1rem">
     <input type="hidden" name="jalali_year" value="{{ critical_year }}">
     <input type="hidden" name="jalali_month" value="{{ critical_month }}">
-    <button class="btn" formaction="/reports/critical-items">دانلود گزارش (PDF)</button>
-    <button class="btn" formaction="/reports/critical-items.xlsx">دانلود گزارش (اکسل)</button>
+    <button class="btn" formaction="/reports/critical-items" name="segment" value="company">گزارش اصلی — اقلام شرکت (PDF)</button>
+    <button class="btn" formaction="/reports/critical-items" name="segment" value="contractor">گزارش جداگانه — اقلام پیمانکار (PDF)</button>
+    <button class="btn" formaction="/reports/critical-items.xlsx">اکسل (شیت شرکت + شیت پیمانکار)</button>
   </form>
+  <p class="muted">تفکیک بر اساس ستون «پیمانکار / شرکت» منبع اصلی؛ گزارش اصلی فقط اقلام شرکت است و اقلام پیمانکار جدا می‌آید.</p>
   {% if recent_counts %}
   <p class="muted" style="margin-top:1rem">ثبت‌های اخیر:</p>
   <ul class="muted">

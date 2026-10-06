@@ -15,6 +15,7 @@ from analytics.frames import (
     PRIMARY_INVENTORY_TYPE,
     completeness_status_lines,
     data_completeness,
+    inventory_with_ledger,
     load_primary_inventory,
     resolve_primary_inventory_path,
     resolve_remaining as shared_resolve_remaining,
@@ -29,7 +30,6 @@ from analytics.tundish import (
     parse_custom_range_message,
     period_consumption,
     range_day_count,
-    apply_inventory_ledger,
     remaining,
     resolve_preset_range,
     suggest_requests,
@@ -512,11 +512,11 @@ class BotApp:
         self._critical_pending.pop(str(uid), None)
 
     def _inventory_with_ledger(self, frame: pd.DataFrame | None) -> pd.DataFrame | None:
-        """Apply inventory_ledger deltas onto a warehouse inventory frame."""
-        if frame is None:
-            return None
-        sums = self.db.inventory_ledger_sums()
-        return apply_inventory_ledger(frame, sums.get("by_id"), sums.get("by_name"))
+        """Apply inventory_ledger deltas onto a RAW warehouse frame (shared helper).
+
+        Never call on ``load_primary_inventory`` output — it is already ledgered.
+        """
+        return inventory_with_ledger(self.db, frame)
 
     def _apply_tundish_filter(self, frames: dict, uid: str) -> dict:
         selected = self._analysis_tundish_filter.get(uid)
@@ -2267,7 +2267,8 @@ class BotApp:
             message,
             "🚨 اقلام بحرانی\n"
             "۱) تعداد تاندیش بیلت/بلوم/اسلب ماه را ثبت کنید\n"
-            "۲) گزارش PDF و اکسل را بگیرید\n"
+            "۲) گزارش را بگیرید: PDF اصلی (فقط اقلام شرکت)، PDF جداگانه "
+            "اقلام پیمانکار و اکسل با دو شیت جدا\n"
             "نقش‌های مجاز: مالک، مدیر، کاردان مسئول."
             f"{extra}",
             kb.critical_items_menu(),
@@ -2490,94 +2491,94 @@ class BotApp:
     def _run_critical_items_report(
         self, message: dict, user: dict, year: int, month: int
     ) -> None:
-        from analytics.critical_items import (
-            TundishMonthCounts,
-            build_critical_items_rows,
-            report_footer_notes,
-            report_subtitle,
-            report_title,
-            rows_for_simple_report,
-        )
+        """Send company report, then contractor report, then the 2-sheet xlsx.
+
+        All building is in the shared ``services.critical_items_report`` (same
+        code path as the web panel; ledger applied once by load_primary_inventory).
+        """
         from bot.jalali import format_month_year
+        from services.critical_items_report import (
+            SEGMENT_COMPANY,
+            SEGMENT_CONTRACTOR,
+            generate_critical_items_files,
+        )
 
         uid = str(user["bale_user_id"])
         self._clear_critical_pending(uid)
-        stored = self.db.get_monthly_tundish_counts(year, month)
-        if not stored:
-            label = format_month_year(year, month, named=True)
+        menu = kb.critical_items_menu()
+        label = format_month_year(year, month, named=True)
+        if not self.db.get_monthly_tundish_counts(year, month):
             self._reply(
                 message,
                 f"برای {label} تعداد تاندیش ثبت نشده است.\n"
                 "ابتدا «ثبت تعداد تاندیش ماهانه» را انجام دهید.",
-                kb.critical_items_menu(),
+                menu,
             )
             return
-        counts = TundishMonthCounts(
-            jalali_year=year,
-            jalali_month=month,
-            count_billet=int(stored["count_billet"]),
-            count_bloom=int(stored["count_bloom"]),
-            count_slab=int(stored["count_slab"]),
+        try:
+            res = generate_critical_items_files(
+                self.db,
+                user,
+                jalali_year=year,
+                jalali_month=month,
+                output_dir=REPORT_DIR / "critical_items" / uid,
+                file_prefix="لیست_اقلام_بحرانی",
+                letterhead_path=self._letterhead_path(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("critical items report failed")
+            self._reply(message, f"خطا در تولید گزارش اقلام بحرانی: {exc}", menu)
+            return
+        if res.error:
+            text = res.error
+            if text.startswith("منبع اصلی"):
+                text = "منبع اصلی یافت نشد. ابتدا فایل منبع اصلی را آپلود کنید."
+            elif text.startswith("قلمی"):
+                text = (
+                    "قلمی با نرخ نوسازی/پچینگ/سطح ریخته‌گری و نیاز مثبت "
+                    "برای این تعداد تاندیش یافت نشد."
+                )
+            self._reply(message, text, menu)
+            return
+
+        chat_id = self._chat_id(message)
+        n_company = res.row_count(SEGMENT_COMPANY)
+        n_contractor = res.row_count(SEGMENT_CONTRACTOR)
+        sent: list[str] = []
+        try:
+            for seg, tag in ((SEGMENT_COMPANY, "۱) گزارش اصلی — اقلام شرکت"),
+                             (SEGMENT_CONTRACTOR, "۲) گزارش جداگانه — اقلام پیمانکار")):
+                path = res.pdfs.get(seg)
+                if path is None:
+                    continue
+                self.client.send_document(
+                    chat_id, path, caption=f"{tag}\n{res.titles.get(seg, '')}"
+                )
+                sent.append(seg)
+            if res.xlsx is not None:
+                self.client.send_document(
+                    chat_id,
+                    res.xlsx,
+                    caption="نسخه اکسل اقلام بحرانی — شیت «شرکت» و شیت «پیمانکار» جدا",
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("critical items send failed")
+            self._reply(message, f"خطا در ارسال گزارش اقلام بحرانی: {exc}", menu)
+            return
+        lines = [f"گزارش اقلام بحرانی {label} ارسال شد."]
+        lines.append(
+            f"• شرکت (گزارش اصلی): {n_company} قلم"
+            + ("" if n_company else " — قلمی با نیاز مثبت نبود")
         )
-        inv = load_primary_inventory(self.db, user)
-        inv = self._inventory_with_ledger(inv)
-        if inv is None or inv.empty:
-            self._reply(
-                message,
-                "منبع اصلی یافت نشد. ابتدا فایل منبع اصلی را آپلود کنید.",
-                kb.critical_items_menu(),
-            )
-            return
-        df = build_critical_items_rows(inv, counts)
-        if df is None or df.empty:
-            self._reply(
-                message,
-                "قلمی با نرخ نوسازی/پچینگ/سطح ریخته‌گری و نیاز مثبت "
-                "برای این تعداد تاندیش یافت نشد.",
-                kb.critical_items_menu(),
-            )
-            return
-        title = report_title(counts)
-        subtitle = report_subtitle(counts, row_count=len(df))
-        notes = report_footer_notes(counts)
-        rows = rows_for_simple_report(df)
-        sections = [
-            {
-                "title": None,
-                "columns": [
-                    "کد چهاررقمی",
-                    "ردیف",
-                    "کد و شرح کالا",
-                    "موجودی",
-                    "واحد",
-                    "نیاز",
-                    "حد تحمل(روز)",
-                ],
-                "rows": rows,
-                "empty_message": "داده‌ای نیست.",
-                "header_bg": "#b71c1c",
-            },
-            {
-                "title": "توضیحات",
-                "columns": ["توضیح"],
-                "rows": [{"توضیح": n} for n in notes],
-                "empty_message": "",
-                "header_bg": "#546e7a",
-            },
-        ]
-        self._send_simple_pdf_report(
-            message,
-            title=title,
-            subtitle=subtitle,
-            sections=sections,
-            filename_stem="critical_items",
-            output_name="لیست_اقلام_بحرانی.pdf",
-            caption=title,
-            reply_ok=f"گزارش اقلام بحرانی ({len(rows)} قلم) ارسال شد.",
-            reply_markup=kb.critical_items_menu(),
-            log_user=user,
-            log_action="report_critical_items",
+        lines.append(
+            f"• پیمانکار (گزارش جداگانه): {n_contractor} قلم"
+            + ("" if n_contractor else " — قلمی با نیاز مثبت نبود")
         )
+        self._reply(message, "\n".join(lines), menu)
+        if SEGMENT_COMPANY in sent:
+            log_activity(self.db, user, "report_critical_items")
+        if SEGMENT_CONTRACTOR in sent:
+            log_activity(self.db, user, "report_critical_items_contractor")
 
     def on_remaining_critical(self, message: dict) -> None:
         user = self._user_or_deny(message)

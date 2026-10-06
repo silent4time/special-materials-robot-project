@@ -7,6 +7,13 @@ ASSUMPTION (renovation vs patching): when the monthly split between نوسازی
 (e.g. billet_renovation + billet_patching). When daily tundish logs exist,
 replace the sum with separate renovation/patching counts × rates.
 
+SPLIT (پیمانکار / شرکت): rows of منبع اصلی are split by the
+``contractor_or_company`` column («پیمانکار / شرکت» in sheet «ریز اطلاعات»)
+BEFORE category aggregation. The primary report lists ONLY «شرکت» rows; «پیمانکار»
+rows form a separate report/section. Blank or unrecognized values fall back to
+the material-id rule (``excel.id_parse.is_contractor_material_id``: 2nd group of
+four chars == «0000» → پیمانکار); still unknown → شرکت.
+
 ASSUMPTION (casting_floor): the سطح ریخته گری rate is treated as per-tundish
 material multiplied by (count_billet + count_bloom + count_slab). Refine when
 daily casting-floor logs exist.
@@ -26,6 +33,13 @@ from analytics.tundish import (
     critical_point_category_totals,
 )
 from bot.jalali import PERSIAN_MONTH_NAMES, days_in_jalali_month
+from excel.id_parse import is_contractor_material_id
+
+SEGMENT_COMPANY = "company"
+SEGMENT_CONTRACTOR = "contractor"
+SEGMENTS = (SEGMENT_COMPANY, SEGMENT_CONTRACTOR)
+SEGMENT_LABEL_FA = {SEGMENT_COMPANY: "شرکت", SEGMENT_CONTRACTOR: "پیمانکار"}
+CONTRACTOR_COLUMN = "contractor_or_company"
 
 RATE_COLS = (
     "billet_renovation",
@@ -63,6 +77,91 @@ class TundishMonthCounts:
     def month_label(self) -> str:
         name = PERSIAN_MONTH_NAMES.get(int(self.jalali_month), str(self.jalali_month))
         return f"{name} {int(self.jalali_year)}"
+
+
+def _norm_fa(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    if text.strip().lower() in {"", "nan", "none"}:
+        return ""
+    text = (
+        text.replace("ي", "ی")
+        .replace("ى", "ی")
+        .replace("ك", "ک")
+        .replace("\u200c", "")
+        .replace("\u200f", "")
+        .replace("\u200e", "")
+    )
+    return "".join(text.split()).lower()
+
+
+_CONTRACTOR_TOKENS = ("پیمانکار", "contractor")
+_COMPANY_TOKENS = ("شرکت", "company")
+
+
+def classify_contractor_or_company(value: object, item_id: object = None) -> str:
+    """Map a «پیمانکار / شرکت» cell (+ id fallback) to SEGMENT_COMPANY/CONTRACTOR."""
+    text = _norm_fa(value)
+    if text:
+        if any(tok in text for tok in _CONTRACTOR_TOKENS):
+            return SEGMENT_CONTRACTOR
+        if any(tok in text for tok in _COMPANY_TOKENS):
+            return SEGMENT_COMPANY
+    flag = is_contractor_material_id(item_id)
+    if flag is True:
+        return SEGMENT_CONTRACTOR
+    return SEGMENT_COMPANY
+
+
+def segment_series(inventory_df: pd.DataFrame) -> pd.Series:
+    """Per-row segment (company / contractor) for an inventory frame."""
+    if inventory_df is None or inventory_df.empty:
+        return pd.Series(dtype=object)
+    vals = (
+        inventory_df[CONTRACTOR_COLUMN]
+        if CONTRACTOR_COLUMN in inventory_df.columns
+        else pd.Series([None] * len(inventory_df), index=inventory_df.index)
+    )
+    ids = (
+        inventory_df["id"]
+        if "id" in inventory_df.columns
+        else pd.Series([None] * len(inventory_df), index=inventory_df.index)
+    )
+    return pd.Series(
+        [classify_contractor_or_company(v, i) for v, i in zip(vals, ids)],
+        index=inventory_df.index,
+        dtype=object,
+    )
+
+
+def filter_inventory_segment(
+    inventory_df: pd.DataFrame | None, segment: str | None
+) -> pd.DataFrame | None:
+    """Rows of one segment; ``segment=None`` returns the frame unchanged."""
+    if inventory_df is None or segment is None or inventory_df.empty:
+        return inventory_df
+    if segment not in SEGMENTS:
+        raise ValueError(f"unknown segment: {segment}")
+    seg = segment_series(inventory_df)
+    return inventory_df.loc[seg == segment].copy()
+
+
+def contractor_column_summary(inventory_df: pd.DataFrame | None) -> list[dict[str, Any]]:
+    """Distinct raw values of «پیمانکار / شرکت» with row counts and mapped segment."""
+    if inventory_df is None or inventory_df.empty:
+        return []
+    raw = (
+        inventory_df[CONTRACTOR_COLUMN]
+        if CONTRACTOR_COLUMN in inventory_df.columns
+        else pd.Series([""] * len(inventory_df), index=inventory_df.index)
+    )
+    seg = segment_series(inventory_df)
+    work = pd.DataFrame({"value": raw.map(lambda v: "" if _norm_fa(v) == "" else str(v).strip()), "segment": seg})
+    out = []
+    for (value, segment), grp in work.groupby(["value", "segment"], sort=True):
+        out.append({"value": value, "segment": segment, "rows": int(len(grp))})
+    return out
 
 
 def _num_series(work: pd.DataFrame, col: str) -> pd.Series:
@@ -156,8 +255,13 @@ def build_critical_items_rows(
     counts: TundishMonthCounts,
     *,
     days_in_month: int | None = None,
+    segment: str | None = None,
 ) -> pd.DataFrame:
     """One row per category_code with any renovation/patching/casting_floor > 0.
+
+    ``segment`` = SEGMENT_COMPANY / SEGMENT_CONTRACTOR restricts the input rows
+    (stock, rates, critical-point totals) to that «پیمانکار / شرکت» side before
+    aggregation. None keeps every row (legacy / tests).
 
     Columns match the sample: کد چهاررقمی | ردیف | کد و شرح کالا | موجودی |
     واحد | نیاز | حد تحمل(روز). Extra columns (critical_point, filtered_stock,
@@ -170,6 +274,9 @@ def build_critical_items_rows(
         "daily_need",
     ]
     if inventory_df is None or inventory_df.empty or "category_code" not in inventory_df.columns:
+        return pd.DataFrame(columns=empty_cols)
+    inventory_df = filter_inventory_segment(inventory_df, segment)
+    if inventory_df is None or inventory_df.empty:
         return pd.DataFrame(columns=empty_cols)
 
     work = inventory_df.copy()
@@ -269,13 +376,21 @@ def _pretty_num(val: object) -> int | float:
     return round(num, 3)
 
 
-def report_title(counts: TundishMonthCounts) -> str:
+def report_title(counts: TundishMonthCounts, segment: str | None = None) -> str:
+    if segment in SEGMENT_LABEL_FA:
+        return (
+            f"لیست اقلام بحرانی نسوز تاندیش — {SEGMENT_LABEL_FA[segment]} "
+            f"({counts.month_label()})"
+        )
     return f"لیست اقلام بحرانی نسوز تاندیش ({counts.month_label()})"
 
 
-def report_subtitle(counts: TundishMonthCounts, *, row_count: int) -> str:
+def report_subtitle(
+    counts: TundishMonthCounts, *, row_count: int, segment: str | None = None
+) -> str:
+    seg = f"اقلام {SEGMENT_LABEL_FA[segment]}: " if segment in SEGMENT_LABEL_FA else ""
     return (
-        f"{row_count} قلم | تعداد تاندیش — بیلت: {counts.count_billet}، "
+        f"{seg}{row_count} قلم | تعداد تاندیش — بیلت: {counts.count_billet}، "
         f"بلوم: {counts.count_bloom}، اسلب: {counts.count_slab}"
     )
 
@@ -303,6 +418,12 @@ def report_footer_notes(counts: TundishMonthCounts) -> list[str]:
             f"نقطه بحرانی: هشدار وقتی جمع موجودی فیلترشده "
             f"(بدون موجودی < {int(CRITICAL_POINT_MIN_QTY):g} و اولویت ۰) "
             f"به حد نقطه بحرانی دسته برسد."
+        ),
+        (
+            "تفکیک بر اساس ستون «پیمانکار / شرکت» منبع اصلی: گزارش اصلی فقط اقلام "
+            "«شرکت» است و اقلام «پیمانکار» در گزارش/بخش جداگانه می‌آید؛ موجودی، نرخ "
+            "و نقطه بحرانی هر بخش فقط از ردیف‌های همان بخش محاسبه می‌شود "
+            "(اگر خانه خالی باشد، قاعده شناسه «0000» ملاک است)."
         ),
     ]
 

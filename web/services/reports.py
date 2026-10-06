@@ -320,86 +320,25 @@ def generate_critical_items_files(
     *,
     jalali_year: int,
     jalali_month: int,
-) -> tuple[Path | None, Path | None, str | None]:
-    """اقلام بحرانی PDF+xlsx from shared analytics.critical_items module."""
-    from analytics.critical_items import (
-        TundishMonthCounts,
-        build_critical_items_rows,
-        report_footer_notes,
-        report_subtitle,
-        report_title,
-        rows_for_simple_report,
-    )
-    from analytics.frames import load_primary_inventory
-    from analytics.tundish import apply_inventory_ledger
+):
+    """اقلام بحرانی (company PDF / contractor PDF / 2-sheet xlsx).
 
-    stored = db.get_monthly_tundish_counts(int(jalali_year), int(jalali_month))
-    if not stored:
-        return None, None, "برای این ماه تعداد تاندیش ثبت نشده است."
-    counts = TundishMonthCounts(
-        jalali_year=int(jalali_year),
-        jalali_month=int(jalali_month),
-        count_billet=int(stored["count_billet"]),
-        count_bloom=int(stored["count_bloom"]),
-        count_slab=int(stored["count_slab"]),
-    )
-    inv = load_primary_inventory(db, user)
-    if inv is not None:
-        sums = db.inventory_ledger_sums()
-        inv = apply_inventory_ledger(inv, sums.get("by_id"), sums.get("by_name"))
-    if inv is None or inv.empty:
-        return None, None, "منبع اصلی یافت نشد."
-    df = build_critical_items_rows(inv, counts)
-    if df is None or df.empty:
-        return (
-            None,
-            None,
-            "قلمی با نرخ و نیاز مثبت برای این تعداد تاندیش یافت نشد.",
+    Thin wrapper over the shared ``services.critical_items_report`` (same code
+    path as the bot). Returns a ``CriticalItemsResult``.
+    """
+    from services.critical_items_report import generate_critical_items_files as _gen
+
+    try:
+        return _gen(
+            db,
+            user,
+            jalali_year=int(jalali_year),
+            jalali_month=int(jalali_month),
+            file_prefix=_stamp_stem("critical_items"),
+            letterhead_path=letterhead_path(db),
         )
-    title = report_title(counts)
-    subtitle = report_subtitle(counts, row_count=len(df))
-    notes = report_footer_notes(counts)
-    cols = [
-        "کد چهاررقمی",
-        "ردیف",
-        "کد و شرح کالا",
-        "موجودی",
-        "واحد",
-        "نیاز",
-        "حد تحمل(روز)",
-    ]
-    sections = [
-        {
-            "title": None,
-            "columns": cols,
-            "rows": rows_for_simple_report(df),
-            "empty_message": "داده‌ای نیست.",
-            "header_bg": "#b71c1c",
-        },
-        {
-            "title": "توضیحات",
-            "columns": ["توضیح"],
-            "rows": [{"توضیح": n} for n in notes],
-            "empty_message": "",
-            "header_bg": "#546e7a",
-        },
-    ]
-    stem = _stamp_stem("critical_items")
-    pdf_path = REPORT_DIR / f"{stem}.pdf"
-    xlsx_path = REPORT_DIR / f"{stem}.xlsx"
-    generate_simple_report_pdf(
-        title=title,
-        subtitle=subtitle,
-        sections=sections,
-        output_path=pdf_path,
-        filename_stem="critical_items",
-        letterhead_path=letterhead_path(db),
-    )
-    generate_simple_report_xlsx(
-        title=title,
-        subtitle=subtitle,
-        sections=sections,
-        output_path=xlsx_path,
-        filename_stem="critical_items",
-    )
-    return pdf_path, xlsx_path, None
+    except Exception as exc:  # noqa: BLE001
+        from services.critical_items_report import CriticalItemsResult
+
+        logger.exception("critical items web failed")
+        return CriticalItemsResult(error=f"خطا در تولید گزارش اقلام بحرانی: {exc}")

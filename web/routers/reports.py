@@ -116,6 +116,9 @@ async def critical_items_pdf(
     user=Depends(require_materials_user),
     db: Database = Depends(get_db),
 ):
+    """PDF اقلام بحرانی. ``segment=company`` (default, primary) | ``contractor``."""
+    from services.critical_items_report import SEGMENT_LABEL_FA, SEGMENTS
+
     today = jalali_today()
     try:
         year = int(request.query_params.get("jalali_year") or today.year)
@@ -124,16 +127,30 @@ async def critical_items_pdf(
         return RedirectResponse(
             f"/reports?err={quote('سال/ماه نامعتبر')}", status_code=303
         )
-    path, _xlsx, err = report_svc.generate_critical_items_files(
+    segment = (request.query_params.get("segment") or "company").strip().lower()
+    if segment not in SEGMENTS:
+        segment = "company"
+    res = report_svc.generate_critical_items_files(
         db, user, jalali_year=year, jalali_month=month
     )
+    path = res.pdfs.get(segment) if not res.error else None
+    err = res.error
+    if not err and path is None:
+        err = (
+            f"در این ماه قلم بحرانیِ «{SEGMENT_LABEL_FA[segment]}» "
+            "با نرخ و نیاز مثبت یافت نشد."
+        )
     if err or not path:
         return RedirectResponse(
             f"/reports?err={quote(err or 'خطا')}"
-            f"&jalali_year={year}&jalali_month={month}",
+            f"&jalali_year={year}&jalali_month={month}#critical-items",
             status_code=303,
         )
-    log_activity(db, user, "report_critical_items")
+    log_activity(
+        db,
+        user,
+        "report_critical_items" if segment == "company" else "report_critical_items_contractor",
+    )
     return FileResponse(path, media_type="application/pdf", filename=path.name)
 
 
@@ -151,9 +168,10 @@ async def critical_items_xlsx(
         return RedirectResponse(
             f"/reports?err={quote('سال/ماه نامعتبر')}", status_code=303
         )
-    _pdf, path, err = report_svc.generate_critical_items_files(
+    res = report_svc.generate_critical_items_files(
         db, user, jalali_year=year, jalali_month=month
     )
+    path, err = res.xlsx, res.error
     if err or not path:
         return RedirectResponse(
             f"/reports?err={quote(err or 'خطا')}"
