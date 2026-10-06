@@ -44,6 +44,7 @@ ACTION_PHRASES: dict[str, str] = {
     "settings_reminders": "تنظیمات یادآور گزارش‌های الزامی را تغییر داد",
     "reminder_send_now": "یادآور گزارش‌های الزامی را دستی ارسال کرد",
     "critical_tundish_counts_saved": "تعداد تاندیش ماهانه اقلام بحرانی را ثبت کرد",
+    "critical_tundish_counts_excluded": "تعداد تاندیش دستی یک ماه را از مبنای اقلام بحرانی خارج کرد (نمونه)",
     "tundish_report_saved": "گزارش تاندیش بعد از ریخته‌گری ({group}) را ثبت کرد",
     "tundish_report_settings": "تنظیمات گزارش تاندیش بعد از ریخته‌گری را تغییر داد",
     "report_full_pdf": "PDF کامل تحلیل را گرفت",

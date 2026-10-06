@@ -2268,9 +2268,16 @@ class BotApp:
 
             label = format_month_year(int(r["jalali_year"]), int(r["jalali_month"]), named=True)
             extra = (
-                f"\nآخرین ثبت: {label} — بیلت {r['count_billet']}، "
+                f"\nآخرین ثبت دستی: {label} — بیلت {r['count_billet']}، "
                 f"بلوم {r['count_bloom']}، اسلب {r['count_slab']}"
+                + (" (در مبنا استفاده نمی‌شود)" if int(r.get("exclude_from_basis") or 0) else "")
             )
+        from analytics.critical_items import horizon_header_note
+        from services.critical_items_report import critical_basis
+
+        basis = critical_basis(self.db)
+        if basis is not None:
+            extra += f"\nمبنای گزارش امروز: {horizon_header_note(basis)}"
         self._reply(
             message,
             "🚨 اقلام بحرانی\n"
@@ -2278,7 +2285,8 @@ class BotApp:
             "۲) گزارش را بگیرید: PDF اصلی (فقط اقلام شرکت)، PDF جداگانه "
             "اقلام پیمانکار و اکسل با دو شیت جدا؛ پس از انتخاب ماه، حالت "
             "«با نوسازی» یا «بدون نوسازی» را انتخاب کنید\n"
-            "مبنا: میانگین تعداد تاندیش ۳ ماه گذشته؛ نیاز = مصرف پیش‌بینی‌شده در افق "
+            "تاریخ گزارش = امروز؛ مبنا: میانگین تعداد تاندیش ۳ ماه کامل گذشته (لاگ توالی "
+            "تاندیش، در نبود آن ثبت دستی)؛ نیاز = مصرف پیش‌بینی‌شده در افق "
             "(داخلی ۳ ماه، وارداتی ۶ ماه) − موجودی؛ فقط اقلام با نیاز مثبت.\n"
             "نقش‌های مجاز: مالک، مدیر، کاردان مسئول."
             f"{extra}",
@@ -2312,16 +2320,12 @@ class BotApp:
             return
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(uid)
+        # No month selection: report date = today, basis = 3 complete months before it.
         self._critical_pending[uid] = {
             "mode": "report",
-            "await": "year",
+            "await": "reno_mode",
         }
-        years = year_choices_around()
-        self._reply(
-            message,
-            "سال شمسی گزارش اقلام بحرانی را انتخاب کنید:",
-            kb.year_picker_menu(years),
-        )
+        self._ask_critical_reno_mode(message)
 
     def on_critical_flow_text(self, message: dict, text: str) -> bool:
         """Consume year/month/count steps for اقلام بحرانی. Returns True if handled."""
@@ -2401,10 +2405,10 @@ class BotApp:
                 return True
             pending["month"] = int(month)
             year = int(pending["year"])
-            if mode == "report":
+            if mode == "report":  # legacy pending state — reports no longer take a month
                 pending["await"] = "reno_mode"
                 self._critical_pending[uid] = pending
-                self._ask_critical_reno_mode(message, year, int(month))
+                self._ask_critical_reno_mode(message)
                 return True
             # counts mode — load existing and ask billet
             existing = self.db.get_monthly_tundish_counts(year, int(month))
@@ -2433,13 +2437,9 @@ class BotApp:
             elif norm == kb.BTN_CRITICAL_RENO_WITH:
                 reno = RENO_WITH
             else:
-                self._ask_critical_reno_mode(
-                    message, int(pending["year"]), int(pending["month"]), retry=True
-                )
+                self._ask_critical_reno_mode(message, retry=True)
                 return True
-            self._run_critical_items_report(
-                message, user, int(pending["year"]), int(pending["month"]), reno_mode=reno
-            )
+            self._run_critical_items_report(message, user, reno_mode=reno)
             return True
 
         if await_kind in {"count_billet", "count_bloom", "count_slab"}:
@@ -2519,17 +2519,18 @@ class BotApp:
 
         return False
 
-    def _ask_critical_reno_mode(
-        self, message: dict, year: int, month: int, *, retry: bool = False
-    ) -> None:
+    def _ask_critical_reno_mode(self, message: dict, *, retry: bool = False) -> None:
         """Inline «با نوسازی» / «بدون نوسازی» choice (typed label also accepted)."""
-        from bot.jalali import format_month_year
+        from analytics.critical_items import horizon_header_note
+        from services.critical_items_report import critical_basis
 
-        label = format_month_year(year, month, named=True)
+        basis = critical_basis(self.db)
+        label = basis.report_date if basis is not None else "امروز"
+        note = f"{horizon_header_note(basis)}\n" if basis is not None else ""
         head = "لطفاً یکی از دو دکمه را بزنید.\n" if retry else ""
         self._reply(
             message,
-            f"{head}حالت محاسبه نیاز اقلام بحرانی برای {label} را انتخاب کنید:\n"
+            f"{head}{note}حالت محاسبه نیاز اقلام بحرانی (تاریخ گزارش {label}) را انتخاب کنید:\n"
             "• با نوسازی: نرخ نوسازی + پچینگ (+ سطح ریخته‌گری)\n"
             "• بدون نوسازی: فقط پچینگ (+ سطح ریخته‌گری)؛ اقلامی که فقط نرخ نوسازی "
             "دارند فهرست نمی‌شوند.",
@@ -2558,12 +2559,10 @@ class BotApp:
                 )
             except BaleAPIError:
                 pass
-        self._run_critical_items_report(
-            message, user, int(pending["year"]), int(pending["month"]), reno_mode=reno
-        )
+        self._run_critical_items_report(message, user, reno_mode=reno)
 
     def _run_critical_items_report(
-        self, message: dict, user: dict, year: int, month: int, *, reno_mode: str = "with"
+        self, message: dict, user: dict, *, reno_mode: str = "with"
     ) -> None:
         """Send company report, then contractor report, then the 2-sheet xlsx.
 
@@ -2571,7 +2570,6 @@ class BotApp:
         code path as the web panel; ledger applied once by load_primary_inventory).
         """
         from analytics.critical_items import RENO_LABEL_FA, normalize_reno_mode
-        from bot.jalali import format_month_year
         from services.critical_items_report import (
             SEGMENT_COMPANY,
             SEGMENT_CONTRACTOR,
@@ -2584,23 +2582,10 @@ class BotApp:
         uid = str(user["bale_user_id"])
         self._clear_critical_pending(uid)
         menu = kb.critical_items_menu()
-        label = format_month_year(year, month, named=True)
-        from services.critical_items_report import month_counts
-
-        if month_counts(self.db, year, month) is None:
-            self._reply(
-                message,
-                f"برای ۳ ماه منتهی به {label} هیچ تعداد تاندیش ماهانه‌ای ثبت نشده است.\n"
-                "ابتدا «ثبت تعداد تاندیش ماهانه» را انجام دهید.",
-                menu,
-            )
-            return
         try:
             res = generate_critical_items_files(
                 self.db,
                 user,
-                jalali_year=year,
-                jalali_month=month,
                 output_dir=REPORT_DIR / "critical_items" / uid,
                 file_prefix="لیست_اقلام_بحرانی",
                 letterhead_path=self._letterhead_path(),
@@ -2649,7 +2634,8 @@ class BotApp:
             return
         from services.critical_items_report import critical_items_bot_lines
 
-        lines = [f"گزارش اقلام بحرانی {label} — حالت «{reno_label}» ارسال شد.", res.header_note]
+        label = res.counts.report_date if res.counts is not None else ""
+        lines = [f"گزارش اقلام بحرانی (تاریخ گزارش {label}) — حالت «{reno_label}» ارسال شد.", res.header_note]
         lines.extend(critical_items_bot_lines(res))
         self._reply(message, "\n".join(lines), menu)
         if SEGMENT_COMPANY in sent:

@@ -19,6 +19,10 @@ import pandas as pd
 
 from analytics.critical_items import (
     COL_DAYS,
+    SOURCE_MANUAL,
+    SOURCE_SEQUENCE_LOG,
+    basis_from_months,
+    previous_complete_months,
     COL_FORECAST,
     COL_HORIZON,
     COL_MONTHLY,
@@ -45,6 +49,7 @@ from analytics.critical_items import (
     report_title,
     rows_for_simple_report,
 )
+from bot.jalali import PERSIAN_MONTH_NAMES
 from config import REPORT_DIR, ensure_dirs
 from db.models import Database
 
@@ -84,6 +89,47 @@ class CriticalItemsResult:
     @property
     def contractor_pdf(self) -> Path | None:
         return self.pdfs.get(SEGMENT_CONTRACTOR)
+
+
+def report_date_parts(report_date: Any = None) -> tuple[int, int, int]:
+    """(year, month, day) of the report date; default = today (Asia/Tehran, Jalali)."""
+    if report_date is None:
+        from bot.jalali import jalali_today
+
+        report_date = jalali_today()
+    if isinstance(report_date, (tuple, list)):
+        y, m, d = (int(x) for x in report_date)
+        return y, m, d
+    return int(report_date.year), int(report_date.month), int(report_date.day)
+
+
+def critical_basis(db: Database, report_date: Any = None) -> TundishMonthCounts | None:
+    """Tundish basis of a critical-items report generated on ``report_date`` (default today).
+
+    Months = the 3 COMPLETE months before the report date (1405/07/14 → تیر, مرداد,
+    شهریور). Per month the tundish sequence log (main_goal_tundish_sequences; one
+    sequence = one tundish use) is preferred; a manual «تعداد تاندیش ماهانه» entry is
+    used only for a month without a log and only if not ``exclude_from_basis``.
+    A section without sequences in a logged month counts 0. Months with no data at
+    all are skipped (header says how many months were averaged).
+    """
+    y, m, d = report_date_parts(report_date)
+    manual = {
+        (int(r["jalali_year"]), int(r["jalali_month"])): r
+        for r in db.list_monthly_tundish_counts(limit=240)
+        if not int(r.get("exclude_from_basis") or 0)
+    }
+    used: list[tuple] = []
+    for yy, mm in previous_complete_months(y, m):
+        seq = db.sequence_tundish_counts(yy, mm)
+        if seq:
+            used.append((yy, mm, seq.get("billet", 0), seq.get("bloom", 0), seq.get("slab", 0),
+                         SOURCE_SEQUENCE_LOG))
+        elif (yy, mm) in manual:
+            r = manual[(yy, mm)]
+            used.append((yy, mm, int(r["count_billet"]), int(r["count_bloom"]),
+                         int(r["count_slab"]), SOURCE_MANUAL))
+    return basis_from_months(used, report_date=f"{y}/{m:02d}/{d:02d}", year=y, month=m)
 
 
 def month_counts(db: Database, jalali_year: int, jalali_month: int) -> TundishMonthCounts | None:
@@ -141,8 +187,7 @@ def generate_critical_items_files(
     db: Database,
     user: dict[str, Any],
     *,
-    jalali_year: int,
-    jalali_month: int,
+    report_date: Any = None,
     output_dir: Path | None = None,
     file_prefix: str | None = None,
     letterhead_path: Path | str | None = None,
@@ -152,6 +197,8 @@ def generate_critical_items_files(
     """Build company PDF, contractor PDF (when it has rows) and a 3-sheet xlsx.
 
     ``reno_mode``: RENO_WITH «با نوسازی» (default) | RENO_WITHOUT «بدون نوسازی».
+    ``report_date`` (default today, Jalali): titles / file names carry it; the tundish
+    basis = 3 complete months before it (``critical_basis``) — no month selection.
     """
     from analytics.frames import load_primary_inventory
     from excel.simple_report import generate_simple_report_xlsx
@@ -159,11 +206,15 @@ def generate_critical_items_files(
 
     reno_mode = normalize_reno_mode(reno_mode)
     res = CriticalItemsResult(reno_mode=reno_mode)
-    counts = month_counts(db, jalali_year, jalali_month)
+    counts = critical_basis(db, report_date)
     if counts is None:
+        ry, rm, _rd = report_date_parts(report_date)
+        months = "، ".join(
+            f"{PERSIAN_MONTH_NAMES[mm]} {yy}" for yy, mm in previous_complete_months(ry, rm)
+        )
         res.error = (
-            "برای ۳ ماه منتهی به این ماه هیچ «تعداد تاندیش ماهانه» ثبت نشده است "
-            "(مبنای میانگین مصرف ماهانه)."
+            f"برای ۳ ماه کامل گذشته ({months}) نه لاگ توالی تاندیش هست و نه «تعداد تاندیش "
+            "ماهانه» (مبنای میانگین مصرف ماهانه)."
         )
         return res
     res.counts = counts
@@ -189,6 +240,9 @@ def generate_critical_items_files(
     out_dir = Path(output_dir) if output_dir else REPORT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     prefix = file_prefix or f"critical_items_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    date_tag = counts.report_date.replace("/", "-")
+    if date_tag and date_tag not in prefix:
+        prefix = f"{prefix}_{date_tag}"
     prefix = f"{prefix}_{RENO_FILE_SUFFIX[reno_mode]}"
     notes = _notes_section(counts, reno_mode, res.audit)
 

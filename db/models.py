@@ -608,6 +608,10 @@ class Database:
             ("main_goal_production", "slab_melt_count", "REAL"),
             ("main_goal_production", "bloom_melt_count", "REAL"),
             ("main_goal_production", "billet_melt_count", "REAL"),
+            # اقلام بحرانی basis: a manual entry can be kept for audit but excluded
+            # (e.g. the Shahrivar 1405 SAMPLE 70/100, superseded by the sequence log).
+            ("monthly_tundish_counts", "exclude_from_basis", "INTEGER NOT NULL DEFAULT 0"),
+            ("monthly_tundish_counts", "basis_note", "TEXT"),
         ]
         for table, column, coltype in additions:
             try:
@@ -2220,7 +2224,9 @@ class Database:
                     count_bloom = excluded.count_bloom,
                     count_slab = excluded.count_slab,
                     updated_at = excluded.updated_at,
-                    updated_by = excluded.updated_by
+                    updated_by = excluded.updated_by,
+                    exclude_from_basis = 0,
+                    basis_note = NULL
                 """,
                 (
                     y,
@@ -2253,6 +2259,35 @@ class Database:
                 (int(jalali_year), int(jalali_month)),
             ).fetchone()
             return dict(row) if row else None
+
+    def set_monthly_tundish_counts_exclusion(
+        self, jalali_year: int, jalali_month: int, *, exclude: bool, note: str | None = None
+    ) -> bool:
+        """Keep a manual monthly entry for audit but (not) use it as critical-items basis."""
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE monthly_tundish_counts
+                SET exclude_from_basis = ?, basis_note = ?
+                WHERE jalali_year = ? AND jalali_month = ?
+                """,
+                (1 if exclude else 0, note, int(jalali_year), int(jalali_month)),
+            )
+            return cur.rowcount > 0
+
+    def sequence_tundish_counts(self, jalali_year: int, jalali_month: int) -> dict[str, int]:
+        """{section: number of sequence rows} from main_goal_tundish_sequences for a month
+        (each sequence = one tundish use). Empty dict when the month has no log."""
+        key = f"m:{int(jalali_year)}-{int(jalali_month):02d}"
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT section, COUNT(*) AS n FROM main_goal_tundish_sequences
+                WHERE period_key = ? GROUP BY section
+                """,
+                (key,),
+            ).fetchall()
+        return {str(r["section"]): int(r["n"]) for r in rows}
 
     def list_monthly_tundish_counts(self, limit: int = 24) -> list[dict[str, Any]]:
         with self.connect() as conn:

@@ -34,11 +34,11 @@ def _critical_context(db: Database, request: Request) -> dict:
         month = today.month
     counts = db.get_monthly_tundish_counts(year, month)
     from analytics.critical_items import horizon_header_note
-    from services.critical_items_report import month_counts
+    from services.critical_items_report import critical_basis
 
-    basis = month_counts(db, year, month)
+    basis = critical_basis(db)  # report date = today
     basis_note = horizon_header_note(basis) if basis is not None else (
-        "برای ۳ ماه منتهی به این ماه هیچ تعداد تاندیش ماهانه‌ای ثبت نشده است."
+        "برای ۳ ماه کامل گذشته نه لاگ توالی تاندیش هست و نه تعداد تاندیش ماهانه."
     )
     recent = []
     for r in db.list_monthly_tundish_counts(limit=6):
@@ -131,21 +131,13 @@ async def critical_items_pdf(
     ``renovation=with`` («با نوسازی», default) | ``without`` («بدون نوسازی»)."""
     from services.critical_items_report import SEGMENT_LABEL_FA, SEGMENTS
 
-    today = jalali_today()
-    try:
-        year = int(request.query_params.get("jalali_year") or today.year)
-        month = int(request.query_params.get("jalali_month") or today.month)
-    except ValueError:
-        return RedirectResponse(
-            f"/reports?err={quote('سال/ماه نامعتبر')}", status_code=303
-        )
+    # Report date = today; basis = 3 complete months before it (no month selection;
+    # legacy jalali_year/jalali_month query params are ignored).
     segment = (request.query_params.get("segment") or "company").strip().lower()
     if segment not in SEGMENTS:
         segment = "company"
     reno = normalize_reno_mode(request.query_params.get("renovation") or "with")
-    res = report_svc.generate_critical_items_files(
-        db, user, jalali_year=year, jalali_month=month, reno_mode=reno
-    )
+    res = report_svc.generate_critical_items_files(db, user, reno_mode=reno)
     path = res.pdfs.get(segment) if not res.error else None
     err = res.error
     if not err and path is None:
@@ -155,8 +147,7 @@ async def critical_items_pdf(
         )
     if err or not path:
         return RedirectResponse(
-            f"/reports?err={quote(err or 'خطا')}"
-            f"&jalali_year={year}&jalali_month={month}&renovation={reno}#critical-items",
+            f"/reports?err={quote(err or 'خطا')}&renovation={reno}#critical-items",
             status_code=303,
         )
     log_activity(
@@ -174,23 +165,12 @@ async def critical_items_xlsx(
     user=Depends(require_materials_user),
     db: Database = Depends(get_db),
 ):
-    today = jalali_today()
-    try:
-        year = int(request.query_params.get("jalali_year") or today.year)
-        month = int(request.query_params.get("jalali_month") or today.month)
-    except ValueError:
-        return RedirectResponse(
-            f"/reports?err={quote('سال/ماه نامعتبر')}", status_code=303
-        )
     reno = normalize_reno_mode(request.query_params.get("renovation") or "with")
-    res = report_svc.generate_critical_items_files(
-        db, user, jalali_year=year, jalali_month=month, reno_mode=reno
-    )
+    res = report_svc.generate_critical_items_files(db, user, reno_mode=reno)
     path, err = res.xlsx, res.error
     if err or not path:
         return RedirectResponse(
-            f"/reports?err={quote(err or 'خطا')}"
-            f"&jalali_year={year}&jalali_month={month}",
+            f"/reports?err={quote(err or 'خطا')}&renovation={reno}#critical-items",
             status_code=303,
         )
     log_activity(db, user, "report_critical_items_xlsx", renovation=reno)

@@ -31,11 +31,13 @@
 <div class="card" id="critical-items">
   <h2>🚨 اقلام بحرانی نسوز تاندیش</h2>
   <p class="muted">
-    همان منطق ربات: «میانگین مصرف ماهانه بر اساس ۳ ماه گذشته» = میانگین تعداد تاندیش ۳ ماه گذشته ×
+    همان منطق ربات: «میانگین مصرف ماهانه بر اساس ۳ ماه گذشته» = میانگین تعداد تاندیش ۳ ماه کامل قبل از امروز
+    (لاگ توالی تاندیش؛ ماهی که لاگ ندارد از ثبت دستی زیر) ×
     (نوسازی+پچینگ یا فقط پچینگ) + سطح ریخته‌گری؛ «مصرف پیش‌بینی‌شده در افق» = میانگین ماهانه × افق
     (داخلی ۳ ماه، وارداتی ۶ ماه)؛ «نیاز» = مصرف پیش‌بینی‌شده − موجودی، فقط اقلام با نیاز مثبت.
     نقش‌های مجاز: مالک، مدیر، کاردان مسئول.
   </p>
+  <p class="muted">ثبت دستی تعداد تاندیش ماهانه — فقط برای ماهی که لاگ توالی تاندیش ندارد استفاده می‌شود:</p>
   <form method="post" action="/reports/critical-items/counts" class="form-grid">
     <label>سال شمسی
       <input type="number" name="jalali_year" min="1390" max="1500" required
@@ -64,10 +66,8 @@
       <button type="submit" class="btn">ذخیره تعداد تاندیش</button>
     </div>
   </form>
-  <p class="muted" style="margin-top:.75rem">مبنای ماه انتخاب‌شده: {{ basis_note }}</p>
+  <p class="muted" style="margin-top:.75rem">گزارش با تاریخ امروز و بدون انتخاب ماه تولید می‌شود — {{ basis_note }}</p>
   <form method="get" class="report-actions" style="margin-top:1rem">
-    <input type="hidden" name="jalali_year" value="{{ critical_year }}">
-    <input type="hidden" name="jalali_month" value="{{ critical_month }}">
     <fieldset class="reno-mode" style="border:0;padding:0;margin:0 0 .5rem 0">
       <legend class="muted">حالت محاسبه نیاز:</legend>
       {% for val, label in reno_modes %}
@@ -87,7 +87,7 @@
   <p class="muted" style="margin-top:1rem">ثبت‌های اخیر:</p>
   <ul class="muted">
     {% for r in recent_counts %}
-    <li>{{ r.label }} — بیلت {{ r.count_billet }}، بلوم {{ r.count_bloom }}، اسلب {{ r.count_slab }}</li>
+    <li>{{ r.label }} — بیلت {{ r.count_billet }}، بلوم {{ r.count_bloom }}، اسلب {{ r.count_slab }}{% if r.exclude_from_basis %} — در مبنای اقلام بحرانی استفاده نمی‌شود ({{ r.basis_note or "نمونه" }}){% endif %}</li>
     {% endfor %}
   </ul>
   {% endif %}

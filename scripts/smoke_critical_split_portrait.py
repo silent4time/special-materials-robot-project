@@ -247,9 +247,9 @@ def test_horizon_rule() -> None:
     assert (cnt.count_billet, cnt.count_slab) == (50, 50), cnt  # month 3 (1000) is outside
     assert [m[1] for m in cnt.months()] == [4, 5, 6]
     note = horizon_header_note(cnt)
-    assert "۳ ماه آینده" in note and "۶ ماه آینده" in note and "تیر 1405، مرداد 1405 و شهریور 1405" in note, note
+    assert "۳ ماه آینده" in note and "۶ ماه آینده" in note and "تیر تا شهریور 1405" in note, note
     one = average_tundish_basis(1405, 6, stored[-1:])
-    assert one.count_billet == 60 and "فقط 1 ماه" in horizon_header_note(one)
+    assert one.count_billet == 60 and "فقط 1 ماه از ۳ ماه کامل" in horizon_header_note(one)
     assert average_tundish_basis(1405, 10, stored) is None  # nothing in مهر..دی window
     # year wrap: فروردین 1406 averages اسفند/بهمن 1405
     wrap = average_tundish_basis(1406, 1, [
@@ -484,6 +484,86 @@ def test_section_rules() -> None:
     print("section rules (billet=شرکت, bloom=پیمانکار, slab=اسلب) OK")
 
 
+def _today_tag() -> str:
+    from bot.jalali import jalali_today
+
+    t = jalali_today()
+    return f"{t.year}-{t.month:02d}-{t.day:02d}"
+
+
+def _basis_months() -> list[tuple[int, int]]:
+    from analytics.critical_items import previous_complete_months
+    from bot.jalali import jalali_today
+
+    t = jalali_today()
+    return previous_complete_months(t.year, t.month)
+
+
+def _basis_label() -> str:
+    from analytics.critical_items import basis_from_months
+
+    return basis_from_months([(y, m, 0, 0, 0, "manual") for y, m in _basis_months()]).basis_label()
+
+
+def test_basis_sequence_log(tmp: Path) -> None:
+    """t211u: report date = today; basis = 3 complete months before it; sequence log
+    (one sequence = one tundish use) preferred over manual counts; a manual SAMPLE
+    entry flagged exclude_from_basis is kept for audit but never used."""
+    from analytics.critical_items import horizon_header_note
+    from db.models import Database
+    from services.critical_items_report import critical_basis
+
+    db = Database(tmp / "basis.db")
+    db.upsert_user("901", role="owner", display_name="مالک تست")
+
+    def seqs(y, m, section, n):
+        db.replace_main_goal_sequences(
+            period_key=f"m:{y}-{m:02d}", section=section,
+            rows=[{"machine": section, "tundish_no": str(i), "melt_count": 7} for i in range(n)],
+            meta={"period_label": f"{m}/{y}", "year": y, "month": m, "bale_user_id": "901"},
+        )
+
+    # تیر: slab 63 / billet 35 / bloom 1 — مرداد: 60 / 30 — شهریور: 89 / 37 (real log)
+    for m, sl, bi, bl in ((4, 63, 35, 1), (5, 60, 30, 0), (6, 89, 37, 0)):
+        seqs(1405, m, "slab", sl)
+        seqs(1405, m, "billet", bi)
+        if bl:
+            seqs(1405, m, "bloom", bl)
+    # manual SAMPLE for شهریور (70/100) → excluded; manual مرداد → superseded by the log
+    db.upsert_monthly_tundish_counts(jalali_year=1405, jalali_month=6, count_billet=70,
+                                     count_bloom=0, count_slab=100, updated_by="901")
+    assert db.set_monthly_tundish_counts_exclusion(1405, 6, exclude=True, note="نمونه")
+    db.upsert_monthly_tundish_counts(jalali_year=1405, jalali_month=5, count_billet=999,
+                                     count_bloom=0, count_slab=999, updated_by="901")
+    assert db.sequence_tundish_counts(1405, 4) == {"slab": 63, "billet": 35, "bloom": 1}
+    b = critical_basis(db, (1405, 7, 14))
+    assert b.report_date == "1405/07/14" and [m[1] for m in b.months()] == [4, 5, 6], b
+    assert abs(b.count_slab - 212 / 3) < 1e-9 and b.count_billet == 34 and abs(b.count_bloom - 1 / 3) < 1e-9, b
+    assert set(b.sources()) == {"sequence_log"}
+    note = horizon_header_note(b)
+    assert "تیر تا شهریور 1405" in note and "اسلب 70.7، بیلت 34، بلوم 0.3 در ماه" in note, note
+    assert "لاگ توالی تاندیش" in note and "تاریخ گزارش: 1405/07/14" in note, note
+    # a month without a log falls back to a NON-excluded manual entry
+    b2 = critical_basis(db, (1405, 6, 1))  # window خرداد..مرداد: خرداد has no data
+    assert b2 is not None and [m[1] for m in b2.months()] == [4, 5], b2.months()  # 3,4,5 → 4,5 logged
+    db.upsert_monthly_tundish_counts(jalali_year=1405, jalali_month=3, count_billet=12,
+                                     count_bloom=0, count_slab=6, updated_by="901")
+    b3 = critical_basis(db, (1405, 6, 1))
+    assert [(m[1], m[5]) for m in b3.months()] == [(3, "manual"), (4, "sequence_log"), (5, "sequence_log")]
+    assert "ثبت دستی" in horizon_header_note(b3)
+    # excluded sample is never used: report on 1405/08/01 (مرداد..مهر) → مرداد+شهریور logs only
+    b4 = critical_basis(db, (1405, 8, 1))
+    assert [m[1] for m in b4.months()] == [5, 6] and "فقط 2 ماه" in horizon_header_note(b4)
+    # re-entering a month manually clears the exclusion (the user meant it)
+    db.upsert_monthly_tundish_counts(jalali_year=1405, jalali_month=6, count_billet=1,
+                                     count_bloom=0, count_slab=1, updated_by="901")
+    assert not db.get_monthly_tundish_counts(1405, 6)["exclude_from_basis"]
+    # default report date = today (Jalali)
+    t = critical_basis(db)
+    assert t is None or t.report_date.replace("/", "-") == _today_tag()
+    print("basis: today + 3 complete months, sequence log preferred, sample excluded OK")
+
+
 def _setup_db(tmp: Path):
     from db.models import Database
 
@@ -495,10 +575,11 @@ def _setup_db(tmp: Path):
     clean = inv_dir / "product_inventory.xlsx"
     _inventory_frame().to_excel(clean, index=False)
     db.save_extracted("901", None, "product_inventory", str(clean), str(clean), 5)
-    # تیر/مرداد/شهریور → 3-month average billet 50, slab 50 (1203 پیمانکار is a slab row)
-    for m, n in ((4, 40), (5, 50), (6, 60)):
+    # the 3 complete months before TODAY (report date) → average billet 50, slab 50
+    # (1203 پیمانکار is a slab row). No sequence log here → manual counts are the basis.
+    for (y, m), n in zip(_basis_months(), (40, 50, 60)):
         db.upsert_monthly_tundish_counts(
-            jalali_year=1405, jalali_month=m, count_billet=n, count_bloom=0,
+            jalali_year=y, jalali_month=m, count_billet=n, count_bloom=0,
             count_slab=n, updated_by="901",
         )
     # one ledger deduction on the company row: -100
@@ -529,7 +610,7 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     assert summary.get(("شرکت", "company")) == 7 and summary.get(("پیمانکار", "contractor")) == 1, summary
 
     res = generate_critical_items_files(
-        db, user, jalali_year=1405, jalali_month=6, output_dir=tmp / "out", file_prefix="crit",
+        db, user, output_dir=tmp / "out", file_prefix="crit",
     )
     assert res.error is None, res.error
     assert res.reno_mode == "with" and "با نوسازی" in res.titles["company"]
@@ -553,7 +634,10 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     assert int(r_co["حد تحمل(روز)"]) == 27  # 900 / (1000/30)
     # contractor: own stock/rates only (slab 10×50; origin blank → domestic)
     assert int(r_ct["موجودی"]) == 500 and int(r_ct[COL_MONTHLY]) == 500 and int(r_ct[COL_NEED]) == 1000
-    assert "تیر 1405، مرداد 1405 و شهریور 1405" in res.header_note, res.header_note
+    assert _basis_label() in res.header_note, res.header_note
+    assert f"تاریخ گزارش: {_today_tag().replace('-', '/')}" in res.header_note, res.header_note
+    assert _today_tag().replace("-", "/") in res.titles["company"], res.titles
+    assert _today_tag() in res.company_pdf.name, res.company_pdf.name
     assert "1655" in res.audit["missing"] and "1700" not in res.audit["missing"], res.audit
     assert "9999" not in res.audit["missing"], res.audit  # unrated codes are not audited
     assert "شرکت" in res.titles["company"] and "پیمانکار" in res.titles["contractor"]
@@ -577,7 +661,7 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
 
     # «بدون نوسازی»: patching only (+ casting floor); renovation-only items drop
     wo = generate_critical_items_files(
-        db, user, jalali_year=1405, jalali_month=6, output_dir=tmp / "out",
+        db, user, output_dir=tmp / "out",
         file_prefix="crit", reno_mode="without",
     )
     assert wo.error is None and wo.reno_mode == "without", wo.error
@@ -658,9 +742,7 @@ def test_bot_flow(tmp: Path) -> None:
         assert app.on_critical_flow_text(m, text), text
 
     # 1) «با نوسازی» via inline callback
-    app.on_critical_report_start(dict(msg, text=kb.BTN_CRITICAL_REPORT))
-    say("1405")
-    say("شهریور")
+    app.on_critical_report_start(dict(msg, text=kb.BTN_CRITICAL_REPORT))  # no year/month step
     assert "با نوسازی" in client.msgs[-1] and "بدون نوسازی" in client.msgs[-1]
     inline = markups[-1]["inline_keyboard"][0]
     datas = [b["callback_data"] for b in inline]
@@ -669,8 +751,9 @@ def test_bot_flow(tmp: Path) -> None:
     app.handle_callback_query({"id": "cq1", "data": datas[0], "from": msg["from"],
                                "message": {"message_id": 55, "chat": msg["chat"]}})
     names = [p.name for p, _ in client.docs]
-    assert names == ["لیست_اقلام_بحرانی_با_نوسازی_شرکت.pdf", "لیست_اقلام_بحرانی_با_نوسازی_پیمانکار.pdf",
-                     "لیست_اقلام_بحرانی_با_نوسازی.xlsx"], names
+    td = _today_tag()
+    assert names == [f"لیست_اقلام_بحرانی_{td}_با_نوسازی_شرکت.pdf", f"لیست_اقلام_بحرانی_{td}_با_نوسازی_پیمانکار.pdf",
+                     f"لیست_اقلام_بحرانی_{td}_با_نوسازی.xlsx"], names
     assert "گزارش اصلی" in client.docs[0][1] and "پیمانکار" in client.docs[1][1]
     assert "با نوسازی" in client.docs[0][1] and "با نوسازی" in client.docs[2][1]
     assert "حالت «با نوسازی»" in client.msgs[-1], client.msgs[-1]
@@ -687,15 +770,13 @@ def test_bot_flow(tmp: Path) -> None:
 
     # 2) «بدون نوسازی» via typed label
     client.docs.clear()
-    app.on_critical_report_start(dict(msg, text=kb.BTN_CRITICAL_REPORT))
-    say("1405")
-    say("شهریور")
+    app.on_critical_report_start(dict(msg, text=kb.BTN_CRITICAL_REPORT))  # no year/month step
     say("چیز دیگر")  # invalid → re-ask
     assert not client.docs and "یکی از دو دکمه" in client.msgs[-1]
     say(kb.BTN_CRITICAL_RENO_WITHOUT)
     names = [p.name for p, _ in client.docs]
-    assert names == ["لیست_اقلام_بحرانی_بدون_نوسازی_شرکت.pdf", "لیست_اقلام_بحرانی_بدون_نوسازی_پیمانکار.pdf",
-                     "لیست_اقلام_بحرانی_بدون_نوسازی.xlsx"], names
+    assert names == [f"لیست_اقلام_بحرانی_{td}_بدون_نوسازی_شرکت.pdf", f"لیست_اقلام_بحرانی_{td}_بدون_نوسازی_پیمانکار.pdf",
+                     f"لیست_اقلام_بحرانی_{td}_بدون_نوسازی.xlsx"], names
     assert "حالت «بدون نوسازی»" in client.msgs[-1]
     assert "شرکت (گزارش اصلی): 3 قلم" in client.msgs[-1] and "پیمانکار (گزارش جداگانه): 1 قلم" in client.msgs[-1], client.msgs[-1]
     print("bot critical flow (inline با نوسازی + typed بدون نوسازی) OK")
@@ -735,7 +816,7 @@ def test_web(tmp: Path) -> dict:
     for reno in ("with", "without"):
         for seg in ("company", "contractor"):
             r = c.get(
-                f"/reports/critical-items?jalali_year=1405&jalali_month=6&segment={seg}&renovation={reno}"
+                f"/reports/critical-items?segment={seg}&renovation={reno}"
             )
             assert r.status_code == 200 and r.content[:4] == b"%PDF", (seg, reno, r.status_code)
             fname = r.headers.get("content-disposition", "")
@@ -744,17 +825,18 @@ def test_web(tmp: Path) -> dict:
             pth.write_bytes(r.content)
             _assert_portrait(pth)
             out[f"web_critical_{seg}_{reno}"] = pth
-        r = c.get(f"/reports/critical-items.xlsx?jalali_year=1405&jalali_month=6&renovation={reno}")
+        r = c.get(f"/reports/critical-items.xlsx?renovation={reno}")
         assert r.status_code == 200 and r.content[:2] == b"PK"
         wb = load_workbook(io.BytesIO(r.content))
         label = "بدون نوسازی" if reno == "without" else "با نوسازی"
         notes = " ".join(str(x.value) for row in wb["توضیحات"].iter_rows() for x in row if x.value)
         assert f"«{label}»" in notes, notes[:300]
-    # مهر has no entry but the 3-month window (مرداد..مهر) does → report; دی → nothing → redirect
-    r = c.get("/reports/critical-items?jalali_year=1405&jalali_month=10", follow_redirects=False)
-    assert r.status_code == 303
-    r = c.get("/reports?jalali_year=1405&jalali_month=6")
-    assert "مبنای ماه انتخاب‌شده" in r.text and "تیر 1405" in r.text
+    # legacy month params are ignored: report date = today, same basis
+    r = c.get("/reports/critical-items?jalali_year=1400&jalali_month=1", follow_redirects=False)
+    assert r.status_code == 200 and r.content[:4] == b"%PDF", r.status_code
+    r = c.get("/reports")
+    assert "بدون انتخاب ماه" in r.text and _basis_label() in r.text, r.text[-3000:]
+    assert f"تاریخ گزارش: {_today_tag().replace('-', '/')}" in r.text
     # other web PDF endpoints: PDF (portrait) or a redirect with a Persian error
     for ep in ("/reports/remaining-critical", "/reports/surplus", "/reports/user-activity",
                "/reports/monthly-summary"):
@@ -843,6 +925,7 @@ def main() -> int:
         test_id_rule_and_surplus(tmp)
         test_aggregation_rule()
         test_horizon_rule()
+        test_basis_sequence_log(tmp)
         pdfs: dict[str, Path] = {}
         for sub in ("svc", "bot", "web", "gen", "merge"):
             (tmp / sub).mkdir()

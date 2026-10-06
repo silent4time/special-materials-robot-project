@@ -318,13 +318,13 @@ def generate_critical_items_files(
     db: Database,
     user: dict[str, Any],
     *,
-    jalali_year: int,
-    jalali_month: int,
     reno_mode: str = "with",
+    report_date=None,
 ):
     """اقلام بحرانی (company PDF / contractor PDF / 2-sheet xlsx).
 
-    ``reno_mode``: "with" «با نوسازی» | "without" «بدون نوسازی».
+    ``reno_mode``: "with" «با نوسازی» | "without" «بدون نوسازی». Report date =
+    today (no month selection); basis = 3 complete months before it.
 
     Thin wrapper over the shared ``services.critical_items_report`` (same code
     path as the bot). Returns a ``CriticalItemsResult``.
@@ -335,8 +335,7 @@ def generate_critical_items_files(
         return _gen(
             db,
             user,
-            jalali_year=int(jalali_year),
-            jalali_month=int(jalali_month),
+            report_date=report_date,
             file_prefix=_stamp_stem("critical_items"),
             letterhead_path=letterhead_path(db),
             reno_mode=reno_mode,

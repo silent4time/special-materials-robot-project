@@ -159,12 +159,22 @@ ORIGIN_MIXED_FA = "مختلط (وارداتی+داخلی)"
 ORIGIN_MISSING_FA = "نامشخص (داخلی فرض شد)"
 
 
+SOURCE_SEQUENCE_LOG = "sequence_log"
+SOURCE_MANUAL = "manual"
+SOURCE_LABEL_FA = {
+    SOURCE_SEQUENCE_LOG: "لاگ توالی تاندیش",
+    SOURCE_MANUAL: "ثبت دستی تعداد تاندیش",
+}
+
+
 @dataclass(frozen=True)
 class TundishMonthCounts:
     """Monthly tundish basis. Counts may be 3-month AVERAGES (floats).
 
-    ``basis_months`` = ((year, month, billet, bloom, slab), …) actually averaged;
-    empty → a single month (jalali_year/jalali_month) as entered.
+    ``basis_months`` = ((year, month, billet, bloom, slab[, source]), …) actually
+    averaged; empty → a single month (jalali_year/jalali_month) as entered.
+    ``report_date`` = generation date «1405/07/14» (titles / file names); when set it
+    replaces the month label in titles.
     """
 
     jalali_year: int
@@ -173,26 +183,45 @@ class TundishMonthCounts:
     count_bloom: float
     count_slab: float
     basis_months: tuple = ()
+    report_date: str = ""
 
     @property
     def total(self) -> float:
         return float(self.count_billet) + float(self.count_bloom) + float(self.count_slab)
 
     def month_label(self) -> str:
+        if self.report_date:
+            return self.report_date
         name = PERSIAN_MONTH_NAMES.get(int(self.jalali_month), str(self.jalali_month))
         return f"{name} {int(self.jalali_year)}"
 
     def months(self) -> list[tuple]:
+        """[(year, month, billet, bloom, slab, source), …] (source "" if unknown)."""
         if self.basis_months:
-            return [tuple(m) for m in self.basis_months]
-        return [(self.jalali_year, self.jalali_month, self.count_billet, self.count_bloom, self.count_slab)]
+            return [tuple(m) + ("",) * (6 - len(m)) for m in self.basis_months]
+        return [(self.jalali_year, self.jalali_month, self.count_billet, self.count_bloom,
+                 self.count_slab, "")]
 
     def basis_label(self) -> str:
-        """«تیر، مرداد و شهریور 1405» style list of the averaged months."""
-        names = [f"{PERSIAN_MONTH_NAMES.get(int(m), str(m))} {int(y)}" for y, m, *_ in self.months()]
-        if len(names) <= 1:
-            return names[0] if names else ""
+        """«تیر تا شهریور 1405» for consecutive months, else «اردیبهشت 1405 و تیر 1405»."""
+        ms = [(int(y), int(m)) for y, m, *_ in self.months()]
+        if not ms:
+            return ""
+        name = lambda y, m: f"{PERSIAN_MONTH_NAMES.get(m, str(m))} {y}"  # noqa: E731
+        if len(ms) == 1:
+            return name(*ms[0])
+        consecutive = all(
+            (b[0] * 12 + b[1]) - (a[0] * 12 + a[1]) == 1 for a, b in zip(ms, ms[1:])
+        )
+        if consecutive:
+            (y0, m0), (y1, m1) = ms[0], ms[-1]
+            first = PERSIAN_MONTH_NAMES.get(m0, str(m0)) if y0 == y1 else name(y0, m0)
+            return f"{first} تا {name(y1, m1)}"
+        names = [name(y, m) for y, m in ms]
         return "، ".join(names[:-1]) + " و " + names[-1]
+
+    def sources(self) -> list[str]:
+        return [m[5] for m in self.months() if m[5]]
 
 
 def fmt_count(v: float) -> str:
@@ -200,37 +229,67 @@ def fmt_count(v: float) -> str:
     return str(int(round(v))) if abs(v - round(v)) < 1e-9 else f"{v:.1f}"
 
 
+def previous_complete_months(year: int, month: int, n: int = BASIS_MONTHS) -> list[tuple[int, int]]:
+    """The n complete months BEFORE (year, month), oldest first.
+
+    Report generated on 1405/07/14 → [(1405, 4), (1405, 5), (1405, 6)].
+    """
+    out = []
+    y, m = int(year), int(month)
+    for _ in range(n):
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+        out.append((y, m))
+    return list(reversed(out))
+
+
+def basis_from_months(
+    used: list[tuple],
+    *,
+    report_date: str = "",
+    year: int | None = None,
+    month: int | None = None,
+) -> TundishMonthCounts | None:
+    """Average of ``used`` = [(year, month, billet, bloom, slab, source), …]."""
+    if not used:
+        return None
+    n = float(len(used))
+    ly, lm = int(used[-1][0]), int(used[-1][1])
+    return TundishMonthCounts(
+        jalali_year=int(year) if year is not None else ly,
+        jalali_month=int(month) if month is not None else lm,
+        count_billet=sum(float(u[2]) for u in used) / n,
+        count_bloom=sum(float(u[3]) for u in used) / n,
+        count_slab=sum(float(u[4]) for u in used) / n,
+        basis_months=tuple(tuple(u) for u in used),
+        report_date=report_date,
+    )
+
+
 def average_tundish_basis(
     year: int, month: int, rows: list[dict]
 ) -> TundishMonthCounts | None:
-    """Average of the stored monthly counts for the 3 months ending at (year, month).
+    """Average of the stored MANUAL monthly counts for the 3 months ending at (year, month).
 
-    ``rows`` = stored monthly_tundish_counts dicts. Missing months are skipped (the
-    header names exactly the months used). None when none of the 3 months exist.
+    ``rows`` = stored monthly_tundish_counts dicts (rows flagged ``exclude_from_basis``
+    are ignored). Missing months are skipped. None when none of the 3 months exist.
     """
     wanted = []
     y, m = int(year), int(month)
     for _ in range(BASIS_MONTHS):
         wanted.append((y, m))
         y, m = (y - 1, 12) if m == 1 else (y, m - 1)
-    by_key = {(int(r["jalali_year"]), int(r["jalali_month"])): r for r in rows or []}
+    by_key = {
+        (int(r["jalali_year"]), int(r["jalali_month"])): r
+        for r in rows or []
+        if not int(r.get("exclude_from_basis") or 0)
+    }
     used = [
         (yy, mm, float(by_key[(yy, mm)]["count_billet"]), float(by_key[(yy, mm)]["count_bloom"]),
-         float(by_key[(yy, mm)]["count_slab"]))
+         float(by_key[(yy, mm)]["count_slab"]), SOURCE_MANUAL)
         for yy, mm in reversed(wanted)
         if (yy, mm) in by_key
     ]
-    if not used:
-        return None
-    n = float(len(used))
-    return TundishMonthCounts(
-        jalali_year=int(year),
-        jalali_month=int(month),
-        count_billet=sum(u[2] for u in used) / n,
-        count_bloom=sum(u[3] for u in used) / n,
-        count_slab=sum(u[4] for u in used) / n,
-        basis_months=tuple(used),
-    )
+    return basis_from_months(used, year=year, month=month)
 
 
 def classify_origin(value: object) -> str | None:
@@ -589,7 +648,13 @@ def build_critical_items_rows(
         }
 
     def _r(v: float) -> int | float:
-        return round(v, 3) if abs(v - round(v)) > 1e-9 else int(round(v))
+        v = round(float(v), 1)
+        return int(v) if abs(v - round(v)) < 1e-9 else v
+
+    def _ceil(v: float) -> int:
+        import math
+
+        return int(math.ceil(float(v) - 1e-6)) if v > 0 else 0
 
     def _row(code: str, desc: str, unit: str, stock: float, m: dict[str, Any], cp, kind: str) -> dict[str, Any]:
         return {
@@ -602,7 +667,8 @@ def build_critical_items_rows(
             "واحد": unit,
             COL_MONTHLY: _r(m["monthly"]),
             COL_FORECAST: _r(m["forecast"]),
-            COL_NEED: _r(m["need"]),
+            # نیاز rounded UP (whole units to order; averages make it fractional)
+            COL_NEED: _ceil(m["need"]),
             COL_DAYS: int(round(m["days_cover"])) if m["days_cover"] > 0 else 0,
             "critical_point": cp,
             "filtered_stock": stock,
@@ -825,25 +891,35 @@ def report_title(
 
 
 def basis_counts_text(counts: TundishMonthCounts) -> str:
-    """«بیلت 70، بلوم 0، اسلب 100» of the (average) monthly basis."""
+    """«اسلب 70.7، بیلت 34، بلوم 0.3» of the (average) monthly basis."""
     return (
-        f"بیلت {fmt_count(counts.count_billet)}، بلوم {fmt_count(counts.count_bloom)}، "
-        f"اسلب {fmt_count(counts.count_slab)}"
+        f"اسلب {fmt_count(counts.count_slab)}، بیلت {fmt_count(counts.count_billet)}، "
+        f"بلوم {fmt_count(counts.count_bloom)}"
     )
+
+
+def basis_sources_text(counts: TundishMonthCounts) -> str:
+    srcs = []
+    for s in counts.sources():
+        lab = SOURCE_LABEL_FA.get(s, s)
+        if lab not in srcs:
+            srcs.append(lab)
+    return " + ".join(srcs)
 
 
 def horizon_header_note(counts: TundishMonthCounts) -> str:
     """Header note on every critical-items report (PDF, xlsx, bot, web)."""
-    months = counts.months()
-    n = len(months)
-    if n >= BASIS_MONTHS:
-        basis = f"ماه‌های مبنا: {counts.basis_label()}"
-    else:
-        basis = f"فقط {n} ماه از ۳ ماه گذشته ثبت شده است: {counts.basis_label()}"
+    n = len(counts.months())
+    src = basis_sources_text(counts)
+    src_txt = f"؛ منبع: {src}" if src else ""
+    short = (
+        f" — فقط {n} ماه از ۳ ماه کامل گذشته داده داشت" if n < BASIS_MONTHS else ""
+    )
+    date_txt = f" تاریخ گزارش: {counts.report_date}." if counts.report_date else ""
     return (
         "این جدول برای ۳ ماه آینده (اقلام داخلی) و ۶ ماه آینده (اقلام وارداتی) با توجه به "
-        f"میانگین تولید (تعداد تاندیش) ۳ ماه گذشته تهیه شده است ({basis})؛ "
-        f"میانگین ماهانه تاندیش: {basis_counts_text(counts)}."
+        f"میانگین تعداد تاندیش {counts.basis_label()} ({basis_counts_text(counts)} در ماه"
+        f"{src_txt}{short}) تهیه شده است.{date_txt}"
     )
 
 
@@ -921,13 +997,19 @@ def report_footer_notes(
 ) -> list[str]:
     """توضیحات footer."""
     months = "؛ ".join(
-        f"{PERSIAN_MONTH_NAMES.get(int(m), str(m))} {int(y)}: بیلت {fmt_count(b)}، "
-        f"بلوم {fmt_count(bl)}، اسلب {fmt_count(sl)}"
-        for y, m, b, bl, sl in counts.months()
+        f"{PERSIAN_MONTH_NAMES.get(int(m), str(m))} {int(y)}: اسلب {fmt_count(sl)}، "
+        f"بیلت {fmt_count(b)}، بلوم {fmt_count(bl)}"
+        + (f" ({SOURCE_LABEL_FA.get(src, src)})" if src else "")
+        for y, m, b, bl, sl, src in counts.months()
     )
     return [
         horizon_header_note(counts),
-        f"تعداد تاندیش ثبت‌شده (دستی) در ماه‌های مبنا — {months}.",
+        f"تعداد تاندیش ماه‌های مبنا (۳ ماه کامل قبل از تاریخ گزارش) — {months}.",
+        (
+            "لاگ توالی تاندیش ستون نوسازی/پچینگ ندارد؛ هر سکوئنس (ردیف لاگ) یک بار استفاده "
+            "از تاندیش شمرده شده است: «با نوسازی» = هر تاندیش نرخ نوسازی + پچینگ، "
+            "«بدون نوسازی» = فقط نرخ پچینگ."
+        ),
         (
             f"«{COL_MONTHLY}» = نرخ‌های هر کد × میانگین ماهانه تعداد تاندیش ماه‌های مبنا "
             "(+ سطح ریخته‌گری × مجموع تاندیش‌ها)."
