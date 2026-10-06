@@ -62,7 +62,7 @@ def split_item_code_desc(raw: object) -> tuple[str | None, str]:
 # 4 characters from the left, e.g. ``3787 0000 9002G`` → پیمانکار, while
 # ``3781 2164 1302R`` → شرکت. Since 1405-07-14 the rule is AUTHORITATIVE (user rule):
 # the importer, every منبع اصلی save and the analytics segment split derive the side from
-# the id; the file's «پیمانکار / شرکت» cell is only used when the id is too short, and a
+# the id; the file's «تأمین‌کننده» (شرکت/پیمانکار) cell is only used when the id is too short, and a
 # disagreeing cell is reported in the upload summary (``apply_id_segment_rule``).
 CONTRACTOR_ID_MARKER = "0000"
 CONTRACTOR_LABEL_FA = "پیمانکار"
@@ -90,7 +90,7 @@ def contractor_or_company_for_id(raw: object) -> str:
 
 
 def apply_id_segment_rule(df, *, id_col: str = "id", label_col: str = "contractor_or_company"):
-    """Overwrite «پیمانکار / شرکت» from شناسه مواد (rule above). Returns (frame, mismatches).
+    """Overwrite «تأمین‌کننده» (شرکت/پیمانکار) from شناسه مواد (rule above). Returns (frame, mismatches).
 
     ``mismatches`` lists rows whose NON-blank cell disagreed with the id rule:
     {"id", "category_code", "file_label", "rule_label"}. Blank cells are filled silently.
@@ -129,7 +129,7 @@ def segment_mismatch_note_fa(mismatches: list[dict], *, limit: int = 10) -> str:
     if not mismatches:
         return ""
     lines = [
-        f"\n⚠ «پیمانکار / شرکت» {len(mismatches)} ردیف با قاعده شناسه مواد (رقم ۵ تا ۸ = 0000 → پیمانکار) "
+        f"\n⚠ «تأمین‌کننده» {len(mismatches)} ردیف با قاعده شناسه مواد (رقم ۵ تا ۸ = 0000 → پیمانکار) "
         "مغایر بود و از روی شناسه اصلاح شد:"
     ]
     for m in mismatches[:limit]:

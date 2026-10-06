@@ -31,7 +31,9 @@
 <div class="card" id="critical-items">
   <h2>🚨 اقلام بحرانی نسوز تاندیش</h2>
   <p class="muted">
-    همان منطق ربات: نیاز ماهانه ≈ تعداد تاندیش × (نوسازی+پچینگ یا فقط پچینگ) + سطح ریخته‌گری.
+    همان منطق ربات: «میانگین مصرف ماهانه بر اساس ۳ ماه گذشته» = میانگین تعداد تاندیش ۳ ماه گذشته ×
+    (نوسازی+پچینگ یا فقط پچینگ) + سطح ریخته‌گری؛ «مصرف پیش‌بینی‌شده در افق» = میانگین ماهانه × افق
+    (داخلی ۳ ماه، وارداتی ۶ ماه)؛ «نیاز» = مصرف پیش‌بینی‌شده − موجودی، فقط اقلام با نیاز مثبت.
     نقش‌های مجاز: مالک، مدیر، کاردان مسئول.
   </p>
   <form method="post" action="/reports/critical-items/counts" class="form-grid">
@@ -62,6 +64,7 @@
       <button type="submit" class="btn">ذخیره تعداد تاندیش</button>
     </div>
   </form>
+  <p class="muted" style="margin-top:.75rem">مبنای ماه انتخاب‌شده: {{ basis_note }}</p>
   <form method="get" class="report-actions" style="margin-top:1rem">
     <input type="hidden" name="jalali_year" value="{{ critical_year }}">
     <input type="hidden" name="jalali_month" value="{{ critical_month }}">
@@ -78,7 +81,7 @@
     <button class="btn" formaction="/reports/critical-items" name="segment" value="contractor">گزارش جداگانه — اقلام پیمانکار (PDF)</button>
     <button class="btn" formaction="/reports/critical-items.xlsx">اکسل (شیت شرکت + شیت پیمانکار)</button>
   </form>
-  <p class="muted">تفکیک بر اساس ستون «پیمانکار / شرکت» منبع اصلی؛ گزارش اصلی فقط اقلام شرکت است و اقلام پیمانکار جدا می‌آید.
+  <p class="muted">تفکیک بر اساس ستون «تأمین‌کننده» منبع اصلی (شرکت/پیمانکار، از روی شناسه مواد)؛ گزارش اصلی فقط اقلام شرکت است و اقلام پیمانکار جدا می‌آید.
     «با نوسازی» = نرخ نوسازی + پچینگ (+ سطح ریخته‌گری)؛ «بدون نوسازی» = فقط پچینگ (+ سطح ریخته‌گری) — اقلامی که فقط نرخ نوسازی دارند حذف می‌شوند.</p>
   {% if recent_counts %}
   <p class="muted" style="margin-top:1rem">ثبت‌های اخیر:</p>

@@ -33,6 +33,13 @@ def _critical_context(db: Database, request: Request) -> dict:
     if month < 1 or month > 12:
         month = today.month
     counts = db.get_monthly_tundish_counts(year, month)
+    from analytics.critical_items import horizon_header_note
+    from services.critical_items_report import month_counts
+
+    basis = month_counts(db, year, month)
+    basis_note = horizon_header_note(basis) if basis is not None else (
+        "برای ۳ ماه منتهی به این ماه هیچ تعداد تاندیش ماهانه‌ای ثبت نشده است."
+    )
     recent = []
     for r in db.list_monthly_tundish_counts(limit=6):
         recent.append(
@@ -49,6 +56,7 @@ def _critical_context(db: Database, request: Request) -> dict:
         "critical_reno": normalize_reno_mode(request.query_params.get("renovation") or "with"),
         "reno_modes": [(m, RENO_LABEL_FA[m]) for m in RENO_MODES],
         "counts": counts,
+        "basis_note": basis_note,
         "recent_counts": recent,
         "month_names": [(n, PERSIAN_MONTH_NAMES[n]) for n in range(1, 13)],
     }
@@ -142,8 +150,8 @@ async def critical_items_pdf(
     err = res.error
     if not err and path is None:
         err = (
-            f"در این ماه قلم بحرانیِ «{SEGMENT_LABEL_FA[segment]}» "
-            f"({res.reno_label}) با نرخ و نیاز مثبت یافت نشد."
+            f"قلم بحرانیِ «{SEGMENT_LABEL_FA[segment]}» "
+            f"({res.reno_label}) با کسری (نیاز مثبت) در افق ۳/۶ ماه یافت نشد."
         )
     if err or not path:
         return RedirectResponse(

@@ -2278,6 +2278,8 @@ class BotApp:
             "۲) گزارش را بگیرید: PDF اصلی (فقط اقلام شرکت)، PDF جداگانه "
             "اقلام پیمانکار و اکسل با دو شیت جدا؛ پس از انتخاب ماه، حالت "
             "«با نوسازی» یا «بدون نوسازی» را انتخاب کنید\n"
+            "مبنا: میانگین تعداد تاندیش ۳ ماه گذشته؛ نیاز = مصرف پیش‌بینی‌شده در افق "
+            "(داخلی ۳ ماه، وارداتی ۶ ماه) − موجودی؛ فقط اقلام با نیاز مثبت.\n"
             "نقش‌های مجاز: مالک، مدیر، کاردان مسئول."
             f"{extra}",
             kb.critical_items_menu(),
@@ -2583,10 +2585,12 @@ class BotApp:
         self._clear_critical_pending(uid)
         menu = kb.critical_items_menu()
         label = format_month_year(year, month, named=True)
-        if not self.db.get_monthly_tundish_counts(year, month):
+        from services.critical_items_report import month_counts
+
+        if month_counts(self.db, year, month) is None:
             self._reply(
                 message,
-                f"برای {label} تعداد تاندیش ثبت نشده است.\n"
+                f"برای ۳ ماه منتهی به {label} هیچ تعداد تاندیش ماهانه‌ای ثبت نشده است.\n"
                 "ابتدا «ثبت تعداد تاندیش ماهانه» را انجام دهید.",
                 menu,
             )
@@ -2612,15 +2616,13 @@ class BotApp:
                 text = "منبع اصلی یافت نشد. ابتدا فایل منبع اصلی را آپلود کنید."
             elif text.startswith("قلمی"):
                 text = (
-                    "قلمی با نرخ نوسازی/پچینگ/سطح ریخته‌گری و نیاز مثبت "
-                    f"برای این تعداد تاندیش ({reno_label}) یافت نشد."
+                    "قلمی با کسری (نیاز مثبت) در افق ۳ ماه (داخلی) / ۶ ماه (وارداتی) "
+                    f"({reno_label}) یافت نشد.\n{res.header_note}"
                 )
             self._reply(message, text, menu)
             return
 
         chat_id = self._chat_id(message)
-        n_company = res.row_count(SEGMENT_COMPANY)
-        n_contractor = res.row_count(SEGMENT_CONTRACTOR)
         sent: list[str] = []
         try:
             for seg, tag in ((SEGMENT_COMPANY, "۱) گزارش اصلی — اقلام شرکت"),
@@ -2645,15 +2647,10 @@ class BotApp:
             logger.exception("critical items send failed")
             self._reply(message, f"خطا در ارسال گزارش اقلام بحرانی: {exc}", menu)
             return
-        lines = [f"گزارش اقلام بحرانی {label} — حالت «{reno_label}» ارسال شد."]
-        lines.append(
-            f"• شرکت (گزارش اصلی): {n_company} قلم"
-            + ("" if n_company else " — قلمی با نیاز مثبت نبود")
-        )
-        lines.append(
-            f"• پیمانکار (گزارش جداگانه): {n_contractor} قلم"
-            + ("" if n_contractor else " — قلمی با نیاز مثبت نبود")
-        )
+        from services.critical_items_report import critical_items_bot_lines
+
+        lines = [f"گزارش اقلام بحرانی {label} — حالت «{reno_label}» ارسال شد.", res.header_note]
+        lines.extend(critical_items_bot_lines(res))
         self._reply(message, "\n".join(lines), menu)
         if SEGMENT_COMPANY in sent:
             log_activity(self.db, user, "report_critical_items", renovation=reno_mode)

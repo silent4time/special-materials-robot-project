@@ -817,9 +817,12 @@ def _test_critical_items_report() -> None:
     assert "1203" in codes and "1638" in codes and "9999" not in codes
     row1203 = df.loc[df["کد چهاررقمی"].astype(str) == "1203"].iloc[0]
     assert int(row1203["موجودی"]) == 19000
-    assert int(row1203["نیاز"]) == 62000
-    # days_cover = 19000 / (62000/31) ≈ 9.5 → 9 or 10
-    assert int(row1203["حد تحمل(روز)"]) in {9, 10}
+    # monthly 62000; «سازنده» blank → domestic H=3 → forecast 186000; نیاز = 186000 − 19000
+    assert int(row1203["میانگین مصرف ماهانه بر اساس ۳ ماه گذشته"]) == 62000
+    assert int(row1203["مصرف پیش‌بینی‌شده در افق"]) == 186000
+    assert int(row1203["نیاز"]) == 167000
+    # days_cover = 19000 / (62000/30) ≈ 9.2 (30-day months)
+    assert int(row1203["حد تحمل(روز)"]) == 9
     assert "لیست اقلام بحرانی" in report_title(counts)
     assert "شهریور" in report_title(counts)
 

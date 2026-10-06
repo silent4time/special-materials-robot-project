@@ -106,9 +106,22 @@ COLUMN_ALIASES = {
     ],
     "contractor_or_company": [
         "contractor_or_company",
+        # Current user-facing header (renamed 1405/07/14) + legacy headers.
+        "تأمین‌کننده",
+        "تأمین کننده",
+        "تأمینکننده",
+        "تامین‌کننده",
+        "تامین کننده",
+        "تامینکننده",
+        "تأمین‌ کننده",
         "پیمانکار / شرکت",
         "پیمانکار/شرکت",
         "پیمانکار /شرکت",
+        "پیمانکار/ شرکت",
+        "شرکت / پیمانکار",
+        "شرکت/پیمانکار",
+        "شرکت /پیمانکار",
+        "شرکت/ پیمانکار",
     ],
     "origin": ["origin", "سازنده"],
     "shared": ["shared", "اشتراکی"],
@@ -168,7 +181,7 @@ class ExtractResult:
     extra_columns_dropped: list[str] = field(default_factory=list)
     filter_name: str = "standard_tundish"
     drop_reasons: dict[str, int] = field(default_factory=dict)
-    # «پیمانکار / شرکت» cells that disagreed with the id rule (excel.id_parse)
+    # «تأمین‌کننده» (شرکت/پیمانکار) cells that disagreed with the id rule (excel.id_parse)
     segment_mismatches: list[dict] = field(default_factory=list)
 
 

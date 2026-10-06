@@ -602,7 +602,7 @@ HEADER_FA = {
     "usage_location": "محل استفاده",
     "priority": "اولویت",
     "quantity": "موجودی",
-    "contractor_or_company": "پیمانکار / شرکت",
+    "contractor_or_company": "تأمین‌کننده",
     "origin": "سازنده",
     "shared": "اشتراکی",
     "critical_point": "نقطه بحرانی",

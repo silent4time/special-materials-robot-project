@@ -45,7 +45,7 @@ FIELD_LABELS_FA: dict[str, str] = {
     "keyword": "کلید واژه",
     "quantity": "موجودی",
     "priority": "اولویت",
-    "contractor_or_company": "پیمانکار / شرکت",
+    "contractor_or_company": "تأمین‌کننده",
     "origin": "سازنده",
     "shared": "اشتراکی",
     "critical_point": "نقطه بحرانی",

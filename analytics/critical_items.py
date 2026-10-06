@@ -1,6 +1,17 @@
-"""اقلام بحرانی — monthly tundish-count × منبع اصلی rates.
+"""اقلام بحرانی — forecast shortage over a lead-time horizon (shared by bot + web).
 
-Shared by Bale bot and web panel. Do not duplicate this logic elsewhere.
+DEFINITION (user, 1405-07-14 — t206u/t207u):
+  • monthly consumption (per 4-digit code) = rates × the AVERAGE monthly tundish
+    counts of the last 3 months (manual «تعداد تاندیش ماهانه» entries ending at the
+    selected month; fewer months → whatever exists, named in the header) — column
+    «میانگین مصرف ماهانه بر اساس ۳ ماه گذشته»;
+  • horizon H by origin (column «سازنده» / ``origin``): وارداتی → 6 months,
+    داخلی → 3 months; missing → داخلی (3) + flagged in the notes; a code whose live
+    rows mix both → 6 (conservative, flagged as «مختلط»);
+  • «مصرف پیش‌بینی‌شده در افق» = monthly × H;
+  • «نیاز» = max(0, horizon consumption − stock); a code is listed ONLY when
+    نیاز > 0 (domestic < 90 days, imported < 180 days of cover);
+  • حد تحمل (روز) = stock ÷ (monthly ÷ 30) — 30-day months (DAYS_PER_MONTH).
 
 MODES (نوسازی): the user picks one before generating.
   • «با نوسازی» (RENO_WITH, default / previous behavior): per-tundish material
@@ -60,7 +71,7 @@ from analytics.tundish import (
     NO_PRIORITY,
     _priority_values,
 )
-from bot.jalali import PERSIAN_MONTH_NAMES, days_in_jalali_month
+from bot.jalali import PERSIAN_MONTH_NAMES
 import config as _config
 from analytics.section_rules import apply_section_rate_attribution
 from excel.id_parse import is_contractor_material_id
@@ -117,32 +128,137 @@ RATE_COLS = (
     "casting_floor",
 )
 
+COL_ORIGIN = "مبدأ"
+COL_HORIZON = "افق (ماه)"
+COL_MONTHLY = "میانگین مصرف ماهانه بر اساس ۳ ماه گذشته"
+COL_FORECAST = "مصرف پیش‌بینی‌شده در افق"
+COL_NEED = "نیاز"
+COL_DAYS = "حد تحمل(روز)"
+
 REPORT_COLUMNS = [
     "کد چهاررقمی",
     "ردیف",
     "کد و شرح کالا",
+    COL_ORIGIN,
+    COL_HORIZON,
     "موجودی",
     "واحد",
-    "نیاز",
-    "حد تحمل(روز)",
+    COL_MONTHLY,
+    COL_FORECAST,
+    COL_NEED,
+    COL_DAYS,
 ]
+
+DAYS_PER_MONTH = 30
+BASIS_MONTHS = 3
+ORIGIN_IMPORTED = "imported"
+ORIGIN_DOMESTIC = "domestic"
+ORIGIN_LABEL_FA = {ORIGIN_IMPORTED: "وارداتی", ORIGIN_DOMESTIC: "داخلی"}
+HORIZON_MONTHS = {ORIGIN_IMPORTED: 6, ORIGIN_DOMESTIC: 3}
+ORIGIN_MIXED_FA = "مختلط (وارداتی+داخلی)"
+ORIGIN_MISSING_FA = "نامشخص (داخلی فرض شد)"
 
 
 @dataclass(frozen=True)
 class TundishMonthCounts:
+    """Monthly tundish basis. Counts may be 3-month AVERAGES (floats).
+
+    ``basis_months`` = ((year, month, billet, bloom, slab), …) actually averaged;
+    empty → a single month (jalali_year/jalali_month) as entered.
+    """
+
     jalali_year: int
     jalali_month: int
-    count_billet: int
-    count_bloom: int
-    count_slab: int
+    count_billet: float
+    count_bloom: float
+    count_slab: float
+    basis_months: tuple = ()
 
     @property
-    def total(self) -> int:
-        return int(self.count_billet) + int(self.count_bloom) + int(self.count_slab)
+    def total(self) -> float:
+        return float(self.count_billet) + float(self.count_bloom) + float(self.count_slab)
 
     def month_label(self) -> str:
         name = PERSIAN_MONTH_NAMES.get(int(self.jalali_month), str(self.jalali_month))
         return f"{name} {int(self.jalali_year)}"
+
+    def months(self) -> list[tuple]:
+        if self.basis_months:
+            return [tuple(m) for m in self.basis_months]
+        return [(self.jalali_year, self.jalali_month, self.count_billet, self.count_bloom, self.count_slab)]
+
+    def basis_label(self) -> str:
+        """«تیر، مرداد و شهریور 1405» style list of the averaged months."""
+        names = [f"{PERSIAN_MONTH_NAMES.get(int(m), str(m))} {int(y)}" for y, m, *_ in self.months()]
+        if len(names) <= 1:
+            return names[0] if names else ""
+        return "، ".join(names[:-1]) + " و " + names[-1]
+
+
+def fmt_count(v: float) -> str:
+    v = float(v)
+    return str(int(round(v))) if abs(v - round(v)) < 1e-9 else f"{v:.1f}"
+
+
+def average_tundish_basis(
+    year: int, month: int, rows: list[dict]
+) -> TundishMonthCounts | None:
+    """Average of the stored monthly counts for the 3 months ending at (year, month).
+
+    ``rows`` = stored monthly_tundish_counts dicts. Missing months are skipped (the
+    header names exactly the months used). None when none of the 3 months exist.
+    """
+    wanted = []
+    y, m = int(year), int(month)
+    for _ in range(BASIS_MONTHS):
+        wanted.append((y, m))
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    by_key = {(int(r["jalali_year"]), int(r["jalali_month"])): r for r in rows or []}
+    used = [
+        (yy, mm, float(by_key[(yy, mm)]["count_billet"]), float(by_key[(yy, mm)]["count_bloom"]),
+         float(by_key[(yy, mm)]["count_slab"]))
+        for yy, mm in reversed(wanted)
+        if (yy, mm) in by_key
+    ]
+    if not used:
+        return None
+    n = float(len(used))
+    return TundishMonthCounts(
+        jalali_year=int(year),
+        jalali_month=int(month),
+        count_billet=sum(u[2] for u in used) / n,
+        count_bloom=sum(u[3] for u in used) / n,
+        count_slab=sum(u[4] for u in used) / n,
+        basis_months=tuple(used),
+    )
+
+
+def classify_origin(value: object) -> str | None:
+    """وارداتی → imported, داخلی → domestic, else None (missing / unclear)."""
+    text = _norm_fa(value)
+    if not text:
+        return None
+    if "وارد" in text or "import" in text or "خارج" in text:
+        return ORIGIN_IMPORTED
+    if "داخل" in text or "domestic" in text or "local" in text:
+        return ORIGIN_DOMESTIC
+    return None
+
+
+def code_origin(group: pd.DataFrame) -> tuple[str, str, str]:
+    """(origin key used for H, Persian label, flag) for the live rows of one code/group.
+
+    flag: "" | "mixed" | "missing" (missing → domestic, H=3).
+    """
+    vals = [classify_origin(v) for v in (group["origin"] if "origin" in group.columns else [])]
+    known = {v for v in vals if v}
+    if not known:
+        return ORIGIN_DOMESTIC, ORIGIN_MISSING_FA, "missing"
+    if len(known) > 1:
+        return ORIGIN_IMPORTED, ORIGIN_MIXED_FA, "mixed"
+    key = next(iter(known))
+    # Blank «سازنده» on some sibling rows: the code's known origin applies.
+    return key, ORIGIN_LABEL_FA[key], ""
 
 
 def _norm_fa(value: object) -> str:
@@ -170,7 +286,7 @@ def classify_contractor_or_company(value: object, item_id: object = None) -> str
     """Map a row to SEGMENT_COMPANY/CONTRACTOR.
 
     شناسه مواد is authoritative (chars 5–8 == «0000» → پیمانکار, else شرکت); the
-    «پیمانکار / شرکت» cell is only a fallback when the id is too short / blank.
+    «تأمین‌کننده» (شرکت/پیمانکار) cell is only a fallback when the id is too short / blank.
     """
     flag = is_contractor_material_id(item_id)
     if flag is not None:
@@ -221,7 +337,7 @@ def filter_inventory_segment(
 
 
 def contractor_column_summary(inventory_df: pd.DataFrame | None) -> list[dict[str, Any]]:
-    """Distinct raw values of «پیمانکار / شرکت» with row counts and mapped segment."""
+    """Distinct raw values of «تأمین‌کننده» (شرکت/پیمانکار) with row counts and mapped segment."""
     if inventory_df is None or inventory_df.empty:
         return []
     raw = (
@@ -358,25 +474,33 @@ def build_critical_items_rows(
     segment: str | None = None,
     reno_mode: str = RENO_WITH,
     shared_mode: str | None = None,
+    include_covered: bool = False,
 ) -> pd.DataFrame:
     """One row per category_code with any renovation/patching/casting_floor > 0.
 
     ``segment`` = SEGMENT_COMPANY / SEGMENT_CONTRACTOR restricts the input rows
-    (stock, rates, critical-point totals) to that «پیمانکار / شرکت» side before
+    (stock, rates, critical-point totals) to that «تأمین‌کننده» (شرکت/پیمانکار) side before
     aggregation. None keeps every row (legacy / tests).
 
     ``reno_mode`` = RENO_WITH (renovation + patching) or RENO_WITHOUT (patching
     only; renovation-only categories drop out). casting_floor counts in both.
 
-    Columns match the sample: کد چهاررقمی | ردیف | کد و شرح کالا | موجودی |
-    واحد | نیاز | حد تحمل(روز). Extra columns (critical_point, filtered_stock,
-    below_threshold) help callers highlight without changing the printed set.
+    Printed columns = ``REPORT_COLUMNS`` (مبدأ, افق, موجودی, میانگین مصرف ماهانه بر
+    اساس ۳ ماه گذشته, مصرف پیش‌بینی‌شده در افق, نیاز, حد تحمل). Only codes with
+    نیاز = forecast − stock > 0 are returned. Extra columns (critical_point,
+    horizon_months, origin_key/flag, row_kind …) are for callers, not printed.
+    ``include_covered=True`` also returns rated codes whose stock covers the
+    horizon (نیاز 0) — for the «نقطه بحرانی» fill / audits, never for the report.
     """
     empty_cols = REPORT_COLUMNS + [
         "critical_point",
         "filtered_stock",
         "below_threshold",
         "daily_need",
+        "monthly_need",
+        "horizon_months",
+        "origin_key",
+        "origin_flag",
         "row_kind",
         "group_codes",
     ]
@@ -416,10 +540,8 @@ def build_critical_items_rows(
 
     reno_mode = normalize_reno_mode(reno_mode)
     use_cols = active_rate_cols(reno_mode)
-    days = int(days_in_month) if days_in_month is not None else days_in_jalali_month(
-        counts.jalali_year, counts.jalali_month
-    )
-    days = max(1, days)
+    # 30-day months for day conversions (horizon 90 / 180 days).
+    days = max(1, int(days_in_month) if days_in_month is not None else DAYS_PER_MONTH)
 
     per_code: dict[str, dict[str, Any]] = {}
     for code, group in work.groupby("category_code", sort=True):
@@ -437,34 +559,59 @@ def build_critical_items_rows(
     )
     grouped_codes = {code for g in groups for code in g["codes"]}
 
-    def _metrics(rates: dict[str, float], stock: float, cp: float | None) -> dict[str, Any] | None:
+    def _metrics(
+        rates: dict[str, float], stock: float, cp: float | None, origin: tuple[str, str, str]
+    ) -> dict[str, Any] | None:
         if sum(rates[c] for c in use_cols) <= 0 or sum(rates.values()) <= 0:
             return None
-        need = monthly_need_for_rates(counts=counts, reno_mode=reno_mode, **rates)
-        if need <= 0:
+        monthly = monthly_need_for_rates(counts=counts, reno_mode=reno_mode, **rates)
+        if monthly <= 0:
             return None
-        daily = need / float(days)
+        okey, olabel, oflag = origin
+        horizon = HORIZON_MONTHS[okey]
+        forecast = monthly * horizon
+        shortage = max(0.0, forecast - stock)
+        if shortage <= 1e-9 and not include_covered:
+            return None  # stock covers the horizon → not critical
+        daily = monthly / float(days)
         days_cover = stock / daily if daily > 0 else 0.0
         return {
-            "need": need,
+            "need": shortage,
+            "monthly": monthly,
+            "forecast": forecast,
+            "horizon": horizon,
+            "origin_key": okey,
+            "origin_label": olabel,
+            "origin_flag": oflag,
             "daily": daily,
             "days_cover": days_cover,
             "below": bool(cp is not None and stock <= float(cp)),
         }
+
+    def _r(v: float) -> int | float:
+        return round(v, 3) if abs(v - round(v)) > 1e-9 else int(round(v))
 
     def _row(code: str, desc: str, unit: str, stock: float, m: dict[str, Any], cp, kind: str) -> dict[str, Any]:
         return {
             "کد چهاررقمی": code,
             "ردیف": 0,
             "کد و شرح کالا": desc,
+            COL_ORIGIN: m["origin_label"],
+            COL_HORIZON: m["horizon"],
             "موجودی": stock,
             "واحد": unit,
-            "نیاز": round(m["need"], 3) if abs(m["need"] - round(m["need"])) > 1e-9 else int(round(m["need"])),
-            "حد تحمل(روز)": int(round(m["days_cover"])) if m["days_cover"] > 0 else 0,
+            COL_MONTHLY: _r(m["monthly"]),
+            COL_FORECAST: _r(m["forecast"]),
+            COL_NEED: _r(m["need"]),
+            COL_DAYS: int(round(m["days_cover"])) if m["days_cover"] > 0 else 0,
             "critical_point": cp,
             "filtered_stock": stock,
             "below_threshold": m["below"],
             "daily_need": m["daily"],
+            "monthly_need": m["monthly"],
+            "horizon_months": m["horizon"],
+            "origin_key": m["origin_key"],
+            "origin_flag": m["origin_flag"],
             "row_kind": kind,
             "group_codes": "",
         }
@@ -473,12 +620,12 @@ def build_critical_items_rows(
     for code, info in per_code.items():
         if code in grouped_codes:
             continue
-        m = _metrics(info["rates"], info["stock"], info["cp"])
+        m = _metrics(info["rates"], info["stock"], info["cp"], code_origin(info["group"]))
         if m is None:
             continue
         desc, unit = _pick_description(info["group"], use_cols)
         row = _row(code, desc, unit, info["stock"], m, info["cp"], ROW_ITEM)
-        blocks.append(((not m["below"], row["حد تحمل(روز)"], code), [row]))
+        blocks.append(((row[COL_DAYS], code), [row]))
 
     for g in groups:
         members = list(g["codes"])
@@ -495,7 +642,10 @@ def build_critical_items_rows(
         else:
             cp = float(sum(cps))
         stock = float(sum(per_code[k]["stock"] for k in members))
-        m = _metrics(rates, stock, cp)
+        # Group horizon from all member rows (members with different origins → «مختلط», H=6).
+        m = _metrics(
+            rates, stock, cp, code_origin(pd.concat([per_code[k]["group"] for k in members]))
+        )
         if m is None:
             continue
         descs = []
@@ -510,24 +660,33 @@ def build_critical_items_rows(
         rows_block = [head]
         for k, d in zip(members, descs):
             _d, u = _pick_description(per_code[k]["group"], use_cols)
+            mo = code_origin(per_code[k]["group"])
             rows_block.append(
                 {
                     "کد چهاررقمی": k,
                     "ردیف": "",
                     "کد و شرح کالا": d,
+                    COL_ORIGIN: mo[1],
+                    COL_HORIZON: "—",
                     "موجودی": per_code[k]["stock"],
                     "واحد": u or unit,
-                    "نیاز": SHARED_NEED_LABEL,
-                    "حد تحمل(روز)": "—",
+                    COL_MONTHLY: SHARED_NEED_LABEL,
+                    COL_FORECAST: "—",
+                    COL_NEED: SHARED_NEED_LABEL,
+                    COL_DAYS: "—",
                     "critical_point": None,
                     "filtered_stock": per_code[k]["stock"],
                     "below_threshold": None,
                     "daily_need": None,
+                    "monthly_need": None,
+                    "horizon_months": None,
+                    "origin_key": mo[0],
+                    "origin_flag": mo[2],
                     "row_kind": ROW_MEMBER,
                     "group_codes": label_codes,
                 }
             )
-        blocks.append(((not m["below"], head["حد تحمل(روز)"], members[0]), rows_block))
+        blocks.append(((head[COL_DAYS], members[0]), rows_block))
 
     if not blocks:
         return pd.DataFrame(columns=empty_cols)
@@ -541,7 +700,7 @@ def build_critical_items_rows(
                 row["ردیف"] = n
             rows.append(row)
     out = pd.DataFrame(rows)
-    for col in ("موجودی", "نیاز"):
+    for col in ("موجودی", COL_MONTHLY, COL_FORECAST, COL_NEED):
         out[col] = out[col].map(_pretty_num)
     return out
 
@@ -665,6 +824,29 @@ def report_title(
     return f"لیست اقلام بحرانی نسوز تاندیش{seg}{mode} ({counts.month_label()})"
 
 
+def basis_counts_text(counts: TundishMonthCounts) -> str:
+    """«بیلت 70، بلوم 0، اسلب 100» of the (average) monthly basis."""
+    return (
+        f"بیلت {fmt_count(counts.count_billet)}، بلوم {fmt_count(counts.count_bloom)}، "
+        f"اسلب {fmt_count(counts.count_slab)}"
+    )
+
+
+def horizon_header_note(counts: TundishMonthCounts) -> str:
+    """Header note on every critical-items report (PDF, xlsx, bot, web)."""
+    months = counts.months()
+    n = len(months)
+    if n >= BASIS_MONTHS:
+        basis = f"ماه‌های مبنا: {counts.basis_label()}"
+    else:
+        basis = f"فقط {n} ماه از ۳ ماه گذشته ثبت شده است: {counts.basis_label()}"
+    return (
+        "این جدول برای ۳ ماه آینده (اقلام داخلی) و ۶ ماه آینده (اقلام وارداتی) با توجه به "
+        f"میانگین تولید (تعداد تاندیش) ۳ ماه گذشته تهیه شده است ({basis})؛ "
+        f"میانگین ماهانه تاندیش: {basis_counts_text(counts)}."
+    )
+
+
 def report_subtitle(
     counts: TundishMonthCounts,
     *,
@@ -678,10 +860,7 @@ def report_subtitle(
         if reno_mode is not None
         else ""
     )
-    return (
-        f"{mode}{seg}{row_count} قلم | تعداد تاندیش — بیلت: {counts.count_billet}، "
-        f"بلوم: {counts.count_bloom}، اسلب: {counts.count_slab}"
-    )
+    return f"{mode}{seg}{row_count} قلم | {horizon_header_note(counts)}"
 
 
 def reno_mode_note(reno_mode: str | None = None) -> str:
@@ -689,7 +868,7 @@ def reno_mode_note(reno_mode: str | None = None) -> str:
         return (
             "حالت محاسبه: «بدون نوسازی» — مصرف هر تاندیش فقط نرخ پچینگ "
             "(بیلت/بلوم/اسلب) است و ستون‌های نوسازی نادیده گرفته می‌شوند؛ اقلامی که "
-            "نیازشان فقط از نوسازی است (نرخ پچینگ صفر، مثل «بتن 86 نوسازی») فهرست نمی‌شوند."
+            "مصرفشان فقط از نوسازی است (نرخ پچینگ صفر، مثل «بتن 86 نوسازی») فهرست نمی‌شوند."
         )
     return (
         "حالت محاسبه: «با نوسازی» — برای هر نوع تاندیش، مصرف هر تاندیش = "
@@ -697,15 +876,69 @@ def reno_mode_note(reno_mode: str | None = None) -> str:
     )
 
 
+def origin_audit(
+    inventory_df: pd.DataFrame | None, segment: str | None = None
+) -> dict[str, list[str]]:
+    """Codes (priority ≠ 0, not 1800) whose «سازنده/مبدأ» is missing or mixed."""
+    out: dict[str, list[str]] = {"missing": [], "mixed": []}
+    if inventory_df is None or inventory_df.empty or "category_code" not in inventory_df.columns:
+        return out
+    work = drop_priority_zero_rows(filter_inventory_segment(drop_surplus_rows(inventory_df), segment))
+    if work is None or work.empty:
+        return out
+    codes = work["category_code"].map(_norm_code)
+    rated = pd.Series(False, index=work.index)
+    for c in RATE_COLS:
+        if c in work.columns:
+            rated |= _num_series(work, c) > 0
+    for code in sorted(set(codes[rated]) - {""}):
+        _k, _l, flag = code_origin(work.loc[codes == code])
+        if flag:
+            out[flag].append(code)
+    return out
+
+
+def origin_notes(audit: dict[str, list[str]] | None) -> list[str]:
+    notes = []
+    if audit and audit.get("missing"):
+        notes.append(
+            "مبدأ (داخلی/وارداتی) برای این کدها در منبع اصلی خالی/نامشخص است و «داخلی» "
+            "(افق ۳ ماه) فرض شد — لطفاً ستون «سازنده» را تکمیل کنید: "
+            + "، ".join(audit["missing"])
+        )
+    if audit and audit.get("mixed"):
+        notes.append(
+            "کدهایی که ردیف داخلی و وارداتی هر دو دارند (مختلط) با افق ۶ ماه (محتاطانه) "
+            "حساب شدند: " + "، ".join(audit["mixed"])
+        )
+    return notes
+
+
 def report_footer_notes(
-    counts: TundishMonthCounts, reno_mode: str | None = None
+    counts: TundishMonthCounts,
+    reno_mode: str | None = None,
+    audit: dict[str, list[str]] | None = None,
 ) -> list[str]:
-    """توضیحات footer matching the sample sheet style."""
+    """توضیحات footer."""
+    months = "؛ ".join(
+        f"{PERSIAN_MONTH_NAMES.get(int(m), str(m))} {int(y)}: بیلت {fmt_count(b)}، "
+        f"بلوم {fmt_count(bl)}، اسلب {fmt_count(sl)}"
+        for y, m, b, bl, sl in counts.months()
+    )
     return [
+        horizon_header_note(counts),
+        f"تعداد تاندیش ثبت‌شده (دستی) در ماه‌های مبنا — {months}.",
         (
-            f"جهت ریخته‌گری بیلت تعداد {counts.count_billet} تاندیش، "
-            f"بلوم {counts.count_bloom} و اسلب {counts.count_slab} "
-            f"در نظر گرفته شده است."
+            f"«{COL_MONTHLY}» = نرخ‌های هر کد × میانگین ماهانه تعداد تاندیش ماه‌های مبنا "
+            "(+ سطح ریخته‌گری × مجموع تاندیش‌ها)."
+        ),
+        (
+            "افق: اقلام وارداتی ۶ ماه و اقلام داخلی ۳ ماه (زمان تأمین) — مبدأ از ستون "
+            f"«سازنده» منبع اصلی. «{COL_FORECAST}» = میانگین مصرف ماهانه × افق."
+        ),
+        (
+            f"«{COL_NEED}» = مصرف پیش‌بینی‌شده در افق − موجودی (اگر مثبت باشد). فقط اقلامی با "
+            "نیاز مثبت فهرست می‌شوند (داخلی: پوشش کمتر از ۹۰ روز، وارداتی: کمتر از ۱۸۰ روز)."
         ),
         reno_mode_note(reno_mode),
         (
@@ -713,15 +946,16 @@ def report_footer_notes(
             "(در هر دو حالت با/بدون نوسازی منظور می‌شود)."
         ),
         (
-            f"حد تحمل (روز) = موجودی واقعی ÷ (نیاز ماهانه ÷ "
-            f"{days_in_jalali_month(counts.jalali_year, counts.jalali_month)} روز)."
+            f"حد تحمل (روز) = موجودی واقعی ÷ (میانگین مصرف ماهانه ÷ {DAYS_PER_MONTH} روز) — "
+            "ماه‌ها ۳۰ روزه حساب شده‌اند."
         ),
+        *origin_notes(audit),
         (
-            "تجمیع بر اساس کد ۴ رقمی (در همان بخش شرکت/پیمانکار، فقط ردیف‌های با "
+            "تجمیع بر اساس کد ۴ رقمی (در همان بخش تأمین‌کننده شرکت/پیمانکار، فقط ردیف‌های با "
             "اولویت غیر صفر — اولویت ۰ یعنی استفاده نمی‌شود): موجودی = جمع موجودی همه "
             "ردیف‌های کد، با نرخ یا بدون نرخ و بدون هیچ حد حداقل (مثل زیر ۱۰۰)؛ نرخ‌های "
-            "مصرف، سطح ریخته‌گری و نقطه بحرانی مقدار واحدِ هر کد هستند (بیشینه ردیف‌ها، "
-            "یک بار) و بین ردیف‌ها جمع نمی‌شوند."
+            "مصرف و سطح ریخته‌گری مقدار واحدِ هر کد هستند (بیشینه ردیف‌ها، یک بار) و بین "
+            "ردیف‌ها جمع نمی‌شوند."
         ),
         (
             "خانه‌های ادغام‌شده (Merge) در فایل منبع اصلی: مقدار به همه ردیف‌های زیر "
@@ -736,12 +970,9 @@ def report_footer_notes(
             "حساب می‌شود (حتی اگر خانه ادغام‌شده نرخ را به ردیف بخش دیگر کپی کرده باشد)."
         ),
         (
-            "نقطه بحرانی: هشدار وقتی همین جمع موجودی کد به حد نقطه بحرانی دسته برسد."
-        ),
-        (
-            "تفکیک شرکت/پیمانکار از روی شناسه مواد: اگر رقم‌های ۵ تا ۸ شناسه «0000» "
+            "تأمین‌کننده (شرکت/پیمانکار) از روی شناسه مواد: اگر رقم‌های ۵ تا ۸ شناسه «0000» "
             "باشد پیمانکار، وگرنه شرکت. گزارش اصلی فقط اقلام «شرکت» است و اقلام "
-            "«پیمانکار» در گزارش/بخش جداگانه می‌آید؛ موجودی، نرخ و نقطه بحرانی هر بخش "
+            "«پیمانکار» در گزارش/بخش جداگانه می‌آید؛ موجودی و نرخ هر بخش "
             "فقط از ردیف‌های همان بخش محاسبه می‌شود. اقلام کد ۱۸۰۰ (مازاد) مصرفی حساب نمی‌شوند."
         ),
     ]
@@ -755,10 +986,11 @@ def shared_need_note(mode: str | None = None) -> str:
         )
     return (
         "نیاز مشترک گروه: وقتی یک نرخ مصرف در فایل روی چند کد ۴ رقمی ادغام شده "
-        "(مثل نازل‌های بیلت در اندازه‌های مختلف)، آن نرخ یک نیاز مشترک برای کل گروه "
+        "(مثل نازل‌های بیلت در اندازه‌های مختلف)، آن نرخ یک مصرف مشترک برای کل گروه "
         "است و فقط یک بار حساب می‌شود. ردیف گروه (کدها با «/») جمع موجودی کدها را "
-        "با نیاز مشترک مقایسه می‌کند و حد تحمل و وضعیت بحرانی از همین ردیف است؛ "
-        "زیر آن، هر کد با موجودی خودش و عبارت «نیاز مشترک گروه» می‌آید."
+        "با مصرف مشترک در افق مقایسه می‌کند (افق گروه: اگر مبدأ اعضا متفاوت باشد ۶ ماه) "
+        "و نیاز و حد تحمل از همین ردیف است؛ زیر آن، هر کد با موجودی خودش و عبارت "
+        "«نیاز مشترک گروه» می‌آید."
     )
 
 

@@ -63,7 +63,7 @@ def _inventory_frame() -> pd.DataFrame:
         # excluded from stock AND rates; qty<100 rows still count; an unrated
         # sibling row still adds stock → stock 40+60=100, need 10×1=10
         dict(category_code="1700", id="378177771111E", product_name="نازل الف",
-             keyword="نازل الف", quantity=40, priority=1, unit="No",
+             keyword="نازل الف", quantity=40, priority=1, unit="No", origin="وارداتی",
              contractor_or_company="شرکت", billet_renovation=0, billet_patching=1, **zero),
         dict(category_code="1700", id="378177772222F", product_name="نازل قدیمی",
              keyword="نازل قدیمی", quantity=5000, priority=0, unit="No",
@@ -82,6 +82,9 @@ def _inventory_frame() -> pd.DataFrame:
     ]
     df = pd.DataFrame(rows)
     df["critical_point"] = ""
+    # «سازنده»: 1203 company row domestic; 1700 imported (set above); others blank
+    # → flagged «نامشخص», domestic horizon 3 months.
+    df.loc[df["id"] == COMPANY_ID, "origin"] = "داخلی"
     return df
 
 
@@ -158,7 +161,8 @@ def test_id_rule_and_surplus(tmp: Path) -> None:
     # importer: file label disagrees → corrected + reported in ExtractResult
     raw = tmp / "id_rule_inv.xlsx"
     wb = Workbook(); ws = wb.active; ws.title = "ریز اطلاعات"
-    ws.append(["کد دسته بندی", "شناسه مواد", "شرح کالا", "موجودی", "اولویت", "پیمانکار / شرکت",
+    # t209u: header renamed «تأمین‌کننده» (old «پیمانکار / شرکت» still accepted — merge fixture)
+    ws.append(["کد دسته بندی", "شناسه مواد", "شرح کالا", "موجودی", "اولویت", "تأمین‌کننده",
                "نوسازی تاندیش بیلت", "واحد"])
     ws.append([1203, "378121641252L", "NANAREF C85", 33920, 3, "پیمانکار", 200, "Kg"])
     ws.append([1203, "378700009002G", "POLY 85", 6000, 1, "پیمانکار", 0, "Kg"])
@@ -173,36 +177,122 @@ def test_id_rule_and_surplus(tmp: Path) -> None:
 
     # rule B: 1800 with priority≠0 and a billet rate is still NOT a critical item / consumable
     cnt = TundishMonthCounts(1405, 6, 10, 0, 0)
-    crit = build_critical_items_rows(clean, cnt, segment="company")
+    crit = build_critical_items_rows(clean, cnt, segment="company", include_covered=True)
     codes = {str(c) for c in crit["کد چهاررقمی"]}
     assert "1203" in codes and "1800" not in codes, codes
     billet = section_inventory(clean, "billet")
     assert "1800" not in {str(c) for c in billet["category_code"]}, billet
-    print("id rule (authoritative + upload warning) + 1800 surplus exclusion OK")
+    # t209u label rename: every user-facing header says «تأمین‌کننده»
+    from excel.processor import _normalize_columns
+    from pdf.generator import HEADER_FA
+    from services.main_source import FIELD_LABELS_FA
+
+    assert FIELD_LABELS_FA["contractor_or_company"] == "تأمین‌کننده"
+    assert HEADER_FA["contractor_or_company"] == "تأمین‌کننده"
+    for hdr in ("تأمین‌کننده", "تامین کننده", "پیمانکار / شرکت", "شرکت/پیمانکار"):
+        assert list(_normalize_columns(pd.DataFrame(columns=[hdr])).columns) == ["contractor_or_company"], hdr
+    assert "تأمین‌کننده" in note
+    print("id rule (authoritative + upload warning) + 1800 surplus exclusion + «تأمین‌کننده» header OK")
 
 
 def test_aggregation_rule() -> None:
     """Per 4-digit code: drop priority 0, no qty<100 filter, stock over all rows."""
-    from analytics.critical_items import TundishMonthCounts, build_critical_items_rows
+    from analytics.critical_items import COL_MONTHLY, TundishMonthCounts, build_critical_items_rows
     from analytics.tundish import critical_point_category_totals
 
     inv = _inventory_frame()
     cnt = TundishMonthCounts(1405, 6, 10, 0, 0)
-    df = build_critical_items_rows(inv, cnt, segment="company")
-    got = {str(r["کد چهاررقمی"]): (int(r["موجودی"]), int(r["نیاز"])) for _, r in df.iterrows()}
+    df = build_critical_items_rows(inv, cnt, segment="company", include_covered=True)
+    got = {str(r["کد چهاررقمی"]): (int(r["موجودی"]), int(r[COL_MONTHLY])) for _, r in df.iterrows()}
     assert got["1700"] == (100, 10), got  # 40 (<100) + 60 (unrated); prio-0 5000/3 excluded
     assert got["1450"] == (50, 20), got  # qty 50 < 100 still counted
     assert "1800" not in got and "9999" not in got, got
     # explicit critical point: alert when summed stock (100) ≤ cp
     inv2 = inv.copy()
     inv2.loc[inv2["category_code"] == "1700", "critical_point"] = "150"
-    r = build_critical_items_rows(inv2, cnt, segment="company")
+    r = build_critical_items_rows(inv2, cnt, segment="company", include_covered=True)
     r = r.loc[r["کد چهاررقمی"].astype(str) == "1700"].iloc[0]
     assert bool(r["below_threshold"]) and float(r["filtered_stock"]) == 100.0
     tot = critical_point_category_totals(inv)
     tmap = dict(zip(tot["category_code"], tot["total_quantity"]))
     assert tmap["1700"] == 100.0 and tmap["1450"] == 50.0 and "1800" not in tmap, tmap
     print("aggregation rule (priority≠0, no <100 filter, all rows) OK")
+
+
+def test_horizon_rule() -> None:
+    """t206u/t207u: نیاز = max(0, monthly avg × H − stock); H 3 (داخلی) / 6 (وارداتی);
+    monthly = 3-month AVERAGE of manual tundish counts; only نیاز > 0 listed."""
+    from analytics.critical_items import (
+        COL_FORECAST,
+        COL_HORIZON,
+        COL_MONTHLY,
+        COL_NEED,
+        COL_ORIGIN,
+        REPORT_COLUMNS,
+        average_tundish_basis,
+        build_critical_items_rows,
+        horizon_header_note,
+        origin_audit,
+        origin_notes,
+    )
+
+    assert COL_MONTHLY == "میانگین مصرف ماهانه بر اساس ۳ ماه گذشته" and COL_MONTHLY in REPORT_COLUMNS
+    for c in ("مبدأ", "افق (ماه)", "مصرف پیش‌بینی‌شده در افق", "نیاز"):
+        assert c in REPORT_COLUMNS, c
+    stored = [
+        {"jalali_year": 1405, "jalali_month": m, "count_billet": b, "count_bloom": 0, "count_slab": s}
+        for m, b, s in ((3, 1000, 1000), (4, 40, 40), (5, 50, 50), (6, 60, 60))
+    ]
+    cnt = average_tundish_basis(1405, 6, stored)
+    assert (cnt.count_billet, cnt.count_slab) == (50, 50), cnt  # month 3 (1000) is outside
+    assert [m[1] for m in cnt.months()] == [4, 5, 6]
+    note = horizon_header_note(cnt)
+    assert "۳ ماه آینده" in note and "۶ ماه آینده" in note and "تیر 1405، مرداد 1405 و شهریور 1405" in note, note
+    one = average_tundish_basis(1405, 6, stored[-1:])
+    assert one.count_billet == 60 and "فقط 1 ماه" in horizon_header_note(one)
+    assert average_tundish_basis(1405, 10, stored) is None  # nothing in مهر..دی window
+    # year wrap: فروردین 1406 averages اسفند/بهمن 1405
+    wrap = average_tundish_basis(1406, 1, [
+        {"jalali_year": 1405, "jalali_month": 12, "count_billet": 10, "count_bloom": 0, "count_slab": 0},
+        {"jalali_year": 1406, "jalali_month": 1, "count_billet": 20, "count_bloom": 0, "count_slab": 0}])
+    assert wrap.count_billet == 15 and len(wrap.months()) == 2
+
+    def r(code, iid, qty, origin, rate=2):
+        return dict(category_code=code, id=iid, product_name=f"کالا {code}", keyword=f"قلم {code}",
+                    quantity=qty, priority=1, unit="No", contractor_or_company="شرکت", origin=origin,
+                    billet_renovation=0, billet_patching=rate, bloom_renovation=0, bloom_patching=0,
+                    slab_renovation=0, slab_patching=0, casting_floor=0, critical_point="")
+
+    inv = pd.DataFrame([
+        r("2001", "378120010012A", 250, "داخلی"),    # monthly 100 → 300 − 250 = 50 listed
+        r("2002", "378120020012B", 300, "داخلی"),    # 300 − 300 = 0 → NOT listed
+        r("2003", "378120030012C", 500, "وارداتی"),  # 600 − 500 = 100 listed (domestic would hide it)
+        r("2004", "378120040012D", 100, ""),         # missing origin → domestic 3, flagged
+        r("2005", "378120050012E", 100, "داخلی"),    # mixed origins → H 6
+        r("2005", "378120050022F", 0, "وارداتی"),
+        r("2006", "378120060012G", 10, "داخلی", rate=0),  # no rate → never
+    ])
+    cnt = average_tundish_basis(1405, 6, stored)
+    df = build_critical_items_rows(inv, cnt, segment="company")
+    rows = {str(x["کد چهاررقمی"]): x for _, x in df.iterrows()}
+    assert set(rows) == {"2001", "2003", "2004", "2005"}, set(rows)
+    a = rows["2001"]
+    assert (a[COL_ORIGIN], int(a[COL_HORIZON]), int(a[COL_MONTHLY]), int(a[COL_FORECAST]), int(a[COL_NEED])) == (
+        "داخلی", 3, 100, 300, 50), a.to_dict()
+    assert int(a["حد تحمل(روز)"]) == 75  # 250 / (100/30)
+    c = rows["2003"]
+    assert (c[COL_ORIGIN], int(c[COL_HORIZON]), int(c[COL_FORECAST]), int(c[COL_NEED])) == ("وارداتی", 6, 600, 100)
+    assert int(rows["2004"][COL_HORIZON]) == 3 and rows["2004"]["origin_flag"] == "missing"
+    assert int(rows["2005"][COL_HORIZON]) == 6 and int(rows["2005"][COL_NEED]) == 500
+    # most urgent first (fewest days of cover)
+    assert list(df["کد چهاررقمی"].astype(str)) == ["2004", "2005", "2001", "2003"], list(df["کد چهاررقمی"])
+    cov = build_critical_items_rows(inv, cnt, segment="company", include_covered=True)
+    assert int(cov.loc[cov["کد چهاررقمی"].astype(str) == "2002", COL_NEED].iloc[0]) == 0
+    audit = origin_audit(inv, "company")
+    assert audit == {"missing": ["2004"], "mixed": ["2005"]}, audit
+    notes = " ".join(origin_notes(audit))
+    assert "2004" in notes and "2005" in notes and "داخلی" in notes
+    print("horizon rule (3-month avg, H 3/6, نیاز>0 only, origin flags) OK")
 
 
 MERGE_HEADERS = [
@@ -265,6 +355,7 @@ def test_merged_cells(tmp: Path) -> None:
     import hashlib
 
     from analytics.critical_items import (
+        COL_MONTHLY,
         ROW_GROUP,
         ROW_MEMBER,
         SHARED_NEED_LABEL,
@@ -299,31 +390,31 @@ def test_merged_cells(tmp: Path) -> None:
     assert str(by_id["378190100012A"]["rate_group"]) in {"", "nan", "None"}
 
     cnt = TundishMonthCounts(1405, 6, 10, 0, 1)
-    co = build_critical_items_rows(inv, cnt, segment="company", shared_mode="pooled")
+    co = build_critical_items_rows(inv, cnt, segment="company", shared_mode="pooled", include_covered=True)
     rows = {str(r["کد چهاررقمی"]): r for _, r in co.iterrows()}
     # 1901: patching 5 once (not 5×3), stock 40+30 (p0 500 excluded), cp 80 → below
-    assert int(rows["1901"]["نیاز"]) == 50 and int(rows["1901"]["موجودی"]) == 70, rows["1901"]
+    assert int(rows["1901"][COL_MONTHLY]) == 50 and int(rows["1901"]["موجودی"]) == 70, rows["1901"]
     assert bool(rows["1901"]["below_threshold"])
     # 1902: merged stock counted once
-    assert int(rows["1902"]["موجودی"]) == 300 and int(rows["1902"]["نیاز"]) == 10
+    assert int(rows["1902"]["موجودی"]) == 300 and int(rows["1902"][COL_MONTHLY]) == 10
     # 1903/1904 pooled: one group row, need (6+6)×10 once, combined stock
     g = rows["1903/1904"]
-    assert g["row_kind"] == ROW_GROUP and int(g["نیاز"]) == 120 and int(g["موجودی"]) == 300, g
-    assert rows["1903"]["row_kind"] == ROW_MEMBER and rows["1903"]["نیاز"] == SHARED_NEED_LABEL
+    assert g["row_kind"] == ROW_GROUP and int(g[COL_MONTHLY]) == 120 and int(g["موجودی"]) == 300, g
+    assert rows["1903"]["row_kind"] == ROW_MEMBER and rows["1903"][COL_MONTHLY] == SHARED_NEED_LABEL
     assert int(rows["1903"]["موجودی"]) == 100 and int(rows["1904"]["موجودی"]) == 200
     pos = list(co["کد چهاررقمی"].astype(str))
     assert pos.index("1903/1904") + 1 == pos.index("1903") and pos.index("1904") == pos.index("1903") + 1
     assert group_row_indices(co) == [pos.index("1903/1904")]
     assert critical_item_count(co) == 4, co  # 1901, 1902, group, 1905 (members not counted)
     # 1905 company keeps the merged slab rate (cross-segment fill, no pooling)
-    assert int(rows["1905"]["نیاز"]) == 2 and int(rows["1905"]["موجودی"]) == 20
-    ct = build_critical_items_rows(inv, cnt, segment="contractor", shared_mode="pooled")
+    assert int(rows["1905"][COL_MONTHLY]) == 2 and int(rows["1905"]["موجودی"]) == 20
+    ct = build_critical_items_rows(inv, cnt, segment="contractor", shared_mode="pooled", include_covered=True)
     crow = ct.loc[ct["کد چهاررقمی"].astype(str) == "1905"].iloc[0]
-    assert int(crow["نیاز"]) == 2 and int(crow["موجودی"]) == 10, ct
+    assert int(crow[COL_MONTHLY]) == 2 and int(crow["موجودی"]) == 10, ct
     # alternative mode: every code gets the full rate separately
-    pc = build_critical_items_rows(inv, cnt, segment="company", shared_mode="per_code")
+    pc = build_critical_items_rows(inv, cnt, segment="company", shared_mode="per_code", include_covered=True)
     prow = {str(r["کد چهاررقمی"]): r for _, r in pc.iterrows()}
-    assert "1903/1904" not in prow and int(prow["1903"]["نیاز"]) == 120 and int(prow["1904"]["نیاز"]) == 120
+    assert "1903/1904" not in prow and int(prow["1903"][COL_MONTHLY]) == 120 and int(prow["1904"][COL_MONTHLY]) == 120
     assert critical_item_count(pc) == 5
     print("merged cells (fill, stock once, per-code max, pooled vs per_code, segments) OK")
 
@@ -332,7 +423,7 @@ def test_section_rules() -> None:
     """Code with شرکت + پیمانکار rows: billet=company, bloom=contractor, slab=
     contractor + company rows located «اسلب» (critical items + main goal)."""
     import services.main_goal_report as mg
-    from analytics.critical_items import TundishMonthCounts, build_critical_items_rows
+    from analytics.critical_items import COL_MONTHLY, TundishMonthCounts, build_critical_items_rows
     from analytics.section_rules import (
         apply_section_rate_attribution,
         codes_with_both_segments,
@@ -378,9 +469,9 @@ def test_section_rules() -> None:
         ("1938", "company", "slab_patching"),  # the بیلت-located company row
     }, dropped
     cnt = TundishMonthCounts(1405, 6, 10, 10, 10)
-    co = build_critical_items_rows(inv, cnt, segment="company")
-    ct = build_critical_items_rows(inv, cnt, segment="contractor")
-    need = lambda df, code: int(df.loc[df["کد چهاررقمی"].astype(str) == code, "نیاز"].iloc[0])
+    co = build_critical_items_rows(inv, cnt, segment="company", include_covered=True)
+    ct = build_critical_items_rows(inv, cnt, segment="contractor", include_covered=True)
+    need = lambda df, code: int(df.loc[df["کد چهاررقمی"].astype(str) == code, COL_MONTHLY].iloc[0])
     assert need(co, "1937") == 10 and need(ct, "1937") == 40  # billet 1×10 | bloom 4×10
     assert need(co, "1938") == 30 + 40 and need(ct, "1938") == 30  # slab 3×10 once + billet 4×10
     assert need(ct, "1939") == 50 and need(co, "1940") == 10
@@ -404,10 +495,12 @@ def _setup_db(tmp: Path):
     clean = inv_dir / "product_inventory.xlsx"
     _inventory_frame().to_excel(clean, index=False)
     db.save_extracted("901", None, "product_inventory", str(clean), str(clean), 5)
-    db.upsert_monthly_tundish_counts(
-        jalali_year=1405, jalali_month=6, count_billet=10, count_bloom=0,
-        count_slab=10, updated_by="901",  # 1203 پیمانکار is a slab row
-    )
+    # تیر/مرداد/شهریور → 3-month average billet 50, slab 50 (1203 پیمانکار is a slab row)
+    for m, n in ((4, 40), (5, 50), (6, 60)):
+        db.upsert_monthly_tundish_counts(
+            jalali_year=1405, jalali_month=m, count_billet=n, count_bloom=0,
+            count_slab=n, updated_by="901",
+        )
     # one ledger deduction on the company row: -100
     with db.connect() as conn:
         conn.execute(
@@ -444,17 +537,25 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     co_codes = list(co["کد چهاررقمی"].astype(str))
     ct_codes = list(ct["کد چهاررقمی"].astype(str))
     assert sorted(co_codes) == ["1203", "1450", "1451", "1700"], co_codes
+    from analytics.critical_items import COL_HORIZON, COL_MONTHLY, COL_NEED
+
     r1700 = co.loc[co["کد چهاررقمی"].astype(str) == "1700"].iloc[0]
-    assert int(r1700["موجودی"]) == 100 and int(r1700["نیاز"]) == 10, r1700.to_dict()
+    # 1700 imported: monthly 1×50, H 6 → forecast 300 − stock 100 = نیاز 200
+    assert int(r1700["موجودی"]) == 100 and int(r1700[COL_MONTHLY]) == 50, r1700.to_dict()
+    assert int(r1700[COL_HORIZON]) == 6 and int(r1700[COL_NEED]) == 200, r1700.to_dict()
     assert r1700["کد و شرح کالا"] == "نازل الف"
     assert sorted(ct_codes) == ["1203", "1655"], ct_codes
     r_co = co.loc[co["کد چهاررقمی"].astype(str) == "1203"].iloc[0]
     r_ct = ct.loc[ct["کد چهاررقمی"].astype(str) == "1203"].iloc[0]
-    # company: ledger applied once (1000-100=900, NOT 800); need = 10×20
+    # company: ledger applied once (1000-100=900, NOT 800); monthly = 20×50; H 3
     assert int(r_co["موجودی"]) == 900, r_co["موجودی"]
-    assert int(r_co["نیاز"]) == 200
-    # contractor: own stock/rates only
-    assert int(r_ct["موجودی"]) == 500 and int(r_ct["نیاز"]) == 100
+    assert int(r_co[COL_MONTHLY]) == 1000 and int(r_co[COL_NEED]) == 3000 - 900
+    assert int(r_co["حد تحمل(روز)"]) == 27  # 900 / (1000/30)
+    # contractor: own stock/rates only (slab 10×50; origin blank → domestic)
+    assert int(r_ct["موجودی"]) == 500 and int(r_ct[COL_MONTHLY]) == 500 and int(r_ct[COL_NEED]) == 1000
+    assert "تیر 1405، مرداد 1405 و شهریور 1405" in res.header_note, res.header_note
+    assert "1655" in res.audit["missing"] and "1700" not in res.audit["missing"], res.audit
+    assert "9999" not in res.audit["missing"], res.audit  # unrated codes are not audited
     assert "شرکت" in res.titles["company"] and "پیمانکار" in res.titles["contractor"]
     assert res.company_pdf and res.contractor_pdf and res.xlsx
     from openpyxl import load_workbook
@@ -466,6 +567,9 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     assert wb.sheetnames == ["اقلام بحرانی — شرکت", "اقلام بحرانی — پیمانکار", "توضیحات"], wb.sheetnames
     assert "با نوسازی" in _sheet_text(wb["اقلام بحرانی — شرکت"])
     assert "«با نوسازی»" in _sheet_text(wb["توضیحات"])
+    co_text = _sheet_text(wb["اقلام بحرانی — شرکت"])
+    assert COL_MONTHLY in co_text and "۳ ماه آینده" in co_text and "مصرف پیش‌بینی‌شده در افق" in co_text
+    assert "1655" in _sheet_text(wb["توضیحات"])  # missing-origin flag in notes
     for p in (res.company_pdf, res.contractor_pdf):
         _assert_portrait(p)
     assert "با_نوسازی" in res.company_pdf.name
@@ -482,10 +586,10 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     wct_codes = sorted(wct["کد چهاررقمی"].astype(str))
     assert wco_codes == ["1203", "1451", "1700"], wco_codes  # 1450 (reno only) dropped
     assert wct_codes == ["1203"], wct_codes  # 1655 (reno only) dropped
-    n = lambda df, code: int(df.loc[df["کد چهاررقمی"].astype(str) == code, "نیاز"].iloc[0])  # noqa: E731
-    assert n(wco, "1203") == 100 and n(wct, "1203") == 50  # 10 × patching
-    assert n(wco, "1451") == n(co, "1451") == 20  # casting floor (1 × 20 tundishes) same in both modes
-    assert n(wco, "1700") == 10  # patching of the priority≠0 row only
+    n = lambda df, code: int(df.loc[df["کد چهاررقمی"].astype(str) == code, COL_MONTHLY].iloc[0])  # noqa: E731
+    assert n(wco, "1203") == 500 and n(wct, "1203") == 250  # 50 × patching
+    assert n(wco, "1451") == n(co, "1451") == 100  # casting floor (1 × 100 tundishes) same in both modes
+    assert n(wco, "1700") == 50  # patching of the priority≠0 row only
     assert int(wco.loc[wco["کد چهاررقمی"].astype(str) == "1203", "موجودی"].iloc[0]) == 900
     assert "بدون نوسازی" in wo.titles["company"] and "بدون نوسازی" in wo.titles["contractor"]
     wb2 = load_workbook(wo.xlsx)
@@ -571,6 +675,8 @@ def test_bot_flow(tmp: Path) -> None:
     assert "با نوسازی" in client.docs[0][1] and "با نوسازی" in client.docs[2][1]
     assert "حالت «با نوسازی»" in client.msgs[-1], client.msgs[-1]
     assert "شرکت (گزارش اصلی): 4 قلم" in client.msgs[-1], client.msgs[-1]
+    assert "میانگین مصرف ماهانه بر اساس ۳ ماه گذشته: 1000" in client.msgs[-1], client.msgs[-1]
+    assert "۶ ماه آینده" in client.msgs[-1] and "مبدأ نامشخص" in client.msgs[-1]
     for p, _ in client.docs[:2]:
         _assert_portrait(p)
     # stale callback after the report → friendly alert, no new docs
@@ -644,8 +750,11 @@ def test_web(tmp: Path) -> dict:
         label = "بدون نوسازی" if reno == "without" else "با نوسازی"
         notes = " ".join(str(x.value) for row in wb["توضیحات"].iter_rows() for x in row if x.value)
         assert f"«{label}»" in notes, notes[:300]
-    r = c.get("/reports/critical-items?jalali_year=1405&jalali_month=7", follow_redirects=False)
+    # مهر has no entry but the 3-month window (مرداد..مهر) does → report; دی → nothing → redirect
+    r = c.get("/reports/critical-items?jalali_year=1405&jalali_month=10", follow_redirects=False)
     assert r.status_code == 303
+    r = c.get("/reports?jalali_year=1405&jalali_month=6")
+    assert "مبنای ماه انتخاب‌شده" in r.text and "تیر 1405" in r.text
     # other web PDF endpoints: PDF (portrait) or a redirect with a Persian error
     for ep in ("/reports/remaining-critical", "/reports/surplus", "/reports/user-activity",
                "/reports/monthly-summary"):
@@ -733,6 +842,7 @@ def main() -> int:
         test_classify()
         test_id_rule_and_surplus(tmp)
         test_aggregation_rule()
+        test_horizon_rule()
         pdfs: dict[str, Path] = {}
         for sub in ("svc", "bot", "web", "gen", "merge"):
             (tmp / sub).mkdir()
