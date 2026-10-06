@@ -140,6 +140,25 @@ async def upload_production_photo(
     out = mgp.store_production_from_ocr(
         db, path, user=user, source="web", filename=fname, ocr_result=ocr_res
     )
+    if out.tab_rejected:
+        # Furnace / undeterminable tab → alarm only, nothing stored (same rule as bot).
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        log_activity(db, user, "web_main_goal_production_photo_rejected_tab")
+        ev = ocr_res.tab_evidence or {}
+        detail = (
+            f"تشخیص: {mgocr.TAB_LABEL_FA.get(ocr_res.report_tab, ocr_res.report_tab)}"
+            + (f" | {ocr_res.period_label}" if ocr_res.period_label else "")
+            + (f" | نشانه‌های تب کوره: {'، '.join(ev.get('furnace') or [])}" if ev.get("furnace") else "")
+        )
+        return _page(
+            request, db, user,
+            error=out.error_fa or mgocr.ALARM_UNKNOWN_FA,
+            summary=detail,
+            status_code=400,
+        )
     preview = mgocr.result_summary_fa(ocr_res)
     if ocr_res.ocr_raw_text:
         preview += "\n\n— متن خام OCR —\n" + ocr_res.ocr_raw_text[:1500]

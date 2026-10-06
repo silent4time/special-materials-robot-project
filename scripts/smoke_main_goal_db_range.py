@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: normalized DB schema, furnace seed-shaped store, sequences, range report, gap warning."""
+"""Smoke: normalized DB schema, casting-tab store (furnace refused), sequences, range report, gap warning."""
 from __future__ import annotations
 
 import sys
@@ -41,16 +41,22 @@ def main() -> int:
         user = {"bale_user_id": "1", "display_name": "smoke", "role": "owner", "active": 1}
         db.upsert_user(1, "owner", display_name="smoke")
 
-        # furnace known values for 3 continuous months
-        for month, melts, pkg, sc, bbc in [
-            (4, 750, 123513760, 423, 327),
-            (5, 682, 112268212, 411, 273),
-            (6, 930, 150310814, 610, 320),
-        ]:
-            known = mgocr.from_known_furnace(
-                year=1405, month=month, melts=melts,
-                melt_weight_kg=pkg * 1.03, product_weight_kg=pkg,
-                slab_count=sc, bloom_billet_count=bbc, melts_per_day=24,
+        # furnace-tab values are refused (casting tab only)
+        fk = mgocr.from_known_furnace(
+            year=1405, month=4, melts=750, melt_weight_kg=127705938, product_weight_kg=123513760,
+            slab_count=423, bloom_billet_count=327,
+        )
+        ph = Path(tmp) / "f4.txt"
+        ph.write_text("seed", encoding="utf-8")
+        out = mgp.store_production_from_ocr(db, ph, user=user, source="smoke", ocr_result=fk, manual_corrected=True)
+        assert not out.ok and out.tab_rejected and db.list_main_goal_production() == []
+
+        # casting-tab known CCM values for 3 continuous months
+        for month, scale in [(4, 1.0), (5, 0.9), (6, 1.2)]:
+            known = mgocr.from_known_casting(
+                year=1405, month=month,
+                ccm_tons={1: 40000 * scale, 2: 30000 * scale, 3: 15000 * scale, 4: 14000 * scale, 5: 13000 * scale},
+                ccm_melts={1: 240, 2: 180, 3: 85, 4: 90, 5: 87},
             )
             placeholder = Path(tmp) / f"p{month}.txt"
             placeholder.write_text("seed", encoding="utf-8")
@@ -66,9 +72,8 @@ def main() -> int:
         assert mgh.consecutive_month_gap_warning(months) is None
 
         # introduce gap by adding month 8 only via production
-        known = mgocr.from_known_furnace(
-            year=1405, month=8, melts=100, melt_weight_kg=1e7, product_weight_kg=9e6,
-            slab_count=50, bloom_billet_count=50,
+        known = mgocr.from_known_casting(
+            year=1405, month=8, ccm_tons={1: 5000, 3: 2000, 4: 2000}, ccm_melts={1: 30, 3: 12, 4: 12},
         )
         placeholder = Path(tmp) / "p8.txt"
         placeholder.write_text("x", encoding="utf-8")
@@ -99,10 +104,12 @@ def main() -> int:
 
         # OCR text parse smoke with latin digits furnace-like
         sample = "1405/06/01 تا 1405/06/31\nتعداد 930\nوزن مذاب 156058238\nوزن محصول 150310814\nبه اسلب 610\nبلوم بیلت 320\nذوب در روز 30"
-        r = mgocr.parse_furnace_ocr_text(sample)
+        r = mgocr.parse_furnace_ocr_text(sample)  # audit-only parser still works
         assert r.ok and r.month == 6 and r.product_weight_kg == 150310814, (r.error_fa, r)
         assert r.melt_count == 930, (r.melt_count, r.notes)
-        print("furnace text OCR parse ok", r.period_label, r.total_tons)
+        g = mgocr.parse_production_ocr_text(sample)  # but the production gate rejects it
+        assert not g.ok and g.tab_rejected and g.report_tab == "furnace", g.tab_evidence
+        print("furnace text: audit parse ok, production gate rejects", r.period_label)
 
     print("SMOKE OK")
     return 0

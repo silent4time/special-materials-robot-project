@@ -24,6 +24,28 @@ from services import main_goal_report as mg
 HISTORY_DIR_NAME = mgh.HISTORY_DIR_NAME
 SECTIONS = mgh.SECTIONS
 
+# Production-row source status (main_goal_production.source_status)
+STATUS_VALID = "valid"
+STATUS_CASTING_UNVALIDATED = "casting_needs_validation"
+STATUS_FURNACE_PROVISIONAL = "furnace_tab_provisional"
+NEEDS_CASTING_NOTE_FA = "نیاز به عکس تب ریخته‌گری"
+PROVISIONAL_LABEL_FA = "⚠ موقت (تب کوره) — " + NEEDS_CASTING_NOTE_FA
+
+
+def is_provisional_production(row: dict | None) -> bool:
+    """Furnace-tab production rows are provisional: kept for audit, excluded from calcs."""
+    if not row:
+        return False
+    return (row.get("source_status") == STATUS_FURNACE_PROVISIONAL) or (
+        (row.get("report_tab") or "") == "furnace"
+    )
+
+
+def usable_production(db: Any, period_key: str) -> dict | None:
+    """Production row usable for section tonnage (None when absent or provisional)."""
+    row = db.get_main_goal_production_by_key(period_key)
+    return None if is_provisional_production(row) else row
+
 
 def period_sort_key(year: int | None, month: int | None, period_key: str) -> str:
     if year and month:
@@ -46,6 +68,7 @@ class InputStoreOutcome:
     summary: str = ""
     ocr_result: ocr.ProductionOCRResult | None = None
     needs_confirm: bool = False
+    tab_rejected: bool = False
     missing_parts: list[str] = field(default_factory=list)
 
 
@@ -61,6 +84,17 @@ def store_production_from_ocr(
 ) -> InputStoreOutcome:
     path = Path(image_path)
     result = ocr_result or ocr.ocr_production_image(path)
+    tab = (getattr(result, "report_tab", None) or "unknown").strip() or "unknown"
+    if getattr(result, "tab_rejected", False) or tab in {"furnace", "unknown"}:
+        # Only CASTING-tab photos (or manual/excel values) may be stored.
+        return InputStoreOutcome(
+            ok=False,
+            error_fa=result.error_fa
+            or (ocr.ALARM_FURNACE_FA if tab == "furnace" else ocr.ALARM_UNKNOWN_FA),
+            ocr_result=result,
+            tab_rejected=True,
+            summary="",
+        )
     if not result.period_key or result.total_tons <= 0:
         return InputStoreOutcome(
             ok=False,
@@ -78,6 +112,11 @@ def store_production_from_ocr(
     except OSError:
         dest = path
     now = tehran_now()
+    if tab == "casting" and getattr(result, "needs_validation", False) and not manual_corrected:
+        status = STATUS_CASTING_UNVALIDATED
+    else:
+        status = STATUS_VALID
+    sec_melts = result.section_melts() if hasattr(result, "section_melts") else {}
     row, replaced = db.upsert_main_goal_production(
         period_key=result.period_key,
         period_label=result.period_label,
@@ -94,7 +133,11 @@ def store_production_from_ocr(
         slab_count=getattr(result, "slab_count", None),
         bloom_billet_count=getattr(result, "bloom_billet_count", None),
         melts_per_day=getattr(result, "melts_per_day", None),
-        report_tab=getattr(result, "report_tab", None) or "furnace",
+        report_tab=tab,
+        source_status=status,
+        slab_melt_count=sec_melts.get("slab"),
+        bloom_melt_count=sec_melts.get("bloom"),
+        billet_melt_count=sec_melts.get("billet"),
         ccm1_tons=result.ccm_tons.get(1),
         ccm2_tons=result.ccm_tons.get(2),
         ccm3_tons=result.ccm_tons.get(3),
@@ -194,6 +237,10 @@ def store_production_from_excel(
         bloom_billet_count=None,
         melts_per_day=None,
         report_tab="excel",
+        source_status=STATUS_VALID,
+        slab_melt_count=None,
+        bloom_melt_count=None,
+        billet_melt_count=None,
         ccm1_tons=None,
         ccm2_tons=None,
         ccm3_tons=None,
@@ -366,8 +413,11 @@ def _extract_patch_renovate(path: Path) -> tuple[float | None, float | None]:
 # ---------------------------------------------------------------- completeness + sync
 def _missing_parts(db: Any, period_key: str) -> list[str]:
     missing = []
-    if not db.get_main_goal_production_by_key(period_key):
+    prod = db.get_main_goal_production_by_key(period_key)
+    if not prod:
         missing.append("آمار تولید")
+    elif is_provisional_production(prod):
+        missing.append(f"آمار تولید ({NEEDS_CASTING_NOTE_FA})")
     have = {c["section"] for c in db.list_main_goal_consumption(period_key=period_key)}
     for sec in SECTIONS:
         if sec not in have:
@@ -397,7 +447,17 @@ def month_completeness(db: Any) -> list[dict[str, Any]]:
                 "label": label,
                 "year": year,
                 "month": month,
-                "has_production": bool(prod),
+                "has_production": bool(prod) and not is_provisional_production(prod),
+                "production_provisional": is_provisional_production(prod),
+                "production_status": (prod or {}).get("source_status") or "",
+                "production_note": (
+                    PROVISIONAL_LABEL_FA if is_provisional_production(prod)
+                    else ("⚠ پارسر ریخته‌گری اعتبارسنجی نشده"
+                          if (prod or {}).get("source_status") == STATUS_CASTING_UNVALIDATED else "")
+                ),
+                "provisional_total_tons": (
+                    float((prod or {}).get("total_tons") or 0) if is_provisional_production(prod) else None
+                ),
                 "sections": {s: s in cons for s in SECTIONS},
                 "missing": missing,
                 "complete": not missing,
@@ -416,7 +476,7 @@ def sync_month_aggregate(
     inventory: pd.DataFrame | None = None,
 ) -> dict | None:
     """When production + 3 consumptions exist, refresh legacy main_goal_months row."""
-    prod = db.get_main_goal_production_by_key(period_key)
+    prod = usable_production(db, period_key)
     cons_rows = {c["section"]: c for c in db.list_main_goal_consumption(period_key=period_key)}
     if not prod or any(s not in cons_rows for s in SECTIONS):
         return None
@@ -558,9 +618,26 @@ def load_history_from_db(db: Any, *, include_incomplete: bool = True) -> list[mg
             if key in by_key:
                 out.append(by_key[key])
             continue
-        if not include_incomplete and (not prod or any(s not in cons_map for s in SECTIONS)):
+        if not include_incomplete and (
+            not prod or is_provisional_production(prod) or any(s not in cons_map for s in SECTIONS)
+        ):
             continue
-        if prod:
+        if prod and is_provisional_production(prod):
+            if not cons_map:
+                # furnace-tab only month: keep out of history until a casting photo arrives
+                continue
+            sample = next(iter(cons_map.values()))
+            production = mg.ProductionStats(
+                missing=[f"آمار تولید ({NEEDS_CASTING_NOTE_FA}) — ردیف تب کوره موقت است"]
+            )
+            year, month = prod.get("year") or sample.get("year"), prod.get("month") or sample.get("month")
+            label = prod.get("period_label") or sample.get("period_label") or key
+            sort_key = prod.get("sort_key") or period_sort_key(year, month, key)
+            actor = sample.get("actor_display_name") or ""
+            source = sample.get("source") or ""
+            jalali = sample.get("jalali_date") or ""
+            rid = int(sample["id"])
+        elif prod:
             production = _production_from_row(prod)
             year, month = prod.get("year"), prod.get("month")
             label = prod.get("period_label") or key
@@ -693,7 +770,10 @@ def filter_months_by_range(
     for mrec in selected:
         miss = []
         if mrec.production.total_tons <= 0:
-            miss.append("تولید")
+            if any(NEEDS_CASTING_NOTE_FA in x for x in (mrec.production.missing or [])):
+                miss.append(f"تولید — {NEEDS_CASTING_NOTE_FA}")
+            else:
+                miss.append("تولید")
         for sec in SECTIONS:
             if sec not in mrec.consumptions:
                 miss.append(mg.SECTION_LABEL_FA[sec])

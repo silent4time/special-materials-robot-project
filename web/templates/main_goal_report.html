@@ -4,7 +4,7 @@
 <div class="card">
   <h1>🎯 {{ title_fa }}</h1>
   <p class="muted">{{ subtitle_fa }} — {{ ccm_note }}</p>
-  <p class="muted">الف) ثبت ورودی در DB (عکس تولید تب کوره / اکسل سکوئنس تاندیش) ← ب) درخواست گزارش از سابقه با بازه ۳/۶/۱۲ ماهه یا سفارشی. سناریوها همچنان فعال‌اند.</p>
+  <p class="muted">الف) ثبت ورودی در DB (عکس تب «ریخته گری» آمار تولید / اکسل سکوئنس تاندیش) ← ب) درخواست گزارش از سابقه با بازه ۳/۶/۱۲ ماهه یا سفارشی. سناریوها همچنان فعال‌اند.</p>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err" style="white-space:pre-wrap">{{ error }}</div>{% endif %}
   {% if summary %}<pre class="muted" style="white-space:pre-wrap">{{ summary }}</pre>{% endif %}
@@ -27,7 +27,7 @@
     {% for c in completeness %}
       <tr>
         <td>{{ c.label }}</td>
-        <td>{{ "✅" if c.has_production else "—" }}</td>
+        <td>{% if c.production_provisional %}<span class="muted" title="ردیف تب کوره — در محاسبه تناژ بخش‌ها استفاده نمی‌شود">⚠ موقت (تب کوره) — نیاز به عکس تب ریخته‌گری{% if c.provisional_total_tons %}<br>{{ "{:,.0f}".format(c.provisional_total_tons) }} تن (فقط مرجع){% endif %}</span>{% elif c.has_production %}✅{% if c.production_note %} <span class="muted">{{ c.production_note }}</span>{% endif %}{% else %}—{% endif %}</td>
         <td>{{ "✅" if c.sections.billet else "—" }}</td>
         <td>{{ "✅" if c.sections.bloom else "—" }}</td>
         <td>{{ "✅" if c.sections.slab else "—" }}</td>
@@ -66,7 +66,8 @@
 
 <div class="card">
   <h2>📥 الف) ثبت ورودی</h2>
-  <h3>📸 عکس آمار تولید (تب کوره)</h3>
+  <h3>📸 عکس آمار تولید (فقط تب «ریخته گری»)</h3>
+  <p class="muted">فقط screenshot تب «ریخته گری» صفحه otsteel.ksc.ir/productionstatistics همراه با فیلتر تاریخ پذیرفته می‌شود؛ عکس تب «کوره» رد می‌شود. نگاشت: CCM1/2=اسلب، CCM3=بلوم، CCM4/5=بیلت. پارسر تب ریخته‌گری هنوز با عکس واقعی اعتبارسنجی نشده است.</p>
   <form method="post" action="/reports/main-goal/inputs/production-photo" enctype="multipart/form-data" class="form-grid">
     <label>تصویر screenshot
       <input type="file" name="photo" accept="image/*" required>

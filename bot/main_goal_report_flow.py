@@ -789,11 +789,19 @@ class MainGoalReportFlow:
             return
         self.clear(str(user["bale_user_id"]))
         overview = mgp.month_completeness(self.db)
-        lines = ["📥 ثبت ورودی گزارش هدف اصلی", "عکس تولید → OCR → DB | اکسل تاندیش → DB", ""]
+        lines = [
+            "📥 ثبت ورودی گزارش هدف اصلی",
+            "عکس تب «ریخته گری» آمار تولید → OCR → DB | اکسل تاندیش → DB",
+            "",
+        ]
         if overview:
             lines.append("وضعیت ماه‌ها:")
             for o in overview[-8:]:
                 status = "✅ کامل" if o["complete"] else ("⚠ ناقص: " + "، ".join(o["missing"]))
+                if o.get("production_provisional"):
+                    status += " (ردیف تب کوره موقت است و در محاسبه استفاده نمی‌شود)"
+                elif o.get("production_note"):
+                    status += f" | {o['production_note']}"
                 lines.append(f"• {o['label']}: {status}")
         else:
             lines.append("هنوز ورودی‌ای در DB نیست.")
@@ -807,7 +815,9 @@ class MainGoalReportFlow:
         self.pending[str(user["bale_user_id"])] = {"await": "prod_photo", "batch": batch}
         self._reply(
             message,
-            "📸 عکس آمار تولید ماهانه (screenshot از otsteel.ksc.ir یا مشابه) را بفرستید.\n"
+            "📸 عکس تب «ریخته گری» صفحه آمار تولید (otsteel.ksc.ir/productionstatistics) را "
+            "همراه با فیلتر تاریخ ماه بفرستید.\n"
+            "⛔ عکس تب «کوره» پذیرفته نمی‌شود.\n"
             "نگاشت CCM: ۱و۲=اسلب، ۳=بلوم، ۴و۵=بیلت.\n"
             "پس از OCR می‌توانید اعداد را دستی اصلاح کنید.",
             kb.main_goal_upload_menu(),
@@ -884,6 +894,20 @@ class MainGoalReportFlow:
             logger.exception("main_goal OCR store failed")
             self._reply(message, f"خطا در OCR/ذخیره: {exc}", kb.main_goal_menu())
             self.clear(uid)
+            return True
+        if out.tab_rejected:
+            # Wrong tab (furnace) or undeterminable → alarm, nothing stored; wait for a new photo.
+            ev = (out.ocr_result.tab_evidence if out.ocr_result else {}) or {}
+            logger.info("main_goal photo rejected: tab=%s evidence=%s", ev.get("decision"), ev)
+            try:
+                dest.unlink(missing_ok=True)
+            except OSError:
+                pass
+            p["await"] = "prod_photo"
+            p.pop("ocr_draft", None)
+            self.pending[uid] = p
+            self._reply(message, out.error_fa or mgocr.ALARM_UNKNOWN_FA, kb.main_goal_upload_menu())
+            log_activity(self.db, user, "main_goal_production_photo_rejected_tab")
             return True
         if not out.ok:
             # keep pending for correction

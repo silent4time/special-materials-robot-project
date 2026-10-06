@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""Seed Tir/Mordad/Shahrivar 1405 furnace production + available tundish sequences into bot.db.
+"""Seed available tundish sequences (Tir–Shahrivar 1405) into bot.db.
 
-Copies attachments into uploads/main_goal_history (gitignored) — does not commit JPGs.
-Uses known KPI ground truth (OCR may be noisy on Persian dashboards); stores OCR raw for audit.
+⚠ 1405-07: furnace-tab («کوره») production photos were the WRONG source — production must
+come only from the CASTING tab («ریخته گری»). Furnace production is no longer seeded
+(the store refuses report_tab="furnace"); previously seeded furnace rows are flagged
+``source_status='furnace_tab_provisional'`` by the DB migration and excluded from
+section-tonnage calcs until casting-tab photos replace them. Pass --furnace-audit to
+only OCR the old furnace screenshots and print the (rejected) tab decision.
 """
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from config import UPLOAD_DIR, ensure_dirs
+from config import ensure_dirs
 from db.models import Database
 from services import main_goal_persist as mgp
 from services import main_goal_production_ocr as mgocr
@@ -68,39 +71,18 @@ def main() -> int:
             pass
 
     print("Seeding as", user.get("bale_user_id"), user.get("role"))
-    for item in PROD:
+    if "--furnace-audit" not in sys.argv:
+        print("Furnace production seed disabled (casting tab only). Use --furnace-audit to inspect.")
+    for item in (PROD if "--furnace-audit" in sys.argv else []):
         jpg = item["jpg"]
         if not jpg.is_file():
             print("MISSING", jpg)
             continue
-        dest_dir = UPLOAD_DIR / "main_goal_history" / f"m_{item['year']:04d}-{item['month']:02d}"
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / "furnace_production.jpg"
-        shutil.copy2(jpg, dest)
-        # OCR for audit (may be weak on Persian UI)
-        try:
-            ocr_res = mgocr.ocr_production_image(dest)
-            raw = ocr_res.ocr_raw_text
-            conf = ocr_res.ocr_confidence
-            print(f"OCR {item['month']}: ok={ocr_res.ok} conf={conf} period={ocr_res.period_label}")
-        except Exception as exc:
-            raw, conf = f"OCR error: {exc}", None
-            print("OCR failed", exc)
-        known = mgocr.from_known_furnace(
-            year=item["year"], month=item["month"],
-            melts=item["melts"], melt_weight_kg=item["melt_kg"],
-            product_weight_kg=item["product_kg"],
-            slab_count=item["slab_c"], bloom_billet_count=item["bb_c"],
-            melts_per_day=item["mpd"],
-            ocr_raw_text=raw or "", ocr_confidence=conf,
+        ocr_res = mgocr.ocr_production_image(jpg)
+        print(
+            f"furnace audit {item['year']}/{item['month']:02d}: tab={ocr_res.report_tab} "
+            f"rejected={ocr_res.tab_rejected} evidence={ocr_res.tab_evidence.get('furnace')}"
         )
-        known.notes.append("seed: ground-truth KPIs from furnace screenshot (OCR stored for audit)")
-        out = mgp.store_production_from_ocr(
-            db, dest, user=user, source="seed", filename=dest.name,
-            ocr_result=known, manual_corrected=True,
-        )
-        print(out.summary)
-        print("  missing:", out.missing_parts)
 
     for path, section in SEQ_FILES:
         if not path.is_file():

@@ -38,6 +38,8 @@ ACTION_PHRASES: dict[str, str] = {
     "report_main_goal_target": "سناریو تناژ هدف (گزارش هدف اصلی) را گرفت",
     "report_main_goal_forecast": "سناریو پیش‌بینی (گزارش هدف اصلی) را گرفت",
     "web_main_goal_store_month": "فایل‌های ماهانهٔ گزارش هدف اصلی را در وب ثبت کرد",
+    "main_goal_production_photo_rejected_tab": "عکس تولید غیر از تب ریخته‌گری فرستاد (رد شد)",
+    "web_main_goal_production_photo_rejected_tab": "در وب عکس تولید غیر از تب ریخته‌گری فرستاد (رد شد)",
     "settings_reminders": "تنظیمات یادآور گزارش‌های الزامی را تغییر داد",
     "reminder_send_now": "یادآور گزارش‌های الزامی را دستی ارسال کرد",
     "critical_tundish_counts_saved": "تعداد تاندیش ماهانه اقلام بحرانی را ثبت کرد",

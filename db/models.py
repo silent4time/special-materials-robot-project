@@ -410,6 +410,10 @@ class Database:
                     bloom_billet_count REAL,
                     melts_per_day REAL,
                     report_tab TEXT,
+                    source_status TEXT,
+                    slab_melt_count REAL,
+                    bloom_melt_count REAL,
+                    billet_melt_count REAL,
                     ccm1_tons REAL,
                     ccm2_tons REAL,
                     ccm3_tons REAL,
@@ -600,6 +604,10 @@ class Database:
             ("main_goal_production", "bloom_billet_count", "REAL"),
             ("main_goal_production", "melts_per_day", "REAL"),
             ("main_goal_production", "report_tab", "TEXT"),
+            ("main_goal_production", "source_status", "TEXT"),
+            ("main_goal_production", "slab_melt_count", "REAL"),
+            ("main_goal_production", "bloom_melt_count", "REAL"),
+            ("main_goal_production", "billet_melt_count", "REAL"),
         ]
         for table, column, coltype in additions:
             try:
@@ -615,6 +623,20 @@ class Database:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
             except sqlite3.OperationalError:
                 pass
+        # Production photos must come from the CASTING tab only (user decision 1405-07).
+        # Legacy furnace-tab rows are kept for audit but flagged provisional and
+        # excluded from section-tonnage calculations (see services.main_goal_persist).
+        try:
+            conn.execute(
+                """
+                UPDATE main_goal_production
+                SET source_status = 'furnace_tab_provisional'
+                WHERE report_tab = 'furnace'
+                  AND COALESCE(source_status, '') <> 'furnace_tab_provisional'
+                """
+            )
+        except sqlite3.OperationalError:
+            pass
         try:
             conn.execute(
                 """
@@ -2824,7 +2846,8 @@ class Database:
                 "period_label", "year", "month", "sort_key",
                 "slab_tons", "bloom_tons", "billet_tons", "total_tons", "melt_count",
                 "melt_weight_kg", "product_weight_kg", "slab_count", "bloom_billet_count",
-                "melts_per_day", "report_tab",
+                "melts_per_day", "report_tab", "source_status",
+                "slab_melt_count", "bloom_melt_count", "billet_melt_count",
                 "ccm1_tons", "ccm2_tons", "ccm3_tons", "ccm4_tons", "ccm5_tons",
                 "source_type", "source_path", "source_filename",
                 "ocr_raw_text", "ocr_confidence", "ocr_fields_json", "manual_corrected",

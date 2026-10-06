@@ -132,7 +132,8 @@ python scripts/seed_real_samples.py
 منو: **گزارش‌ها / تحلیل تاندیش** → **🎯 گزارش هدف اصلی** (مالک / مدیر / کاردان مسئول). وب: `/reports/main-goal`.
 
 ### الف) ثبت ورودی در DB
-- **📸 عکس آمار تولید** (تب کوره otsteel.ksc.ir): OCR + ذخیره نرمال‌شده در `main_goal_production` (وزن مذاب/محصول بر حسب kg→ton، تعداد به اسلب و بلوم/بیلت، ذوب). بدون گزارش ریخته‌گری، تناژ بلوم و بیلت جدا نمی‌شود (بلوم‌بیلت در ستون بلوم).
+- **📸 عکس آمار تولید** — فقط تب «ریخته گری» صفحه otsteel.ksc.ir/productionstatistics. سرویس مشترک `services/main_goal_production_ocr.py` تب را تشخیص می‌دهد (`detect_report_tab`): عکس تب «کوره» (سرستون «شماره کوره»، «تعداد به اسلب»، «تعداد به بلوم بیلت»، نمودار «به تفکیک کوره ها») یا تب نامشخص در ربات و وب **رد** می‌شود، چیزی ذخیره نمی‌شود و هشدار فارسی نمایش داده می‌شود. تب ریخته‌گری: ردیف/ستون CCM → تناژ بخش (اسلب=CCM1+2، بلوم=CCM3، بیلت=CCM4+5) و تعداد ذوب هر بخش در `main_goal_production` (`ccm*_tons`، `slab/bloom/billet_melt_count`). ⚠ چیدمان واقعی تب ریخته‌گری هنوز دیده نشده؛ ردیف‌ها با `source_status='casting_needs_validation'` ذخیره می‌شوند تا با عکس واقعی اعتبارسنجی شود.
+- ردیف‌های قدیمی تب کوره (بذر تیر/مرداد/شهریور ۱۴۰۵) حذف نشده‌اند: مهاجرت DB آن‌ها را `source_status='furnace_tab_provisional'` علامت می‌زند، از محاسبات تناژ بخش‌ها حذف می‌شوند و در UI با «نیاز به عکس تب ریخته‌گری» نمایش داده می‌شوند؛ با ثبت عکس تب ریخته‌گری همان ماه جایگزین می‌شوند.
 - **📤 اکسل سکوئنس تاندیش** (لاگ بعد از ریخته‌گری): ردیف‌ها در `main_goal_tundish_sequences`؛ تجمیع ماهانه (تعداد سکوئنس=تاندیش، جمع ذوب، تعویض شرود/نازل) در `main_goal_consumption`.
 - اصلاح دستی تولید در ربات/وب اگر OCR فیلدی را از دست بدهد.
 - آپلود ۴ فایل Excel یک‌جا (قدیمی) همچنان نرمال‌سازی می‌کند.
@@ -145,7 +146,7 @@ python scripts/seed_real_samples.py
 هشدار «کمتر از ۳ ماه» حذف شد. فقط وقتی در سری ماه‌های موجود در DB **وقفه** باشد (مثلاً تیر و شهریور بدون مرداد) هشدار می‌آید.
 
 جداول: `main_goal_production`, `main_goal_consumption` (+ materials), `main_goal_tundish_sequences`, به‌علاوه `main_goal_months` / `main_goal_reports`.
-تست: `python scripts/smoke_main_goal_db_range.py` ؛ بذر نمونه: `python scripts/seed_main_goal_furnace.py`.
+تست: `python scripts/smoke_main_goal_db_range.py` و `python scripts/smoke_production_tab.py` (عکس‌های تب کوره از `MG_FURNACE_TEST_IMAGES` باید رد شوند) ؛ بذر سکوئنس: `python scripts/seed_main_goal_furnace.py` (بذر تولید تب کوره غیرفعال است).
 
 ## یادآور گزارش‌های ورودی الزامی
 
