@@ -611,8 +611,6 @@ def forecast(
 # requests (it is not the highest priority). 1 is highest, then 2, 3, ...
 # A blank cell is stored as 1 on upload.
 NO_PRIORITY = 0
-# Critical-point aggregation threshold (see critical_point_category_totals).
-CRITICAL_POINT_MIN_QTY = 100.0
 
 
 def _ana_key(value: object) -> str:
@@ -706,12 +704,10 @@ def drop_priority_zero_materials(
 def critical_point_category_totals(inventory_df: pd.DataFrame | None) -> pd.DataFrame:
     """Per category_code stock total for critical-point / اقلام بحرانی.
 
-    Rule (spec): sum quantity over rows with the same کد دسته بندی, EXCLUDING
-    rows with quantity < 100 OR priority 0. Returns category_code,
-    total_quantity, row_count.
-
-    Used by ``analytics.critical_items`` for threshold highlighting; display
-    stock in the critical-items report is the unfiltered real sum.
+    Rule: sum quantity over ALL rows with the same کد دسته بندی EXCEPT rows
+    with priority 0 (unused). There is no minimum-quantity threshold (the old
+    «quantity < 100» exclusion was removed). Returns category_code,
+    total_quantity, row_count. Same rule as stock in ``analytics.critical_items``.
     """
     cols = ["category_code", "total_quantity", "row_count"]
     if (
@@ -728,9 +724,7 @@ def critical_point_category_totals(inventory_df: pd.DataFrame | None) -> pd.Data
         if "priority" in work.columns
         else pd.Series(1, index=work.index)
     )
-    keep = work["_qty"].notna() & (work["_qty"] >= CRITICAL_POINT_MIN_QTY) & (
-        prio != float(NO_PRIORITY)
-    )
+    keep = work["_qty"].notna() & (prio != float(NO_PRIORITY))
     work = work.loc[keep]
     work["category_code"] = work["category_code"].map(_ana_key)
     work = work.loc[work["category_code"] != ""]

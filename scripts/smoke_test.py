@@ -622,10 +622,10 @@ def _test_casting_floor_priority_rules() -> None:
     sug = suggest_requests(rates, rem, 5, inventory_df=inv)
     assert list(sug["material_name"]) == ["A1 - ماده الف"], sug
 
-    # Critical totals: same category, skip qty < 100 OR priority 0
+    # Critical totals: same category, skip ONLY priority 0 (no qty < 100 rule)
     tot = critical_point_category_totals(inv)
     got = dict(zip(tot["category_code"], tot["total_quantity"]))
-    assert got == {"1203": 500.0, "1207": 100.0}, got
+    assert got == {"1203": 550.0, "1207": 100.0}, got
 
     # Only «ریز اطلاعات» survives in a saved workbook
     with tempfile.TemporaryDirectory() as td:

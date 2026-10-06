@@ -19,6 +19,16 @@ rows form a separate report/section. Blank or unrecognized values fall back to
 the material-id rule (``excel.id_parse.is_contractor_material_id``: 2nd group of
 four chars == «0000» → پیمانکار); still unknown → شرکت.
 
+AGGREGATION (per 4-digit کد دسته‌بندی, within one segment):
+  • rows with اولویت 0 («بدون اولویت» = unused) are dropped first (blank → 1);
+  • NO quantity threshold — rows with موجودی < 100 (or 0) are included;
+  • موجودی = sum of quantity over ALL remaining rows of the code, whether or
+    not that row has a consumption rate (e.g. 1450 بتن ملات: the rated row has
+    0 stock but sibling rows hold the stock);
+  • rates (renovation/patching/casting_floor) are summed over the same rows;
+    a code is listed when its active-mode rates give need > 0;
+  • نقطه بحرانی = max critical_point of those rows; alert when موجودی ≤ it.
+
 ASSUMPTION (casting_floor): the سطح ریخته گری rate is treated as per-tundish
 material multiplied by (count_billet + count_bloom + count_slab). Refine when
 daily casting-floor logs exist.
@@ -31,11 +41,8 @@ from typing import Any
 import pandas as pd
 
 from analytics.tundish import (
-    CRITICAL_POINT_MIN_QTY,
     NO_PRIORITY,
-    _ana_key,
     _priority_values,
-    critical_point_category_totals,
 )
 from bot.jalali import PERSIAN_MONTH_NAMES, days_in_jalali_month
 from excel.id_parse import is_contractor_material_id
@@ -235,6 +242,14 @@ def _pick_description(
     return desc, unit
 
 
+def drop_priority_zero_rows(inventory_df: pd.DataFrame) -> pd.DataFrame:
+    """Rows whose اولویت ≠ 0 (blank counts as 1). No quantity filter."""
+    if inventory_df is None or inventory_df.empty or "priority" not in inventory_df.columns:
+        return inventory_df
+    prio = _priority_values(inventory_df["priority"])
+    return inventory_df.loc[prio != float(NO_PRIORITY)].copy()
+
+
 def _real_stock(group: pd.DataFrame) -> float:
     return float(_num_series(group, "quantity").sum())
 
@@ -316,6 +331,11 @@ def build_critical_items_rows(
     inventory_df = filter_inventory_segment(inventory_df, segment)
     if inventory_df is None or inventory_df.empty:
         return pd.DataFrame(columns=empty_cols)
+    # اولویت 0 = unused → excluded from stock, rates and critical point.
+    # (No quantity threshold: rows with موجودی < 100 are kept.)
+    inventory_df = drop_priority_zero_rows(inventory_df)
+    if inventory_df.empty:
+        return pd.DataFrame(columns=empty_cols)
 
     work = inventory_df.copy()
     work["category_code"] = work["category_code"].map(
@@ -332,25 +352,15 @@ def build_critical_items_rows(
     for c in RATE_COLS:
         work[c] = _num_series(work, c)
 
-    # Categories with any positive rate on any row
+    # A code qualifies when the active-mode rates summed over its rows are > 0;
+    # stock still sums EVERY (non-priority-0) row of the code, rated or not.
     reno_mode = normalize_reno_mode(reno_mode)
     use_cols = active_rate_cols(reno_mode)
-    rate_any = work[list(use_cols)].sum(axis=1) > 0
-    work = work.loc[rate_any]
-    if work.empty:
-        return pd.DataFrame(columns=empty_cols)
 
     days = int(days_in_month) if days_in_month is not None else days_in_jalali_month(
         counts.jalali_year, counts.jalali_month
     )
     days = max(1, days)
-
-    # Filtered stock per category (Word critical-point aggregation rule)
-    filtered = critical_point_category_totals(inventory_df)
-    filtered_map = {
-        _ana_key(r["category_code"]): float(r["total_quantity"])
-        for _, r in filtered.iterrows()
-    }
 
     rows: list[dict[str, Any]] = []
     for code, group in work.groupby("category_code", sort=True):
@@ -373,7 +383,7 @@ def build_critical_items_rows(
         else:
             days_cover = 0.0
         cp = _critical_point_value(group)
-        fstock = filtered_map.get(_ana_key(code), 0.0)
+        fstock = stock  # same rows as موجودی (priority ≠ 0, no qty threshold)
         below = bool(cp is not None and fstock <= float(cp))
         rows.append(
             {
@@ -482,9 +492,13 @@ def report_footer_notes(
             f"{days_in_jalali_month(counts.jalali_year, counts.jalali_month)} روز)."
         ),
         (
-            f"نقطه بحرانی: هشدار وقتی جمع موجودی فیلترشده "
-            f"(بدون موجودی < {int(CRITICAL_POINT_MIN_QTY):g} و اولویت ۰) "
-            f"به حد نقطه بحرانی دسته برسد."
+            "تجمیع بر اساس کد ۴ رقمی: موجودی و نرخ‌ها جمع همه ردیف‌های همان کد "
+            "(در همان بخش شرکت/پیمانکار) با اولویت غیر صفر است — اولویت ۰ یعنی "
+            "استفاده نمی‌شود و حذف می‌شود؛ هیچ حد حداقل موجودی (مثل زیر ۱۰۰) اعمال "
+            "نمی‌شود و ردیف‌های بدون نرخ مصرف هم در موجودی جمع می‌شوند."
+        ),
+        (
+            "نقطه بحرانی: هشدار وقتی همین جمع موجودی کد به حد نقطه بحرانی دسته برسد."
         ),
         (
             "تفکیک بر اساس ستون «پیمانکار / شرکت» منبع اصلی: گزارش اصلی فقط اقلام "

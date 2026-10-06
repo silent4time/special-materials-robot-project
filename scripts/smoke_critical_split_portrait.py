@@ -55,6 +55,22 @@ def _inventory_frame() -> pd.DataFrame:
              keyword="بتن 80 گان", quantity=40, priority=1, unit="Kg",
              contractor_or_company="شرکت", billet_renovation=0, billet_patching=0,
              **{**zero, "casting_floor": 1}),
+        # code 1700: mixed priorities. prio-0 row (stock 5000, rate 3) is unused →
+        # excluded from stock AND rates; qty<100 rows still count; an unrated
+        # sibling row still adds stock → stock 40+60=100, need 10×1=10
+        dict(category_code="1700", id="378177771111E", product_name="نازل الف",
+             keyword="نازل الف", quantity=40, priority=1, unit="No",
+             contractor_or_company="شرکت", billet_renovation=0, billet_patching=1, **zero),
+        dict(category_code="1700", id="378177772222F", product_name="نازل قدیمی",
+             keyword="نازل قدیمی", quantity=5000, priority=0, unit="No",
+             contractor_or_company="شرکت", billet_renovation=0, billet_patching=3, **zero),
+        dict(category_code="1700", id="378177773333G", product_name="نازل ب",
+             keyword="نازل ب", quantity=60, priority=2, unit="No",
+             contractor_or_company="شرکت", billet_renovation=0, billet_patching=0, **zero),
+        # code 1800: only a priority-0 row carries the rate → not listed
+        dict(category_code="1800", id="378188881111H", product_name="فقط اولویت صفر",
+             keyword="فقط اولویت صفر", quantity=10, priority=0, unit="No",
+             contractor_or_company="شرکت", billet_renovation=0, billet_patching=5, **zero),
         # no rates → never listed
         dict(category_code="9999", id="378199991234C", product_name="بدون نرخ",
              keyword="سایر", quantity=7, priority=1, unit="No",
@@ -113,6 +129,30 @@ def test_classify() -> None:
     print("classify OK")
 
 
+def test_aggregation_rule() -> None:
+    """Per 4-digit code: drop priority 0, no qty<100 filter, stock over all rows."""
+    from analytics.critical_items import TundishMonthCounts, build_critical_items_rows
+    from analytics.tundish import critical_point_category_totals
+
+    inv = _inventory_frame()
+    cnt = TundishMonthCounts(1405, 6, 10, 0, 0)
+    df = build_critical_items_rows(inv, cnt, segment="company")
+    got = {str(r["کد چهاررقمی"]): (int(r["موجودی"]), int(r["نیاز"])) for _, r in df.iterrows()}
+    assert got["1700"] == (100, 10), got  # 40 (<100) + 60 (unrated); prio-0 5000/3 excluded
+    assert got["1450"] == (50, 20), got  # qty 50 < 100 still counted
+    assert "1800" not in got and "9999" not in got, got
+    # explicit critical point: alert when summed stock (100) ≤ cp
+    inv2 = inv.copy()
+    inv2.loc[inv2["category_code"] == "1700", "critical_point"] = "150"
+    r = build_critical_items_rows(inv2, cnt, segment="company")
+    r = r.loc[r["کد چهاررقمی"].astype(str) == "1700"].iloc[0]
+    assert bool(r["below_threshold"]) and float(r["filtered_stock"]) == 100.0
+    tot = critical_point_category_totals(inv)
+    tmap = dict(zip(tot["category_code"], tot["total_quantity"]))
+    assert tmap["1700"] == 100.0 and tmap["1450"] == 50.0 and "1800" not in tmap, tmap
+    print("aggregation rule (priority≠0, no <100 filter, all rows) OK")
+
+
 def _setup_db(tmp: Path):
     from db.models import Database
 
@@ -153,7 +193,7 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     q_inv = float(inv.loc[inv["id"] == COMPANY_ID, "quantity"].iloc[0])
     assert q_raw == 1000 and q_inv == 900, (q_raw, q_inv)
     summary = {(r["value"], r["segment"]): r["rows"] for r in contractor_column_summary(raw)}
-    assert summary.get(("شرکت", "company")) == 3 and summary.get(("پیمانکار", "contractor")) == 1, summary
+    assert summary.get(("شرکت", "company")) == 7 and summary.get(("پیمانکار", "contractor")) == 1, summary
 
     res = generate_critical_items_files(
         db, user, jalali_year=1405, jalali_month=6, output_dir=tmp / "out", file_prefix="crit",
@@ -163,7 +203,10 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     co, ct = res.frames["company"], res.frames["contractor"]
     co_codes = list(co["کد چهاررقمی"].astype(str))
     ct_codes = list(ct["کد چهاررقمی"].astype(str))
-    assert sorted(co_codes) == ["1203", "1450", "1451"], co_codes
+    assert sorted(co_codes) == ["1203", "1450", "1451", "1700"], co_codes
+    r1700 = co.loc[co["کد چهاررقمی"].astype(str) == "1700"].iloc[0]
+    assert int(r1700["موجودی"]) == 100 and int(r1700["نیاز"]) == 10, r1700.to_dict()
+    assert r1700["کد و شرح کالا"] == "نازل الف"
     assert sorted(ct_codes) == ["1203", "1655"], ct_codes
     r_co = co.loc[co["کد چهاررقمی"].astype(str) == "1203"].iloc[0]
     r_ct = ct.loc[ct["کد چهاررقمی"].astype(str) == "1203"].iloc[0]
@@ -197,11 +240,12 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     wco, wct = wo.frames["company"], wo.frames["contractor"]
     wco_codes = sorted(wco["کد چهاررقمی"].astype(str))
     wct_codes = sorted(wct["کد چهاررقمی"].astype(str))
-    assert wco_codes == ["1203", "1451"], wco_codes  # 1450 (reno only) dropped
+    assert wco_codes == ["1203", "1451", "1700"], wco_codes  # 1450 (reno only) dropped
     assert wct_codes == ["1203"], wct_codes  # 1655 (reno only) dropped
     n = lambda df, code: int(df.loc[df["کد چهاررقمی"].astype(str) == code, "نیاز"].iloc[0])  # noqa: E731
     assert n(wco, "1203") == 100 and n(wct, "1203") == 50  # 10 × patching
     assert n(wco, "1451") == n(co, "1451") == 10  # casting floor same in both modes
+    assert n(wco, "1700") == 10  # patching of the priority≠0 row only
     assert int(wco.loc[wco["کد چهاررقمی"].astype(str) == "1203", "موجودی"].iloc[0]) == 900
     assert "بدون نوسازی" in wo.titles["company"] and "بدون نوسازی" in wo.titles["contractor"]
     wb2 = load_workbook(wo.xlsx)
@@ -286,7 +330,7 @@ def test_bot_flow(tmp: Path) -> None:
     assert "گزارش اصلی" in client.docs[0][1] and "پیمانکار" in client.docs[1][1]
     assert "با نوسازی" in client.docs[0][1] and "با نوسازی" in client.docs[2][1]
     assert "حالت «با نوسازی»" in client.msgs[-1], client.msgs[-1]
-    assert "شرکت (گزارش اصلی): 3 قلم" in client.msgs[-1], client.msgs[-1]
+    assert "شرکت (گزارش اصلی): 4 قلم" in client.msgs[-1], client.msgs[-1]
     for p, _ in client.docs[:2]:
         _assert_portrait(p)
     # stale callback after the report → friendly alert, no new docs
@@ -307,7 +351,7 @@ def test_bot_flow(tmp: Path) -> None:
     assert names == ["لیست_اقلام_بحرانی_بدون_نوسازی_شرکت.pdf", "لیست_اقلام_بحرانی_بدون_نوسازی_پیمانکار.pdf",
                      "لیست_اقلام_بحرانی_بدون_نوسازی.xlsx"], names
     assert "حالت «بدون نوسازی»" in client.msgs[-1]
-    assert "شرکت (گزارش اصلی): 2 قلم" in client.msgs[-1] and "پیمانکار (گزارش جداگانه): 1 قلم" in client.msgs[-1], client.msgs[-1]
+    assert "شرکت (گزارش اصلی): 3 قلم" in client.msgs[-1] and "پیمانکار (گزارش جداگانه): 1 قلم" in client.msgs[-1], client.msgs[-1]
     print("bot critical flow (inline با نوسازی + typed بدون نوسازی) OK")
 
 
@@ -447,6 +491,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         test_classify()
+        test_aggregation_rule()
         pdfs: dict[str, Path] = {}
         for sub in ("svc", "bot", "web", "gen"):
             (tmp / sub).mkdir()
