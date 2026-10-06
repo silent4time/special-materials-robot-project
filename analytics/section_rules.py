@@ -108,10 +108,15 @@ def section_row_mask(df: pd.DataFrame | None, section: str) -> pd.Series:
 
 
 def section_inventory(df: pd.DataFrame | None, section: str | None) -> pd.DataFrame | None:
-    """Rows of منبع اصلی eligible for ``section`` (None/unknown → all rows)."""
+    """Rows of منبع اصلی eligible for ``section`` (None/unknown → all rows).
+
+    کد 1800 (اقلام مازاد) never feeds a section's consumption.
+    """
     if df is None or df.empty or section not in SECTIONS:
         return df
-    return df.loc[section_row_mask(df, section)]
+    from analytics.critical_items import drop_surplus_rows
+
+    return drop_surplus_rows(df.loc[section_row_mask(df, section)])
 
 
 def apply_section_rate_attribution(

@@ -248,9 +248,12 @@ async def main_source_upload(
             except Exception:
                 pass
         log_activity(db, user, "web_upload_main_source")
+        from excel.id_parse import segment_mismatch_note_fa
+
         message = (
             f"✅ فایل منبع اصلی دریافت و همسان‌سازی شد "
             f"({int(len(merged))} ردیف)."
+            + segment_mismatch_note_fa(result.segment_mismatches)
         )
     except (ExcelValidationError, ValueError, KeyError) as exc:
         error = str(exc)

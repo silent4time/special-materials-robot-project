@@ -130,7 +130,55 @@ def test_classify() -> None:
     assert cls("", CONTRACTOR_ID) == CT and cls(None, COMPANY_ID) == CO
     assert cls("nan", "12") == CO  # unknown → company
     assert cls("فولاد خوزستان", CONTRACTOR_ID) == CT  # free text → id rule
+    # Rule A (1405-07-14): شناسه مواد is AUTHORITATIVE over the cell
+    assert cls("پیمانکار", "378121641252L") == CO and cls("شرکت", "378700009032J") == CT
     print("classify OK")
+
+
+def test_id_rule_and_surplus(tmp: Path) -> None:
+    """Rule A: importer/saves derive پیمانکار/شرکت from id + warn; rule B: 1800 never consumable."""
+    from openpyxl import Workbook
+
+    from analytics.critical_items import TundishMonthCounts, build_critical_items_rows
+    from analytics.section_rules import section_inventory
+    from excel.id_parse import apply_id_segment_rule, segment_mismatch_note_fa
+    from excel.processor import extract_and_save_clean
+
+    df = pd.DataFrame({
+        "id": ["378121641252L", "378700009032J", "378700009002G", "12"],
+        "category_code": ["1203", "1655", "1203", "1450"],
+        "contractor_or_company": ["پیمانکار", "پیمانکار", "", "پیمانکار"],
+    })
+    out, mism = apply_id_segment_rule(df)
+    assert list(out["contractor_or_company"]) == ["شرکت", "پیمانکار", "پیمانکار", "پیمانکار"], out
+    assert [m["id"] for m in mism] == ["378121641252L"] and mism[0]["rule_label"] == "شرکت", mism
+    note = segment_mismatch_note_fa(mism)
+    assert "378121641252L" in note and "0000" in note, note
+
+    # importer: file label disagrees → corrected + reported in ExtractResult
+    raw = tmp / "id_rule_inv.xlsx"
+    wb = Workbook(); ws = wb.active; ws.title = "ریز اطلاعات"
+    ws.append(["کد دسته بندی", "شناسه مواد", "شرح کالا", "موجودی", "اولویت", "پیمانکار / شرکت",
+               "نوسازی تاندیش بیلت", "واحد"])
+    ws.append([1203, "378121641252L", "NANAREF C85", 33920, 3, "پیمانکار", 200, "Kg"])
+    ws.append([1203, "378700009002G", "POLY 85", 6000, 1, "پیمانکار", 0, "Kg"])
+    ws.append([1800, "378124311162N", "DIRCAST M3", 17800, 2, "شرکت", 500, "Kg"])
+    wb.save(raw)
+    res = extract_and_save_clean(raw, "product_inventory", category_allowlist={"1203", "1800"},
+                                 clean_dir=tmp / "id_rule_clean")
+    assert [m["id"] for m in res.segment_mismatches] == ["378121641252L"], res.segment_mismatches
+    clean = pd.read_excel(res.clean_path)
+    lab = dict(zip(clean["id"], clean["contractor_or_company"]))
+    assert lab["378121641252L"] == "شرکت" and lab["378700009002G"] == "پیمانکار", lab
+
+    # rule B: 1800 with priority≠0 and a billet rate is still NOT a critical item / consumable
+    cnt = TundishMonthCounts(1405, 6, 10, 0, 0)
+    crit = build_critical_items_rows(clean, cnt, segment="company")
+    codes = {str(c) for c in crit["کد چهاررقمی"]}
+    assert "1203" in codes and "1800" not in codes, codes
+    billet = section_inventory(clean, "billet")
+    assert "1800" not in {str(c) for c in billet["category_code"]}, billet
+    print("id rule (authoritative + upload warning) + 1800 surplus exclusion OK")
 
 
 def test_aggregation_rule() -> None:
@@ -683,6 +731,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         test_classify()
+        test_id_rule_and_surplus(tmp)
         test_aggregation_rule()
         pdfs: dict[str, Path] = {}
         for sub in ("svc", "bot", "web", "gen", "merge"):

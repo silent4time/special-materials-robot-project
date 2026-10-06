@@ -168,6 +168,8 @@ class ExtractResult:
     extra_columns_dropped: list[str] = field(default_factory=list)
     filter_name: str = "standard_tundish"
     drop_reasons: dict[str, int] = field(default_factory=dict)
+    # «پیمانکار / شرکت» cells that disagreed with the id rule (excel.id_parse)
+    segment_mismatches: list[dict] = field(default_factory=list)
 
 
 def _normalize_fa_header(value: object) -> str:
@@ -995,6 +997,7 @@ def extract_and_save_clean(
     raw_row_count = int(len(df))
     original_cols = [str(c) for c in df.columns]
     drop_reasons: dict[str, int] = {}
+    segment_mismatches: list[dict] = []
 
     if file_type == "product_inventory":
         filter_name = "warehouse_category_allowlist"
@@ -1007,6 +1010,10 @@ def extract_and_save_clean(
             )
         enriched = enrich_warehouse_inventory(df)
         filtered, drop_reasons = filter_warehouse_inventory_rows(enriched, allowlist)
+        # شناسه مواد decides پیمانکار/شرکت (authoritative user rule); report disagreements.
+        from excel.id_parse import apply_id_segment_rule
+
+        filtered, segment_mismatches = apply_id_segment_rule(filtered)
         kept_row_count = int(len(filtered))
         if kept_row_count == 0:
             raise ExcelValidationError(
@@ -1073,6 +1080,7 @@ def extract_and_save_clean(
         extra_columns_dropped=extra_dropped,
         filter_name=filter_name,
         drop_reasons=drop_reasons,
+        segment_mismatches=segment_mismatches,
     )
 
 

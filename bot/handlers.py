@@ -1404,6 +1404,10 @@ class BotApp:
             try:
                 new_df = pd.read_excel(result.clean_path, engine="openpyxl")
                 merged = merge_clean_frames(old_df, new_df, pending)
+                if pending == "product_inventory":
+                    from excel.id_parse import apply_id_segment_rule
+
+                    merged, _old_mism = apply_id_segment_rule(merged)
                 write_clean_excel(merged, result.clean_path, pending)
                 result.kept_row_count = int(len(merged))
                 merge_note = (
@@ -1524,6 +1528,10 @@ class BotApp:
             dropped_note = f"\n({result.dropped_row_count} ردیف اضافی/نامعتبر حذف شد)"
         else:
             dropped_note = ""
+        if pending == "product_inventory":
+            from excel.id_parse import segment_mismatch_note_fa
+
+            dropped_note += segment_mismatch_note_fa(result.segment_mismatches)
         extra_cols_note = ""
         if result.extra_columns_dropped:
             extra_cols_note = "\nستون‌های اضافی کنار گذاشته شد."

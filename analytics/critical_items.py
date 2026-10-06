@@ -12,12 +12,12 @@ MODES (نوسازی): the user picks one before generating.
   by casting on the floor, independent of tundish renovation.
 Rates stay separate in منبع اصلی (billet/bloom/slab × renovation/patching).
 
-SPLIT (پیمانکار / شرکت): rows of منبع اصلی are split by the
-``contractor_or_company`` column («پیمانکار / شرکت» in sheet «ریز اطلاعات»)
-BEFORE category aggregation. The primary report lists ONLY «شرکت» rows; «پیمانکار»
-rows form a separate report/section. Blank or unrecognized values fall back to
-the material-id rule (``excel.id_parse.is_contractor_material_id``: 2nd group of
-four chars == «0000» → پیمانکار); still unknown → شرکت.
+SPLIT (پیمانکار / شرکت): rows of منبع اصلی are split BEFORE category aggregation
+by the material-id rule (``excel.id_parse.is_contractor_material_id``: 2nd group of
+four chars == «0000» → پیمانکار, else شرکت) — authoritative since 1405-07-14; the
+``contractor_or_company`` cell is only a fallback for ids too short to tell (still
+unknown → شرکت). The primary report lists ONLY «شرکت» rows; «پیمانکار» rows form a
+separate report/section. کد 1800 (اقلام مازاد) is never a consumable here.
 
 AGGREGATION (per 4-digit کد دسته‌بندی, within one segment):
   • rows with اولویت 0 («بدون اولویت» = unused) are dropped first (blank → 1);
@@ -167,7 +167,14 @@ _COMPANY_TOKENS = ("شرکت", "company")
 
 
 def classify_contractor_or_company(value: object, item_id: object = None) -> str:
-    """Map a «پیمانکار / شرکت» cell (+ id fallback) to SEGMENT_COMPANY/CONTRACTOR."""
+    """Map a row to SEGMENT_COMPANY/CONTRACTOR.
+
+    شناسه مواد is authoritative (chars 5–8 == «0000» → پیمانکار, else شرکت); the
+    «پیمانکار / شرکت» cell is only a fallback when the id is too short / blank.
+    """
+    flag = is_contractor_material_id(item_id)
+    if flag is not None:
+        return SEGMENT_CONTRACTOR if flag else SEGMENT_COMPANY
     text = _norm_fa(value)
     if text:
         if any(tok in text for tok in _CONTRACTOR_TOKENS):
@@ -282,6 +289,18 @@ def drop_priority_zero_rows(inventory_df: pd.DataFrame) -> pd.DataFrame:
     return inventory_df.loc[prio != float(NO_PRIORITY)].copy()
 
 
+def drop_surplus_rows(inventory_df: pd.DataFrame) -> pd.DataFrame:
+    """Drop کد دسته 1800 (اقلام مازاد) — never a consumable for critical items / main goal."""
+    from config import SURPLUS_CATEGORY_CODE
+
+    if inventory_df is None or inventory_df.empty or "category_code" not in inventory_df.columns:
+        return inventory_df
+    codes = inventory_df["category_code"].map(
+        lambda v: str(v).strip()[:-2] if str(v).strip().endswith(".0") else str(v).strip()
+    )
+    return inventory_df.loc[codes != SURPLUS_CATEGORY_CODE].copy()
+
+
 def _real_stock(group: pd.DataFrame) -> float:
     return float(_num_series(group, "quantity").sum())
 
@@ -366,6 +385,8 @@ def build_critical_items_rows(
     # Section attribution on the FULL frame (needs both segments): codes with
     # شرکت + پیمانکار rows → billet from company, bloom from contractor, slab
     # from contractor + company rows located «اسلب» (analytics.section_rules).
+    # کد 1800 = اقلام مازاد → never a consumable (rule B, 1405-07-14).
+    inventory_df = drop_surplus_rows(inventory_df)
     inventory_df, _changes = apply_section_rate_attribution(inventory_df)
     inventory_df = filter_inventory_segment(inventory_df, segment)
     if inventory_df is None or inventory_df.empty:
@@ -718,10 +739,10 @@ def report_footer_notes(
             "نقطه بحرانی: هشدار وقتی همین جمع موجودی کد به حد نقطه بحرانی دسته برسد."
         ),
         (
-            "تفکیک بر اساس ستون «پیمانکار / شرکت» منبع اصلی: گزارش اصلی فقط اقلام "
-            "«شرکت» است و اقلام «پیمانکار» در گزارش/بخش جداگانه می‌آید؛ موجودی، نرخ "
-            "و نقطه بحرانی هر بخش فقط از ردیف‌های همان بخش محاسبه می‌شود "
-            "(اگر خانه خالی باشد، قاعده شناسه «0000» ملاک است)."
+            "تفکیک شرکت/پیمانکار از روی شناسه مواد: اگر رقم‌های ۵ تا ۸ شناسه «0000» "
+            "باشد پیمانکار، وگرنه شرکت. گزارش اصلی فقط اقلام «شرکت» است و اقلام "
+            "«پیمانکار» در گزارش/بخش جداگانه می‌آید؛ موجودی، نرخ و نقطه بحرانی هر بخش "
+            "فقط از ردیف‌های همان بخش محاسبه می‌شود. اقلام کد ۱۸۰۰ (مازاد) مصرفی حساب نمی‌شوند."
         ),
     ]
 

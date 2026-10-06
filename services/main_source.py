@@ -295,7 +295,10 @@ def persist_primary_frame(
     raw_path: str | Path | None = None,
 ) -> Path:
     """Rewrite cleaned Excel + register extract + point session inventory slot."""
-    clean = ensure_inventory_columns(df)
+    from excel.id_parse import apply_id_segment_rule
+
+    # شناسه مواد is authoritative for پیمانکار/شرکت on every save (manual edits included).
+    clean, _mism = apply_id_segment_rule(ensure_inventory_columns(df))
     uid = str(bale_user_id)
     session = db.get_or_create_session(uid)
     sid = int(session_id if session_id is not None else session["id"])
