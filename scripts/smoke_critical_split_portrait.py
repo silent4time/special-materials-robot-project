@@ -41,7 +41,11 @@ def _inventory_frame() -> pd.DataFrame:
              contractor_or_company="شرکت", billet_renovation=10, billet_patching=10, **zero),
         dict(category_code="1203", id=CONTRACTOR_ID, product_name="بتن پلی 85",
              keyword="بتن پلی 85", quantity=500, priority=1, unit="Kg",
-             contractor_or_company="پیمانکار", billet_renovation=5, billet_patching=5, **zero),
+             contractor_or_company="پیمانکار", usage_location="اسلب",
+             billet_renovation=0, billet_patching=0,
+             # real-data shape: the contractor row of 1203 is slab (a billet rate
+             # here would be dropped — billet comes from the شرکت rows)
+             **{**zero, "slab_renovation": 5, "slab_patching": 5}),
         # blank column + «0000» id → contractor (id fallback)
         dict(category_code="1655", id="378800001111A", product_name="روکش کشور",
              keyword="روکش کشور", quantity=300, priority=1, unit="Kg",
@@ -153,6 +157,194 @@ def test_aggregation_rule() -> None:
     print("aggregation rule (priority≠0, no <100 filter, all rows) OK")
 
 
+MERGE_HEADERS = [
+    "کد دسته بندي", "شناسه مواد", "شرح کالا", "شماره دستور کار", "محل استفاده",
+    "کلید واژه", "موجودي", "اولویت", "پیمانکار / شرکت", "سازنده", "اشتراکی",
+    "نقطه بحرانی", "واحد", "سطح ریخته گری", "نوسازی تاندیش بیلت ",
+    "پچینگ تاندیش بیلت", "نوسازی تاندیش بلوم ", "پچینگ تاندیش بلوم",
+    "نوسازی تاندیش اسلب ", "پچینگ تاندیش اسلب",
+]
+
+
+def _merged_fixture(path: Path) -> None:
+    """«ریز اطلاعات» with vertically merged cells (plant export style).
+
+    Rows (excel row → code, id, qty, prio, segment):
+      2-4  1901 company: billet patching P2:P4=5 and نقطه بحرانی L2:L4=80
+           merged; qty 40 (p1) / 500 (p0) / 30 (p2)
+      5-6  1902 company: موجودی G5:G6=300 merged (per-row → once), rate on row 5
+      7-8  1903 company qty 100 / 1904 company qty 200: billet renovation +
+           patching O7:P8=6 merged ACROSS two codes → shared need group
+      9-10 1905 contractor qty 10 / 1905 company qty 20: slab patching T9:T10=2
+           merged ACROSS segments → each segment keeps rate 2
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "ریز اطلاعات"
+    ws.append(MERGE_HEADERS)
+
+    def row(code, iid, qty, prio, seg, **rates):
+        vals = {h: None for h in MERGE_HEADERS}
+        vals.update({
+            "کد دسته بندي": code, "شناسه مواد": iid, "شرح کالا": f"کالا {iid}",
+            "کلید واژه": f"قلم {code}", "موجودي": qty, "اولویت": prio,
+            "پیمانکار / شرکت": seg, "واحد": "No", "سطح ریخته گری": 0,
+        })
+        for h in MERGE_HEADERS[14:]:
+            vals[h] = 0
+        vals.update(rates)
+        ws.append([vals[h] for h in MERGE_HEADERS])
+
+    row("1901", "378190100012A", 40, 1, "شرکت", **{"پچینگ تاندیش بیلت": 5, "نقطه بحرانی": 80})
+    row("1901", "378190100022B", 500, 0, "شرکت", **{"پچینگ تاندیش بیلت": None})
+    row("1901", "378190100032C", 30, 2, "شرکت", **{"پچینگ تاندیش بیلت": None})
+    row("1902", "378190200012D", 300, 1, "شرکت", **{"پچینگ تاندیش بیلت": 1})
+    row("1902", "378190200022E", None, 2, "شرکت")
+    row("1903", "378190300012F", 100, 1, "شرکت", **{"نوسازی تاندیش بیلت ": 6, "پچینگ تاندیش بیلت": 6})
+    row("1904", "378190400012G", 200, 1, "شرکت", **{"نوسازی تاندیش بیلت ": None, "پچینگ تاندیش بیلت": None})
+    # (محل استفاده «اسلب»: a شرکت row of a code with both sides feeds slab only then)
+    row("1905", "378700009012H", 10, 1, "پیمانکار", **{"پچینگ تاندیش اسلب": 2, "محل استفاده": "اسلب"})
+    row("1905", "378190500012I", 20, 1, "شرکت", **{"پچینگ تاندیش اسلب": None, "محل استفاده": "اسلب"})
+    for rng in ("P2:P4", "L2:L4", "G5:G6", "O7:O8", "P7:P8", "T9:T10"):
+        ws.merge_cells(rng)
+    wb.save(path)
+
+
+def test_merged_cells(tmp: Path) -> None:
+    """Importer fills merged ranges; per-code values once; shared-need groups."""
+    import hashlib
+
+    from analytics.critical_items import (
+        ROW_GROUP,
+        ROW_MEMBER,
+        SHARED_NEED_LABEL,
+        TundishMonthCounts,
+        build_critical_items_rows,
+        critical_item_count,
+        group_row_indices,
+    )
+    from excel.processor import _normalize_columns, extract_and_save_clean
+    from services.main_source import ensure_inventory_columns
+
+    src = tmp / "merged_source.xlsx"
+    _merged_fixture(src)
+    digest = hashlib.sha1(src.read_bytes()).hexdigest()
+    res = extract_and_save_clean(
+        src, "product_inventory",
+        category_allowlist=["1901", "1902", "1903", "1904", "1905"],
+        clean_dir=tmp / "merged_clean",
+    )
+    assert hashlib.sha1(src.read_bytes()).hexdigest() == digest, "source file modified"
+    assert res.kept_row_count == 9, res.drop_reasons
+    inv = ensure_inventory_columns(_normalize_columns(pd.read_excel(res.clean_path)))
+    by_id = {str(r["id"]): r for _, r in inv.iterrows()}
+    # fill: rate + critical point copied into every covered row
+    assert all(float(by_id[i]["billet_patching"]) == 5 for i in
+               ("378190100012A", "378190100022B", "378190100032C")), inv
+    assert float(by_id["378190100032C"]["critical_point"]) == 80
+    # per-row stock NOT copied (second row 0)
+    assert float(by_id["378190200022E"]["quantity"]) == 0
+    assert float(by_id["378190500012I"]["slab_patching"]) == 2
+    assert str(by_id["378190400012G"]["rate_group"]).startswith("G7-8:billet_renovation,billet_patching")
+    assert str(by_id["378190100012A"]["rate_group"]) in {"", "nan", "None"}
+
+    cnt = TundishMonthCounts(1405, 6, 10, 0, 1)
+    co = build_critical_items_rows(inv, cnt, segment="company", shared_mode="pooled")
+    rows = {str(r["کد چهاررقمی"]): r for _, r in co.iterrows()}
+    # 1901: patching 5 once (not 5×3), stock 40+30 (p0 500 excluded), cp 80 → below
+    assert int(rows["1901"]["نیاز"]) == 50 and int(rows["1901"]["موجودی"]) == 70, rows["1901"]
+    assert bool(rows["1901"]["below_threshold"])
+    # 1902: merged stock counted once
+    assert int(rows["1902"]["موجودی"]) == 300 and int(rows["1902"]["نیاز"]) == 10
+    # 1903/1904 pooled: one group row, need (6+6)×10 once, combined stock
+    g = rows["1903/1904"]
+    assert g["row_kind"] == ROW_GROUP and int(g["نیاز"]) == 120 and int(g["موجودی"]) == 300, g
+    assert rows["1903"]["row_kind"] == ROW_MEMBER and rows["1903"]["نیاز"] == SHARED_NEED_LABEL
+    assert int(rows["1903"]["موجودی"]) == 100 and int(rows["1904"]["موجودی"]) == 200
+    pos = list(co["کد چهاررقمی"].astype(str))
+    assert pos.index("1903/1904") + 1 == pos.index("1903") and pos.index("1904") == pos.index("1903") + 1
+    assert group_row_indices(co) == [pos.index("1903/1904")]
+    assert critical_item_count(co) == 4, co  # 1901, 1902, group, 1905 (members not counted)
+    # 1905 company keeps the merged slab rate (cross-segment fill, no pooling)
+    assert int(rows["1905"]["نیاز"]) == 2 and int(rows["1905"]["موجودی"]) == 20
+    ct = build_critical_items_rows(inv, cnt, segment="contractor", shared_mode="pooled")
+    crow = ct.loc[ct["کد چهاررقمی"].astype(str) == "1905"].iloc[0]
+    assert int(crow["نیاز"]) == 2 and int(crow["موجودی"]) == 10, ct
+    # alternative mode: every code gets the full rate separately
+    pc = build_critical_items_rows(inv, cnt, segment="company", shared_mode="per_code")
+    prow = {str(r["کد چهاررقمی"]): r for _, r in pc.iterrows()}
+    assert "1903/1904" not in prow and int(prow["1903"]["نیاز"]) == 120 and int(prow["1904"]["نیاز"]) == 120
+    assert critical_item_count(pc) == 5
+    print("merged cells (fill, stock once, per-code max, pooled vs per_code, segments) OK")
+
+
+def test_section_rules() -> None:
+    """Code with شرکت + پیمانکار rows: billet=company, bloom=contractor, slab=
+    contractor + company rows located «اسلب» (critical items + main goal)."""
+    import services.main_goal_report as mg
+    from analytics.critical_items import TundishMonthCounts, build_critical_items_rows
+    from analytics.section_rules import (
+        apply_section_rate_attribution,
+        codes_with_both_segments,
+        section_inventory,
+    )
+    from services.main_source import ensure_inventory_columns
+
+    def r(code, iid, seg, loc, qty, prio=1, **rates):
+        base = {
+            "category_code": code, "id": iid, "product_name": f"کالا {iid}",
+            "keyword": f"قلم {code}", "quantity": qty, "priority": prio,
+            "contractor_or_company": seg, "usage_location": loc, "unit": "No",
+        }
+        base.update({k: 0 for k in (
+            "casting_floor", "billet_renovation", "billet_patching",
+            "bloom_renovation", "bloom_patching", "slab_renovation", "slab_patching")})
+        base.update(rates)
+        return base
+
+    inv = ensure_inventory_columns(pd.DataFrame([
+        # 1637-like: rates merge-filled into BOTH rows
+        r("1937", "378700003002A", "پیمانکار", "بلوم", 192,
+          billet_patching=1, bloom_renovation=2, bloom_patching=2),
+        r("1937", "378193700012B", "شرکت", "بیلت", 151,
+          billet_patching=1, bloom_renovation=2, bloom_patching=2),
+        # slab: company row located اسلب counts, company row located بیلت does not
+        r("1938", "378700009012H", "پیمانکار", "اسلب", 50, slab_patching=3),
+        r("1938", "378193800012C", "شرکت", "اسلب", 60, slab_patching=3),
+        r("1938", "378193800022D", "شرکت", "بیلت", 70, slab_patching=3, billet_patching=4),
+        # company rows of 1939 all priority 0 → not «both»; contractor unchanged
+        r("1939", "378700009022J", "پیمانکار", "بیلت", 10, billet_patching=5),
+        r("1939", "378193900012E", "شرکت", "بیلت", 20, prio=0, billet_patching=5),
+        # single-segment company code: bloom rate kept
+        r("1940", "378194000012F", "شرکت", "بلوم", 30, bloom_patching=1),
+    ]))
+    assert codes_with_both_segments(inv) == {"1937", "1938"}
+    _, changes = apply_section_rate_attribution(inv)
+    dropped = {(c["code"], c["segment"], c["column"]) for c in changes}
+    assert dropped == {
+        ("1937", "contractor", "billet_patching"),
+        ("1937", "company", "bloom_renovation"),
+        ("1937", "company", "bloom_patching"),
+        ("1938", "company", "slab_patching"),  # the بیلت-located company row
+    }, dropped
+    cnt = TundishMonthCounts(1405, 6, 10, 10, 10)
+    co = build_critical_items_rows(inv, cnt, segment="company")
+    ct = build_critical_items_rows(inv, cnt, segment="contractor")
+    need = lambda df, code: int(df.loc[df["کد چهاررقمی"].astype(str) == code, "نیاز"].iloc[0])
+    assert need(co, "1937") == 10 and need(ct, "1937") == 40  # billet 1×10 | bloom 4×10
+    assert need(co, "1938") == 30 + 40 and need(ct, "1938") == 30  # slab 3×10 once + billet 4×10
+    assert need(ct, "1939") == 50 and need(co, "1940") == 10
+    # main goal / forecast: section-restricted matching by id
+    line = mg.MaterialLine(name="x", quantity=1, unit="", item_id="378700003002A")
+    assert mg.match_inventory_stock(line, inv, section="bloom")[3] == 192
+    assert mg.match_inventory_stock(line, inv, section="billet")[3] is None
+    sl = section_inventory(inv, "slab")
+    assert set(sl["id"]) >= {"378700009012H", "378193800012C"} and "378193800022D" not in set(sl["id"])
+    print("section rules (billet=شرکت, bloom=پیمانکار, slab=اسلب) OK")
+
+
 def _setup_db(tmp: Path):
     from db.models import Database
 
@@ -166,7 +358,7 @@ def _setup_db(tmp: Path):
     db.save_extracted("901", None, "product_inventory", str(clean), str(clean), 5)
     db.upsert_monthly_tundish_counts(
         jalali_year=1405, jalali_month=6, count_billet=10, count_bloom=0,
-        count_slab=0, updated_by="901",
+        count_slab=10, updated_by="901",  # 1203 پیمانکار is a slab row
     )
     # one ledger deduction on the company row: -100
     with db.connect() as conn:
@@ -244,7 +436,7 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     assert wct_codes == ["1203"], wct_codes  # 1655 (reno only) dropped
     n = lambda df, code: int(df.loc[df["کد چهاررقمی"].astype(str) == code, "نیاز"].iloc[0])  # noqa: E731
     assert n(wco, "1203") == 100 and n(wct, "1203") == 50  # 10 × patching
-    assert n(wco, "1451") == n(co, "1451") == 10  # casting floor same in both modes
+    assert n(wco, "1451") == n(co, "1451") == 20  # casting floor (1 × 20 tundishes) same in both modes
     assert n(wco, "1700") == 10  # patching of the priority≠0 row only
     assert int(wco.loc[wco["کد چهاررقمی"].astype(str) == "1203", "موجودی"].iloc[0]) == 900
     assert "بدون نوسازی" in wo.titles["company"] and "بدون نوسازی" in wo.titles["contractor"]
@@ -493,8 +685,10 @@ def main() -> int:
         test_classify()
         test_aggregation_rule()
         pdfs: dict[str, Path] = {}
-        for sub in ("svc", "bot", "web", "gen"):
+        for sub in ("svc", "bot", "web", "gen", "merge"):
             (tmp / sub).mkdir()
+        test_merged_cells(tmp / "merge")
+        test_section_rules()
         pdfs.update(test_service_split_and_ledger(tmp / "svc"))
         test_bot_flow(tmp / "bot")
         pdfs.update(test_web(tmp / "web"))

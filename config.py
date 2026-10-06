@@ -20,6 +20,11 @@ FONTS_DIR = BASE_DIR / "fonts"
 POLL_TIMEOUT = int(os.getenv("POLL_TIMEOUT", "25"))
 # Materials with days_of_cover = remaining / avg_daily below this are critical
 CRITICAL_DAYS = float(os.getenv("CRITICAL_DAYS", "3"))
+# اقلام بحرانی — a merged rate cell crossing several 4-digit codes (e.g. one
+# nozzle rate over 1710/1712/…/1718): "pooled" = ONE shared need for the group
+# (each code keeps its own stock row; group subtotal row = combined stock vs
+# shared need). "per_code" = every code gets the full rate separately.
+CRITICAL_SHARED_MERGE_MODE = "pooled"
 # Surplus: days_of_cover above this threshold (also max(CRITICAL_DAYS*3, 10))
 SURPLUS_COVER_DAYS = float(os.getenv("SURPLUS_COVER_DAYS", "10"))
 SURPLUS_FORECAST_DAYS = float(os.getenv("SURPLUS_FORECAST_DAYS", "30"))
@@ -217,6 +222,8 @@ REQUIRED_COLUMNS = {
         "bloom_patching",
         "slab_renovation",
         "slab_patching",
+        # Importer-written: shared-need group of a merge crossing several codes.
+        "rate_group",
     ],
     "monthly_consumption": [
         "domain",

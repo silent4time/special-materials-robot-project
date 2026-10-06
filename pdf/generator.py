@@ -313,8 +313,12 @@ def build_rtl_table(
     zebra: bool = True,
     col_widths: list[float] | None = None,
     bold_rows: set[int] | None = None,
+    shade_rows: set[int] | None = None,
+    shade_color: str = "#ffe0b2",
 ) -> Table:
     """Portrait-friendly RTL table: auto widths, logical wrapping, repeat header.
+
+    ``bold_rows`` / ``shade_rows``: 0-based body row indices to emphasise.
 
     ``header_texts`` None → no header row. Column 0 is rendered rightmost.
     """
@@ -377,6 +381,12 @@ def build_rtl_table(
                 [colors.whitesmoke, colors.Color(0.93, 0.95, 1)],
             )
         )
+    off = 1 if header_texts else 0
+    for bi in sorted(set(shade_rows or ())):
+        if 0 <= bi < len(body):
+            cmds.append(
+                ("BACKGROUND", (0, bi + off), (-1, bi + off), colors.HexColor(shade_color))
+            )
     table.setStyle(TableStyle(cmds))
     return table
 
@@ -603,6 +613,7 @@ HEADER_FA = {
     "bloom_patching": "پچینگ تاندیش بلوم",
     "slab_renovation": "نوسازی تاندیش اسلب",
     "slab_patching": "پچینگ تاندیش اسلب",
+    "rate_group": "گروه نرخ مشترک (ادغام)",
     "unit": "واحد",
     "date": "تاریخ",
     "month": "ماه",
@@ -1107,6 +1118,7 @@ def _rows_table(
     header_bg: str = "#1f4e79",
     max_rows: int = 500,
     avail: float | None = None,
+    bold_rows: set[int] | None = None,
 ) -> Table | Paragraph:
     labels = header_map or SIMPLE_HEADER_FA
     if not columns:
@@ -1116,7 +1128,14 @@ def _rows_table(
         [_format_simple_cell(row.get(c, ""), c) for c in columns]
         for row in rows[:max_rows]
     ]
-    return build_rtl_table(header, body, avail=avail, header_bg=header_bg)
+    return build_rtl_table(
+        header,
+        body,
+        avail=avail,
+        header_bg=header_bg,
+        bold_rows=bold_rows,
+        shade_rows=bold_rows,
+    )
 
 
 def generate_simple_report_pdf(
@@ -1200,6 +1219,7 @@ def generate_simple_report_pdf(
                 header_map=header_map or SIMPLE_HEADER_FA,
                 header_bg=str(header_bg),
                 avail=avail,
+                bold_rows=set(section.get("bold_rows") or ()),
             )
         )
         story.append(Spacer(1, 0.4 * cm))

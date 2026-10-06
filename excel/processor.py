@@ -113,6 +113,9 @@ COLUMN_ALIASES = {
     "origin": ["origin", "سازنده"],
     "shared": ["shared", "اشتراکی"],
     "critical_point": ["critical_point", "نقطه بحرانی", "نقطه_بحرانی"],
+    # Written by the importer (fill_merged_cells): id of a merged range that
+    # crosses several 4-digit codes → one shared need (see analytics.critical_items).
+    "rate_group": ["rate_group", "گروه نرخ مشترک", "گروه نرخ مشترک (ادغام)"],
     # Template column «سایر نواحی» was renamed «سطح ریخته گری». Old cleaned
     # extracts (other_areas / سایر نواحی headers) migrate onto casting_floor.
     "casting_floor": [
@@ -371,6 +374,7 @@ def enrich_warehouse_inventory(df: pd.DataFrame) -> pd.DataFrame:
         "bloom_patching",
         "slab_renovation",
         "slab_patching",
+        "rate_group",
     )
     for col in text_cols:
         if col in out.columns:
@@ -562,6 +566,153 @@ def keep_only_detail_sheet(path: Path | str) -> list[str]:
         wb.close()
 
 
+# ---------------------------------------------------------------- merged cells
+# Columns whose value is PER ROW (stock). A merged cell there is NOT copied down:
+# the value stays on the first row (others get 0), so summing counts it once.
+# Every other column (rates, نقطه بحرانی, سطح ریخته گری, واحد, اولویت,
+# پیمانکار / شرکت, سازنده, اشتراکی, کد دسته بندی, …) is filled into every row
+# the merged range covers («the merged value belongs to ALL those rows»).
+PER_ROW_MERGE_COLUMNS = ("quantity",)
+RATE_GROUP_COLUMN = "rate_group"
+
+
+def _canonical_header(value: object) -> str | None:
+    key = _normalize_fa_header(value)
+    if not key:
+        return None
+    for canonical, aliases in COLUMN_ALIASES.items():
+        for alias in aliases:
+            if _normalize_fa_header(alias) == key:
+                return canonical
+    return None
+
+
+def _code_key(value: object) -> str:
+    text = "" if value is None else str(value).strip()
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    return text
+
+
+def fill_merged_cells(ws: Any, *, header_row: int = 1) -> dict[str, Any]:
+    """Unmerge every merged range below ``header_row`` and copy its value down.
+
+    openpyxl / pandas only keep the top-left value of a merged range (the other
+    cells read empty). In plant exports («ریز اطلاعات») a merged cell belongs to
+    EVERY row it spans, so each covered cell gets the top-left value — except
+    per-row stock columns (``PER_ROW_MERGE_COLUMNS``): the value stays on the
+    first row and the other covered rows get 0 (summed once, rows still valid).
+    Ranges touching the header row are left alone.
+
+    Ranges that cover rows of SEVERAL 4-digit «کد دسته بندی» values (e.g. one
+    nozzle rate merged over 1710/1712/…/1718) are linked into groups (ranges
+    sharing a row join the same group). Each covered row gets
+    ``rate_group`` = «G<first>-<last>:<merged canonical cols>», written to a new
+    trailing column, so the critical report can treat the rate as ONE shared
+    need for the group. Returns {"ranges": [...], "groups": [...]}.
+    """
+    max_col = int(ws.max_column or 0)
+    headers = {c: ws.cell(header_row, c).value for c in range(1, max_col + 1)}
+    canon = {c: _canonical_header(h) for c, h in headers.items()}
+    cat_col = next((c for c, k in canon.items() if k == "category_code"), None)
+    ranges: list[dict[str, Any]] = []
+    for rng in list(ws.merged_cells.ranges):
+        if rng.min_row <= header_row:
+            continue
+        coord = str(rng.coord)
+        value = ws.cell(rng.min_row, rng.min_col).value
+        ws.unmerge_cells(coord)
+        for c in range(rng.min_col, rng.max_col + 1):
+            per_row = canon.get(c) in PER_ROW_MERGE_COLUMNS
+            for r in range(rng.min_row, rng.max_row + 1):
+                if r == rng.min_row and c == rng.min_col:
+                    continue
+                ws.cell(r, c).value = 0 if per_row else value
+        ranges.append(
+            {
+                "coord": coord,
+                "header": headers.get(rng.min_col),
+                "columns": [
+                    canon.get(c) or str(headers.get(c) or c)
+                    for c in range(rng.min_col, rng.max_col + 1)
+                ],
+                "min_row": rng.min_row,
+                "max_row": rng.max_row,
+                "value": value,
+            }
+        )
+    # Codes per range (after fill so a merged کد دسته بندی is visible too).
+    for info in ranges:
+        codes: list[str] = []
+        if cat_col is not None:
+            for r in range(info["min_row"], info["max_row"] + 1):
+                code = _code_key(ws.cell(r, cat_col).value)
+                if code and code not in codes:
+                    codes.append(code)
+        info["codes"] = codes
+    cross = [i for i in ranges if len(i["codes"]) > 1 and i["columns"] != ["category_code"]]
+    # Union cross-code ranges that share at least one row.
+    groups: list[dict[str, Any]] = []
+    for info in sorted(cross, key=lambda i: (i["min_row"], i["max_row"])):
+        hit = [
+            g for g in groups
+            if not (info["max_row"] < g["min_row"] or info["min_row"] > g["max_row"])
+        ]
+        merged = {
+            "min_row": min([info["min_row"]] + [g["min_row"] for g in hit]),
+            "max_row": max([info["max_row"]] + [g["max_row"] for g in hit]),
+            "columns": [],
+            "coords": [],
+            "codes": [],
+        }
+        for src in hit + [{"columns": info["columns"], "coords": [info["coord"]], "codes": info["codes"]}]:
+            for key in ("columns", "coords", "codes"):
+                for v in src[key]:
+                    if v not in merged[key]:
+                        merged[key].append(v)
+        groups = [g for g in groups if g not in hit] + [merged]
+    if groups:
+        gcol = max_col + 1
+        ws.cell(header_row, gcol).value = RATE_GROUP_COLUMN
+        for g in groups:
+            order = list(REQUIRED_COLUMNS.get("product_inventory", []))
+            g["columns"] = sorted(
+                g["columns"], key=lambda k: order.index(k) if k in order else len(order)
+            )
+            g["id"] = f"G{g['min_row']}-{g['max_row']}:" + ",".join(g["columns"])
+            for r in range(g["min_row"], g["max_row"] + 1):
+                ws.cell(r, gcol).value = g["id"]
+    return {"ranges": ranges, "groups": groups}
+
+
+def _read_sheet_with_merged_fill(path: Path, sheet: str | int) -> pd.DataFrame | None:
+    """DataFrame of ``sheet`` with merged ranges filled; None when it has none.
+
+    The workbook on disk is never modified — the filled copy lives in memory.
+    """
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path, data_only=True)
+    try:
+        ws = wb[sheet] if isinstance(sheet, str) else wb.worksheets[int(sheet)]
+        if not ws.merged_cells.ranges:
+            return None
+        info = fill_merged_cells(ws)
+        if not info["ranges"]:
+            return None
+        buf = BytesIO()
+        wb.save(buf)
+        title = ws.title
+    finally:
+        wb.close()
+    buf.seek(0)
+    df = pd.read_excel(buf, sheet_name=title, engine="openpyxl")
+    df.attrs["merged_fill"] = info
+    return df
+
+
 def _read_raw_excel(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise ExcelValidationError(f"فایل یافت نشد: {path}")
@@ -569,7 +720,10 @@ def _read_raw_excel(path: Path) -> pd.DataFrame:
         raise ExcelValidationError("فقط فایل Excel با پسوند .xlsx پذیرفته می‌شود.")
     sheet = _pick_excel_sheet(path)
     try:
-        df = pd.read_excel(path, sheet_name=sheet, engine="openpyxl")
+        # Merged ranges are filled first (see fill_merged_cells).
+        df = _read_sheet_with_merged_fill(path, sheet)
+        if df is None:
+            df = pd.read_excel(path, sheet_name=sheet, engine="openpyxl")
     except Exception as exc:  # noqa: BLE001
         raise ExcelValidationError(f"خواندن Excel ناموفق بود: {exc}") from exc
     if df.empty:

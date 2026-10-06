@@ -965,8 +965,18 @@ class RateRow:
 def match_inventory_stock(
     mat: MaterialLine,
     inventory: pd.DataFrame | None,
+    section: str | None = None,
 ) -> tuple[str | None, str | None, str | None, float | None]:
-    """Like ``_match_main_source`` but also returns current stock (موجودی) if matched."""
+    """Like ``_match_main_source`` but also returns current stock (موجودی) if matched.
+
+    ``section`` (billet/bloom/slab) restricts منبع اصلی to the rows that feed
+    that section (``analytics.section_rules``: codes with both شرکت and
+    پیمانکار rows → billet=company, bloom=contractor, slab=contractor + company
+    rows located «اسلب»).
+    """
+    from analytics.section_rules import section_inventory
+
+    inventory = section_inventory(inventory, section)
     matched, iid, kw = _match_main_source(mat, inventory)
     if not matched or inventory is None or inventory.empty:
         return matched, iid, kw, None
@@ -1044,13 +1054,17 @@ def build_rate_rows(
         "bloom": production.bloom_tons,
         "billet": production.billet_tons,
     }
+    from analytics.section_rules import section_inventory
+
     rows: list[RateRow] = []
     for section, cons in consumptions.items():
         tons = float(tons_by.get(section) or 0)
         tc = cons.tundish_count
         mc = cons.melt_count
+        # Only منبع اصلی rows that feed this section (analytics.section_rules).
+        sec_inv = section_inventory(inventory, section)
         for mat in cons.materials:
-            matched, iid, kw = _match_main_source(mat, inventory)
+            matched, iid, kw = _match_main_source(mat, sec_inv)
             per_t = (mat.quantity / tc) if tc and tc > 0 else None
             per_ton = (mat.quantity / tons) if tons > 0 else None
             per_m = (mat.quantity / mc) if mc and mc > 0 else None

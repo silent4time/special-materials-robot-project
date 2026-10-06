@@ -474,6 +474,7 @@ def build_history_model(months: list[MonthRecord], inventory: pd.DataFrame | Non
                 matched, iid, _kw, stock = mg.match_inventory_stock(
                     mg.MaterialLine(name=mm.name, quantity=mm.total_qty, unit=mm.unit, item_id=mm.item_id),
                     inventory,
+                    section=sec,
                 )
                 mm.matched_source, mm.item_id, mm.stock = matched, iid, stock
             except Exception:  # noqa: BLE001

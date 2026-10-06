@@ -1286,6 +1286,7 @@ def main() -> int:
         "bloom_patching",
         "slab_renovation",
         "slab_patching",
+        "rate_group",  # importer: merged rate crossing several codes
     ]
     assert "item_code_desc" not in clean_df.columns
     assert "keyword" in clean_df.columns

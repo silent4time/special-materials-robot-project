@@ -28,6 +28,8 @@ from analytics.critical_items import (
     SEGMENTS,
     TundishMonthCounts,
     build_critical_items_rows,
+    critical_item_count,
+    group_row_indices,
     normalize_reno_mode,
     report_footer_notes,
     report_subtitle,
@@ -58,8 +60,8 @@ class CriticalItemsResult:
         return RENO_LABEL_FA[self.reno_mode]
 
     def row_count(self, segment: str) -> int:
-        df = self.frames.get(segment)
-        return 0 if df is None else int(len(df))
+        # Items = plain codes + shared-need groups (member rows not counted).
+        return critical_item_count(self.frames.get(segment))
 
     @property
     def company_pdf(self) -> Path | None:
@@ -105,6 +107,8 @@ def _segment_table_section(segment: str, df: pd.DataFrame, reno_mode: str) -> di
         "sheet_title": f"اقلام بحرانی — {label}",
         "columns": list(REPORT_COLUMNS),
         "rows": rows_for_simple_report(df),
+        # Shared-need group subtotal rows are bold + shaded (PDF and xlsx).
+        "bold_rows": group_row_indices(df),
         "empty_message": (
             f"قلم «{label}» با نرخ و نیاز مثبت برای این ماه ({mode}) یافت نشد."
         ),
@@ -179,7 +183,10 @@ def generate_critical_items_files(
         generate_simple_report_pdf(
             title,
             subtitle=report_subtitle(
-                counts, row_count=len(df), segment=seg, reno_mode=reno_mode
+                counts,
+                row_count=critical_item_count(df),
+                segment=seg,
+                reno_mode=reno_mode,
             ),
             sections=[_segment_table_section(seg, df, reno_mode), notes],
             output_path=pdf_path,

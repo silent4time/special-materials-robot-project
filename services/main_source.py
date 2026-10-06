@@ -57,6 +57,7 @@ FIELD_LABELS_FA: dict[str, str] = {
     "bloom_patching": "پچینگ تاندیش بلوم",
     "slab_renovation": "نوسازی تاندیش اسلب",
     "slab_patching": "پچینگ تاندیش اسلب",
+    "rate_group": "گروه نرخ مشترک (ادغام)",
 }
 
 # File phrases for محل استفاده do NOT use ZWNJ (ریخته گری, not ریخته‌گری).

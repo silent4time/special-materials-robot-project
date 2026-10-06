@@ -22,12 +22,28 @@ four chars == «0000» → پیمانکار); still unknown → شرکت.
 AGGREGATION (per 4-digit کد دسته‌بندی, within one segment):
   • rows with اولویت 0 («بدون اولویت» = unused) are dropped first (blank → 1);
   • NO quantity threshold — rows with موجودی < 100 (or 0) are included;
-  • موجودی = sum of quantity over ALL remaining rows of the code, whether or
-    not that row has a consumption rate (e.g. 1450 بتن ملات: the rated row has
-    0 stock but sibling rows hold the stock);
-  • rates (renovation/patching/casting_floor) are summed over the same rows;
-    a code is listed when its active-mode rates give need > 0;
-  • نقطه بحرانی = max critical_point of those rows; alert when موجودی ≤ it.
+  • موجودی (per-row column) = SUM of quantity over ALL remaining rows of the
+    code, rated or not (e.g. 1450 بتن ملات: rated row 0, siblings hold stock);
+  • rates (renovation/patching/casting_floor) and نقطه بحرانی are PER-CODE
+    values = MAX over the same rows. The importer copies a merged rate cell into
+    every row it spans (excel.processor.fill_merged_cells), so the value must be
+    taken ONCE per code, never summed across rows;
+  • a code is listed when its active-mode rates give need > 0; alert when
+    موجودی ≤ نقطه بحرانی.
+
+SECTION ATTRIBUTION (analytics.section_rules, before the segment split): a
+  code with live rows on BOTH شرکت and پیمانکار takes BILLET rates only from
+  company rows, BLOOM rates only from contractor rows, SLAB rates from
+  contractor rows and from company rows whose محل استفاده contains «اسلب».
+
+SHARED NEED (merged rate crossing several codes, column ``rate_group``):
+  config.CRITICAL_SHARED_MERGE_MODE = "pooled" (default): the codes form ONE
+  group. Merged columns count ONCE for the group (max); other rate columns are
+  summed over member codes. Output = one group row (codes joined by «/»,
+  combined stock vs shared need, days of cover, critical flag) followed by one
+  row per member code with its OWN stock and «نیاز مشترک گروه» (no own need).
+  "per_code": every member code gets the full rate as a normal item.
+  Groups never cross segments (segment split happens first).
 
 ASSUMPTION (casting_floor): the سطح ریخته گری rate is treated as per-tundish
 material multiplied by (count_billet + count_bloom + count_slab). Refine when
@@ -45,6 +61,8 @@ from analytics.tundish import (
     _priority_values,
 )
 from bot.jalali import PERSIAN_MONTH_NAMES, days_in_jalali_month
+import config as _config
+from analytics.section_rules import apply_section_rate_attribution
 from excel.id_parse import is_contractor_material_id
 
 SEGMENT_COMPANY = "company"
@@ -73,6 +91,20 @@ def active_rate_cols(reno_mode: str = RENO_WITH) -> tuple[str, ...]:
     if normalize_reno_mode(reno_mode) == RENO_WITHOUT:
         return tuple(c for c in RATE_COLS if c not in RENOVATION_COLS)
     return RATE_COLS
+
+
+SHARED_POOLED = "pooled"
+SHARED_PER_CODE = "per_code"
+SHARED_NEED_LABEL = "نیاز مشترک گروه"
+ROW_ITEM = "item"
+ROW_GROUP = "group"
+ROW_MEMBER = "member"
+RATE_GROUP_COLUMN = "rate_group"
+
+
+def shared_merge_mode(value: str | None = None) -> str:
+    raw = value if value is not None else getattr(_config, "CRITICAL_SHARED_MERGE_MODE", SHARED_POOLED)
+    return SHARED_PER_CODE if str(raw or "").strip().lower() == SHARED_PER_CODE else SHARED_POOLED
 
 
 RATE_COLS = (
@@ -306,6 +338,7 @@ def build_critical_items_rows(
     days_in_month: int | None = None,
     segment: str | None = None,
     reno_mode: str = RENO_WITH,
+    shared_mode: str | None = None,
 ) -> pd.DataFrame:
     """One row per category_code with any renovation/patching/casting_floor > 0.
 
@@ -325,12 +358,20 @@ def build_critical_items_rows(
         "filtered_stock",
         "below_threshold",
         "daily_need",
+        "row_kind",
+        "group_codes",
     ]
     if inventory_df is None or inventory_df.empty or "category_code" not in inventory_df.columns:
         return pd.DataFrame(columns=empty_cols)
+    # Section attribution on the FULL frame (needs both segments): codes with
+    # شرکت + پیمانکار rows → billet from company, bloom from contractor, slab
+    # from contractor + company rows located «اسلب» (analytics.section_rules).
+    inventory_df, _changes = apply_section_rate_attribution(inventory_df)
     inventory_df = filter_inventory_segment(inventory_df, segment)
     if inventory_df is None or inventory_df.empty:
         return pd.DataFrame(columns=empty_cols)
+    # Shared-need groups come from the merge structure (all rows of the segment).
+    group_source = inventory_df
     # اولویت 0 = unused → excluded from stock, rates and critical point.
     # (No quantity threshold: rows with موجودی < 100 are kept.)
     inventory_df = drop_priority_zero_rows(inventory_df)
@@ -352,70 +393,233 @@ def build_critical_items_rows(
     for c in RATE_COLS:
         work[c] = _num_series(work, c)
 
-    # A code qualifies when the active-mode rates summed over its rows are > 0;
-    # stock still sums EVERY (non-priority-0) row of the code, rated or not.
     reno_mode = normalize_reno_mode(reno_mode)
     use_cols = active_rate_cols(reno_mode)
-
     days = int(days_in_month) if days_in_month is not None else days_in_jalali_month(
         counts.jalali_year, counts.jalali_month
     )
     days = max(1, days)
 
-    rows: list[dict[str, Any]] = []
+    per_code: dict[str, dict[str, Any]] = {}
     for code, group in work.groupby("category_code", sort=True):
-        rates = {c: float(_num_series(group, c).sum()) for c in RATE_COLS}
-        if sum(rates[c] for c in use_cols) <= 0:
-            continue
-        # Skip if aggregated rates are all zero (defensive)
-        if sum(rates.values()) <= 0:
-            continue
+        per_code[str(code)] = {
+            "rates": {c: float(_num_series(group, c).max()) for c in RATE_COLS},
+            "cp": _critical_point_value(group),
+            "stock": _real_stock(group),
+            "group": group,
+        }
+
+    groups = (
+        shared_need_groups(group_source, set(per_code))
+        if shared_merge_mode(shared_mode) == SHARED_POOLED
+        else []
+    )
+    grouped_codes = {code for g in groups for code in g["codes"]}
+
+    def _metrics(rates: dict[str, float], stock: float, cp: float | None) -> dict[str, Any] | None:
+        if sum(rates[c] for c in use_cols) <= 0 or sum(rates.values()) <= 0:
+            return None
         need = monthly_need_for_rates(counts=counts, reno_mode=reno_mode, **rates)
         if need <= 0:
-            # Still include zero-need only when rates exist but counts are all 0
-            # and casting_floor is 0 — skip those.
-            continue
-        desc, unit = _pick_description(group, use_cols)
-        stock = _real_stock(group)
+            return None
         daily = need / float(days)
-        if daily > 0:
-            days_cover = stock / daily
+        days_cover = stock / daily if daily > 0 else 0.0
+        return {
+            "need": need,
+            "daily": daily,
+            "days_cover": days_cover,
+            "below": bool(cp is not None and stock <= float(cp)),
+        }
+
+    def _row(code: str, desc: str, unit: str, stock: float, m: dict[str, Any], cp, kind: str) -> dict[str, Any]:
+        return {
+            "کد چهاررقمی": code,
+            "ردیف": 0,
+            "کد و شرح کالا": desc,
+            "موجودی": stock,
+            "واحد": unit,
+            "نیاز": round(m["need"], 3) if abs(m["need"] - round(m["need"])) > 1e-9 else int(round(m["need"])),
+            "حد تحمل(روز)": int(round(m["days_cover"])) if m["days_cover"] > 0 else 0,
+            "critical_point": cp,
+            "filtered_stock": stock,
+            "below_threshold": m["below"],
+            "daily_need": m["daily"],
+            "row_kind": kind,
+            "group_codes": "",
+        }
+
+    blocks: list[tuple[tuple, list[dict[str, Any]]]] = []
+    for code, info in per_code.items():
+        if code in grouped_codes:
+            continue
+        m = _metrics(info["rates"], info["stock"], info["cp"])
+        if m is None:
+            continue
+        desc, unit = _pick_description(info["group"], use_cols)
+        row = _row(code, desc, unit, info["stock"], m, info["cp"], ROW_ITEM)
+        blocks.append(((not m["below"], row["حد تحمل(روز)"], code), [row]))
+
+    for g in groups:
+        members = list(g["codes"])
+        merged_cols = set(g["columns"])
+        rates = {}
+        for c in RATE_COLS:
+            vals = [per_code[k]["rates"][c] for k in members]
+            rates[c] = max(vals) if c in merged_cols else sum(vals)
+        cps = [per_code[k]["cp"] for k in members if per_code[k]["cp"] is not None]
+        if not cps:
+            cp = None
+        elif "critical_point" in merged_cols:
+            cp = max(cps)
         else:
-            days_cover = 0.0
-        cp = _critical_point_value(group)
-        fstock = stock  # same rows as موجودی (priority ≠ 0, no qty threshold)
-        below = bool(cp is not None and fstock <= float(cp))
-        rows.append(
-            {
-                "کد چهاررقمی": str(code),
-                "ردیف": 0,  # filled below
-                "کد و شرح کالا": desc,
-                "موجودی": round(stock, 3) if abs(stock - round(stock)) > 1e-9 else int(round(stock)) if abs(stock - round(stock)) < 1e-9 else stock,
-                "واحد": unit,
-                "نیاز": round(need, 3) if abs(need - round(need)) > 1e-9 else int(round(need)),
-                "حد تحمل(روز)": int(round(days_cover)) if days_cover > 0 else 0,
-                "critical_point": cp,
-                "filtered_stock": fstock,
-                "below_threshold": below,
-                "daily_need": daily,
-            }
-        )
+            cp = float(sum(cps))
+        stock = float(sum(per_code[k]["stock"] for k in members))
+        m = _metrics(rates, stock, cp)
+        if m is None:
+            continue
+        descs = []
+        unit = ""
+        for k in members:
+            d, u = _pick_description(per_code[k]["group"], use_cols)
+            descs.append(d)
+            unit = unit or u
+        label_codes = "/".join(members)
+        head = _row(label_codes, _group_label(descs), unit, stock, m, cp, ROW_GROUP)
+        head["group_codes"] = label_codes
+        rows_block = [head]
+        for k, d in zip(members, descs):
+            _d, u = _pick_description(per_code[k]["group"], use_cols)
+            rows_block.append(
+                {
+                    "کد چهاررقمی": k,
+                    "ردیف": "",
+                    "کد و شرح کالا": d,
+                    "موجودی": per_code[k]["stock"],
+                    "واحد": u or unit,
+                    "نیاز": SHARED_NEED_LABEL,
+                    "حد تحمل(روز)": "—",
+                    "critical_point": None,
+                    "filtered_stock": per_code[k]["stock"],
+                    "below_threshold": None,
+                    "daily_need": None,
+                    "row_kind": ROW_MEMBER,
+                    "group_codes": label_codes,
+                }
+            )
+        blocks.append(((not m["below"], head["حد تحمل(روز)"], members[0]), rows_block))
 
-    if not rows:
+    if not blocks:
         return pd.DataFrame(columns=empty_cols)
-
+    blocks.sort(key=lambda b: b[0])
+    rows: list[dict[str, Any]] = []
+    n = 0
+    for _key, block in blocks:
+        for row in block:
+            if row["row_kind"] != ROW_MEMBER:
+                n += 1
+                row["ردیف"] = n
+            rows.append(row)
     out = pd.DataFrame(rows)
-    # Prefer categories below critical_point threshold first, then by low cover, then code
-    out = out.sort_values(
-        by=["below_threshold", "حد تحمل(روز)", "کد چهاررقمی"],
-        ascending=[False, True, True],
-        kind="stable",
-    ).reset_index(drop=True)
-    out["ردیف"] = range(1, len(out) + 1)
-    # Normalize موجودی / نیاز display numbers
     for col in ("موجودی", "نیاز"):
         out[col] = out[col].map(_pretty_num)
     return out
+
+
+def critical_item_count(df: pd.DataFrame | None) -> int:
+    """Listed items: plain codes + shared-need groups (member rows excluded)."""
+    if df is None or df.empty:
+        return 0
+    if "row_kind" not in df.columns:
+        return int(len(df))
+    return int((df["row_kind"] != ROW_MEMBER).sum())
+
+
+def group_row_indices(df: pd.DataFrame | None) -> list[int]:
+    """0-based positions of shared-need group subtotal rows (for emphasis)."""
+    if df is None or df.empty or "row_kind" not in df.columns:
+        return []
+    return [i for i, k in enumerate(df["row_kind"].tolist()) if k == ROW_GROUP]
+
+
+def _group_label(descs: list[str]) -> str:
+    """Common leading words of member descriptions (e.g. «نازل»), else first."""
+    words = [str(d or "").split() for d in descs if str(d or "").strip()]
+    if not words:
+        return "گروه مشترک"
+    common: list[str] = []
+    for parts in zip(*words):
+        if all(p == parts[0] for p in parts):
+            common.append(parts[0])
+        else:
+            break
+    base = " ".join(common) if common else words[0][0]
+    return f"{base} (گروه با نیاز مشترک)"
+
+
+def _parse_rate_group(value: object) -> tuple[str, tuple[str, ...]] | None:
+    text = "" if value is None else str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return None
+    gid, _, cols = text.partition(":")
+    return gid.strip(), tuple(c.strip() for c in cols.split(",") if c.strip())
+
+
+def shared_need_groups(
+    frame: pd.DataFrame | None, present_codes: set[str] | None = None
+) -> list[dict[str, Any]]:
+    """Code groups linked by ``rate_group`` (merged rate crossing codes).
+
+    ``frame`` must already be segment-filtered (groups never cross segments).
+    Codes sharing any rate_group id are unioned. Only codes in
+    ``present_codes`` (priority ≠ 0 rows exist) are kept; groups with < 2
+    such codes are dropped (the code is then a normal item).
+    """
+    if frame is None or frame.empty or RATE_GROUP_COLUMN not in frame.columns:
+        return []
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    cols_by_root: dict[str, set[str]] = {}
+    for _, row in frame.iterrows():
+        parsed = _parse_rate_group(row.get(RATE_GROUP_COLUMN))
+        code = _norm_code(row.get("category_code"))
+        if parsed is None or not code:
+            continue
+        gid, cols = parsed
+        a, b = find("g:" + gid), find("c:" + code)
+        if a != b:
+            parent[b] = a
+        cols_by_root.setdefault("g:" + gid, set()).update(cols)
+    comps: dict[str, dict[str, Any]] = {}
+    for node in list(parent):
+        root = find(node)
+        comp = comps.setdefault(root, {"codes": set(), "columns": set()})
+        if node.startswith("c:"):
+            comp["codes"].add(node[2:])
+        else:
+            comp["columns"].update(cols_by_root.get(node, set()))
+    out = []
+    for comp in comps.values():
+        codes = sorted(
+            c for c in comp["codes"] if present_codes is None or c in present_codes
+        )
+        if len(codes) >= 2:
+            out.append({"codes": codes, "columns": sorted(comp["columns"])})
+    return sorted(out, key=lambda g: g["codes"])
+
+
+def _norm_code(value: object) -> str:
+    text = "" if value is None else str(value).strip()
+    if text in {"nan", "None"}:
+        return ""
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    return text
 
 
 def _pretty_num(val: object) -> int | float:
@@ -492,10 +696,23 @@ def report_footer_notes(
             f"{days_in_jalali_month(counts.jalali_year, counts.jalali_month)} روز)."
         ),
         (
-            "تجمیع بر اساس کد ۴ رقمی: موجودی و نرخ‌ها جمع همه ردیف‌های همان کد "
-            "(در همان بخش شرکت/پیمانکار) با اولویت غیر صفر است — اولویت ۰ یعنی "
-            "استفاده نمی‌شود و حذف می‌شود؛ هیچ حد حداقل موجودی (مثل زیر ۱۰۰) اعمال "
-            "نمی‌شود و ردیف‌های بدون نرخ مصرف هم در موجودی جمع می‌شوند."
+            "تجمیع بر اساس کد ۴ رقمی (در همان بخش شرکت/پیمانکار، فقط ردیف‌های با "
+            "اولویت غیر صفر — اولویت ۰ یعنی استفاده نمی‌شود): موجودی = جمع موجودی همه "
+            "ردیف‌های کد، با نرخ یا بدون نرخ و بدون هیچ حد حداقل (مثل زیر ۱۰۰)؛ نرخ‌های "
+            "مصرف، سطح ریخته‌گری و نقطه بحرانی مقدار واحدِ هر کد هستند (بیشینه ردیف‌ها، "
+            "یک بار) و بین ردیف‌ها جمع نمی‌شوند."
+        ),
+        (
+            "خانه‌های ادغام‌شده (Merge) در فایل منبع اصلی: مقدار به همه ردیف‌های زیر "
+            "آن تعلق دارد و در ورود اطلاعات به همه آن ردیف‌ها کپی می‌شود؛ فقط موجودی "
+            "(مقدار هر ردیف) کپی نمی‌شود."
+        ),
+        shared_need_note(),
+        (
+            "تخصیص بخش برای کدی که هم ردیف «شرکت» و هم «پیمانکار» (با اولویت غیر صفر) "
+            "دارد: مصرف بیلت فقط از ردیف‌های شرکت، مصرف بلوم فقط از ردیف‌های پیمانکار، "
+            "و مصرف اسلب از ردیف‌های پیمانکار و ردیف‌های شرکت با محل استفاده «اسلب» "
+            "حساب می‌شود (حتی اگر خانه ادغام‌شده نرخ را به ردیف بخش دیگر کپی کرده باشد)."
         ),
         (
             "نقطه بحرانی: هشدار وقتی همین جمع موجودی کد به حد نقطه بحرانی دسته برسد."
@@ -507,6 +724,21 @@ def report_footer_notes(
             "(اگر خانه خالی باشد، قاعده شناسه «0000» ملاک است)."
         ),
     ]
+
+
+def shared_need_note(mode: str | None = None) -> str:
+    if shared_merge_mode(mode) == SHARED_PER_CODE:
+        return (
+            "نرخ ادغام‌شده روی چند کد ۴ رقمی (مثل نازل‌ها): هر کد نرخ کامل را "
+            "جداگانه می‌گیرد (حالت per_code)."
+        )
+    return (
+        "نیاز مشترک گروه: وقتی یک نرخ مصرف در فایل روی چند کد ۴ رقمی ادغام شده "
+        "(مثل نازل‌های بیلت در اندازه‌های مختلف)، آن نرخ یک نیاز مشترک برای کل گروه "
+        "است و فقط یک بار حساب می‌شود. ردیف گروه (کدها با «/») جمع موجودی کدها را "
+        "با نیاز مشترک مقایسه می‌کند و حد تحمل و وضعیت بحرانی از همین ردیف است؛ "
+        "زیر آن، هر کد با موجودی خودش و عبارت «نیاز مشترک گروه» می‌آید."
+    )
 
 
 def rows_for_simple_report(df: pd.DataFrame) -> list[dict[str, Any]]:
