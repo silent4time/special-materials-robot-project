@@ -559,6 +559,23 @@ def critical_items_menu() -> dict:
     )
 
 
+BTN_CRITICAL_RENO_WITH = "با نوسازی"
+BTN_CRITICAL_RENO_WITHOUT = "بدون نوسازی"
+CB_CRITICAL_RENO_PREFIX = "ci|reno|"
+
+
+def critical_reno_inline_keyboard() -> dict:
+    """Inline choice «با نوسازی» / «بدون نوسازی» before building اقلام بحرانی."""
+    return BaleClient.inline_keyboard(
+        [
+            [
+                {"text": f"🔧 {BTN_CRITICAL_RENO_WITH}", "callback_data": f"{CB_CRITICAL_RENO_PREFIX}with"},
+                {"text": f"🩹 {BTN_CRITICAL_RENO_WITHOUT}", "callback_data": f"{CB_CRITICAL_RENO_PREFIX}without"},
+            ]
+        ]
+    )
+
+
 def main_goal_menu() -> dict:
     """Submenu under گزارش‌ها for گزارش هدف اصلی (owner/manager/officer)."""
     return BaleClient.reply_keyboard(

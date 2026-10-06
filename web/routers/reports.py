@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import FileResponse, RedirectResponse
 
 from bot.activity import log_activity
+from analytics.critical_items import RENO_LABEL_FA, RENO_MODES, normalize_reno_mode
 from bot.jalali import PERSIAN_MONTH_NAMES, format_month_year, jalali_today
 from db.models import Database
 from web.deps import get_db, require_materials_user, require_non_technician
@@ -45,6 +46,8 @@ def _critical_context(db: Database, request: Request) -> dict:
     return {
         "critical_year": year,
         "critical_month": month,
+        "critical_reno": normalize_reno_mode(request.query_params.get("renovation") or "with"),
+        "reno_modes": [(m, RENO_LABEL_FA[m]) for m in RENO_MODES],
         "counts": counts,
         "recent_counts": recent,
         "month_names": [(n, PERSIAN_MONTH_NAMES[n]) for n in range(1, 13)],
@@ -116,7 +119,8 @@ async def critical_items_pdf(
     user=Depends(require_materials_user),
     db: Database = Depends(get_db),
 ):
-    """PDF اقلام بحرانی. ``segment=company`` (default, primary) | ``contractor``."""
+    """PDF اقلام بحرانی. ``segment=company`` (default, primary) | ``contractor``;
+    ``renovation=with`` («با نوسازی», default) | ``without`` («بدون نوسازی»)."""
     from services.critical_items_report import SEGMENT_LABEL_FA, SEGMENTS
 
     today = jalali_today()
@@ -130,26 +134,28 @@ async def critical_items_pdf(
     segment = (request.query_params.get("segment") or "company").strip().lower()
     if segment not in SEGMENTS:
         segment = "company"
+    reno = normalize_reno_mode(request.query_params.get("renovation") or "with")
     res = report_svc.generate_critical_items_files(
-        db, user, jalali_year=year, jalali_month=month
+        db, user, jalali_year=year, jalali_month=month, reno_mode=reno
     )
     path = res.pdfs.get(segment) if not res.error else None
     err = res.error
     if not err and path is None:
         err = (
             f"در این ماه قلم بحرانیِ «{SEGMENT_LABEL_FA[segment]}» "
-            "با نرخ و نیاز مثبت یافت نشد."
+            f"({res.reno_label}) با نرخ و نیاز مثبت یافت نشد."
         )
     if err or not path:
         return RedirectResponse(
             f"/reports?err={quote(err or 'خطا')}"
-            f"&jalali_year={year}&jalali_month={month}#critical-items",
+            f"&jalali_year={year}&jalali_month={month}&renovation={reno}#critical-items",
             status_code=303,
         )
     log_activity(
         db,
         user,
         "report_critical_items" if segment == "company" else "report_critical_items_contractor",
+        renovation=reno,
     )
     return FileResponse(path, media_type="application/pdf", filename=path.name)
 
@@ -168,8 +174,9 @@ async def critical_items_xlsx(
         return RedirectResponse(
             f"/reports?err={quote('سال/ماه نامعتبر')}", status_code=303
         )
+    reno = normalize_reno_mode(request.query_params.get("renovation") or "with")
     res = report_svc.generate_critical_items_files(
-        db, user, jalali_year=year, jalali_month=month
+        db, user, jalali_year=year, jalali_month=month, reno_mode=reno
     )
     path, err = res.xlsx, res.error
     if err or not path:
@@ -178,7 +185,7 @@ async def critical_items_xlsx(
             f"&jalali_year={year}&jalali_month={month}",
             status_code=303,
         )
-    log_activity(db, user, "report_critical_items_xlsx")
+    log_activity(db, user, "report_critical_items_xlsx", renovation=reno)
     return FileResponse(path, media_type=_XLSX, filename=path.name)
 
 

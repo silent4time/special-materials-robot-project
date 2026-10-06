@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Smoke: اقلام بحرانی split (شرکت / پیمانکار), ledger applied ONCE, and
-A4-portrait PDFs for every generator (bot + web share the same code path).
+"""Smoke: اقلام بحرانی split (شرکت / پیمانکار) × mode (با نوسازی / بدون نوسازی),
+ledger applied ONCE, and A4-portrait PDFs for every generator (bot + web share
+the same code path).
 
 Self-contained: temp DB + synthetic منبع اصلی; never touches data/bot.db.
 Page-1 PNGs are written to reports/smoke_portrait/ for visual checks.
@@ -49,6 +50,11 @@ def _inventory_frame() -> pd.DataFrame:
         dict(category_code="1450", id="378155551234B", product_name="بتن ملات",
              keyword="بتن ملات", quantity=50, priority=1, unit="Kg",
              contractor_or_company=" شركت ", billet_renovation=2, billet_patching=0, **zero),
+        # casting floor only → listed in BOTH modes (cf × total tundishes)
+        dict(category_code="1451", id="378166661234D", product_name="بتن 80 گان",
+             keyword="بتن 80 گان", quantity=40, priority=1, unit="Kg",
+             contractor_or_company="شرکت", billet_renovation=0, billet_patching=0,
+             **{**zero, "casting_floor": 1}),
         # no rates → never listed
         dict(category_code="9999", id="378199991234C", product_name="بدون نرخ",
              keyword="سایر", quantity=7, priority=1, unit="No",
@@ -147,16 +153,17 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     q_inv = float(inv.loc[inv["id"] == COMPANY_ID, "quantity"].iloc[0])
     assert q_raw == 1000 and q_inv == 900, (q_raw, q_inv)
     summary = {(r["value"], r["segment"]): r["rows"] for r in contractor_column_summary(raw)}
-    assert summary.get(("شرکت", "company")) == 2 and summary.get(("پیمانکار", "contractor")) == 1, summary
+    assert summary.get(("شرکت", "company")) == 3 and summary.get(("پیمانکار", "contractor")) == 1, summary
 
     res = generate_critical_items_files(
         db, user, jalali_year=1405, jalali_month=6, output_dir=tmp / "out", file_prefix="crit",
     )
     assert res.error is None, res.error
+    assert res.reno_mode == "with" and "با نوسازی" in res.titles["company"]
     co, ct = res.frames["company"], res.frames["contractor"]
     co_codes = list(co["کد چهاررقمی"].astype(str))
     ct_codes = list(ct["کد چهاررقمی"].astype(str))
-    assert sorted(co_codes) == ["1203", "1450"], co_codes
+    assert sorted(co_codes) == ["1203", "1450", "1451"], co_codes
     assert sorted(ct_codes) == ["1203", "1655"], ct_codes
     r_co = co.loc[co["کد چهاررقمی"].astype(str) == "1203"].iloc[0]
     r_ct = ct.loc[ct["کد چهاررقمی"].astype(str) == "1203"].iloc[0]
@@ -169,12 +176,55 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     assert res.company_pdf and res.contractor_pdf and res.xlsx
     from openpyxl import load_workbook
 
+    def _sheet_text(ws) -> str:
+        return " ".join(str(c.value) for row in ws.iter_rows() for c in row if c.value is not None)
+
     wb = load_workbook(res.xlsx)
     assert wb.sheetnames == ["اقلام بحرانی — شرکت", "اقلام بحرانی — پیمانکار", "توضیحات"], wb.sheetnames
+    assert "با نوسازی" in _sheet_text(wb["اقلام بحرانی — شرکت"])
+    assert "«با نوسازی»" in _sheet_text(wb["توضیحات"])
     for p in (res.company_pdf, res.contractor_pdf):
         _assert_portrait(p)
-    print("service split + ledger-once OK", co_codes, ct_codes)
-    return {"critical_company": res.company_pdf, "critical_contractor": res.contractor_pdf}
+    assert "با_نوسازی" in res.company_pdf.name
+    print("service split + ledger-once (با نوسازی) OK", co_codes, ct_codes)
+
+    # «بدون نوسازی»: patching only (+ casting floor); renovation-only items drop
+    wo = generate_critical_items_files(
+        db, user, jalali_year=1405, jalali_month=6, output_dir=tmp / "out",
+        file_prefix="crit", reno_mode="without",
+    )
+    assert wo.error is None and wo.reno_mode == "without", wo.error
+    wco, wct = wo.frames["company"], wo.frames["contractor"]
+    wco_codes = sorted(wco["کد چهاررقمی"].astype(str))
+    wct_codes = sorted(wct["کد چهاررقمی"].astype(str))
+    assert wco_codes == ["1203", "1451"], wco_codes  # 1450 (reno only) dropped
+    assert wct_codes == ["1203"], wct_codes  # 1655 (reno only) dropped
+    n = lambda df, code: int(df.loc[df["کد چهاررقمی"].astype(str) == code, "نیاز"].iloc[0])  # noqa: E731
+    assert n(wco, "1203") == 100 and n(wct, "1203") == 50  # 10 × patching
+    assert n(wco, "1451") == n(co, "1451") == 10  # casting floor same in both modes
+    assert int(wco.loc[wco["کد چهاررقمی"].astype(str) == "1203", "موجودی"].iloc[0]) == 900
+    assert "بدون نوسازی" in wo.titles["company"] and "بدون نوسازی" in wo.titles["contractor"]
+    wb2 = load_workbook(wo.xlsx)
+    assert "بدون نوسازی" in _sheet_text(wb2["اقلام بحرانی — پیمانکار"])
+    assert "«بدون نوسازی»" in _sheet_text(wb2["توضیحات"])
+    for p in (wo.company_pdf, wo.contractor_pdf):
+        _assert_portrait(p)
+    assert wo.company_pdf != res.company_pdf and wo.xlsx != res.xlsx
+    # pure unit: need formula per mode
+    from analytics.critical_items import TundishMonthCounts, monthly_need_for_rates
+
+    cnt = TundishMonthCounts(1405, 6, 70, 0, 100)
+    kw = dict(billet_renovation=200, billet_patching=50, bloom_renovation=9, bloom_patching=9,
+              slab_renovation=170, slab_patching=30, casting_floor=1, counts=cnt)
+    assert monthly_need_for_rates(**kw) == 70 * 250 + 100 * 200 + 170
+    assert monthly_need_for_rates(**kw, reno_mode="without") == 70 * 50 + 100 * 30 + 170
+    print("service بدون نوسازی OK", wco_codes, wct_codes)
+    return {
+        "critical_company": res.company_pdf,
+        "critical_contractor": res.contractor_pdf,
+        "critical_company_no_reno": wo.company_pdf,
+        "critical_contractor_no_reno": wo.contractor_pdf,
+    }
 
 
 def test_bot_flow(tmp: Path) -> None:
@@ -205,16 +255,60 @@ def test_bot_flow(tmp: Path) -> None:
 
     client = FakeClient()
     app = handlers_mod.BotApp(client, db)
-    msg = {"chat": {"id": 901}, "from": {"id": 901}, "text": ""}
-    app._run_critical_items_report(msg, user, 1405, 6)
+    markups: list = []
+    orig_send = client.send_message
+
+    def send_message(chat_id, text, reply_markup=None, **kw):
+        markups.append(reply_markup)
+        return orig_send(chat_id, text, reply_markup=reply_markup, **kw)
+
+    client.send_message = send_message
+    msg = {"chat": {"id": 901}, "from": {"id": 901, "first_name": "مالک"}, "text": ""}
+
+    def say(text: str) -> None:
+        m = dict(msg, text=text)
+        assert app.on_critical_flow_text(m, text), text
+
+    # 1) «با نوسازی» via inline callback
+    app.on_critical_report_start(dict(msg, text=kb.BTN_CRITICAL_REPORT))
+    say("1405")
+    say("شهریور")
+    assert "با نوسازی" in client.msgs[-1] and "بدون نوسازی" in client.msgs[-1]
+    inline = markups[-1]["inline_keyboard"][0]
+    datas = [b["callback_data"] for b in inline]
+    assert datas == ["ci|reno|with", "ci|reno|without"], datas
+    assert not client.docs  # nothing generated before the choice
+    app.handle_callback_query({"id": "cq1", "data": datas[0], "from": msg["from"],
+                               "message": {"message_id": 55, "chat": msg["chat"]}})
     names = [p.name for p, _ in client.docs]
-    assert names == ["لیست_اقلام_بحرانی_شرکت.pdf", "لیست_اقلام_بحرانی_پیمانکار.pdf", "لیست_اقلام_بحرانی.xlsx"], names
+    assert names == ["لیست_اقلام_بحرانی_با_نوسازی_شرکت.pdf", "لیست_اقلام_بحرانی_با_نوسازی_پیمانکار.pdf",
+                     "لیست_اقلام_بحرانی_با_نوسازی.xlsx"], names
     assert "گزارش اصلی" in client.docs[0][1] and "پیمانکار" in client.docs[1][1]
-    assert any("شرکت (گزارش اصلی): 2 قلم" in m for m in client.msgs), client.msgs
+    assert "با نوسازی" in client.docs[0][1] and "با نوسازی" in client.docs[2][1]
+    assert "حالت «با نوسازی»" in client.msgs[-1], client.msgs[-1]
+    assert "شرکت (گزارش اصلی): 3 قلم" in client.msgs[-1], client.msgs[-1]
     for p, _ in client.docs[:2]:
         _assert_portrait(p)
-    assert kb.BTN_CRITICAL_REPORT
-    print("bot critical flow OK", names)
+    # stale callback after the report → friendly alert, no new docs
+    n_docs = len(client.docs)
+    app.handle_callback_query({"id": "cq2", "data": datas[1], "from": msg["from"],
+                               "message": {"message_id": 55, "chat": msg["chat"]}})
+    assert len(client.docs) == n_docs
+
+    # 2) «بدون نوسازی» via typed label
+    client.docs.clear()
+    app.on_critical_report_start(dict(msg, text=kb.BTN_CRITICAL_REPORT))
+    say("1405")
+    say("شهریور")
+    say("چیز دیگر")  # invalid → re-ask
+    assert not client.docs and "یکی از دو دکمه" in client.msgs[-1]
+    say(kb.BTN_CRITICAL_RENO_WITHOUT)
+    names = [p.name for p, _ in client.docs]
+    assert names == ["لیست_اقلام_بحرانی_بدون_نوسازی_شرکت.pdf", "لیست_اقلام_بحرانی_بدون_نوسازی_پیمانکار.pdf",
+                     "لیست_اقلام_بحرانی_بدون_نوسازی.xlsx"], names
+    assert "حالت «بدون نوسازی»" in client.msgs[-1]
+    assert "شرکت (گزارش اصلی): 2 قلم" in client.msgs[-1] and "پیمانکار (گزارش جداگانه): 1 قلم" in client.msgs[-1], client.msgs[-1]
+    print("bot critical flow (inline با نوسازی + typed بدون نوسازی) OK")
 
 
 def test_web(tmp: Path) -> dict:
@@ -241,15 +335,31 @@ def test_web(tmp: Path) -> dict:
         assert r.status_code == 200, (p, r.status_code, r.text[:300])
     r = c.get("/reports")
     assert "اقلام شرکت (PDF)" in r.text and "اقلام پیمانکار (PDF)" in r.text, r.text[-2000:]
-    for seg in ("company", "contractor"):
-        r = c.get(f"/reports/critical-items?jalali_year=1405&jalali_month=6&segment={seg}")
-        assert r.status_code == 200 and r.content[:4] == b"%PDF", (seg, r.status_code, r.headers)
-        pth = tmp / f"web_critical_{seg}.pdf"
-        pth.write_bytes(r.content)
-        _assert_portrait(pth)
-        out[f"web_critical_{seg}"] = pth
-    r = c.get("/reports/critical-items.xlsx?jalali_year=1405&jalali_month=6")
-    assert r.status_code == 200 and r.content[:2] == b"PK"
+    assert 'name="renovation" value="with"' in r.text and 'name="renovation" value="without"' in r.text
+    r = c.get("/reports?renovation=without")
+    assert 'value="without" checked' in r.text
+    import io
+
+    from openpyxl import load_workbook
+
+    for reno in ("with", "without"):
+        for seg in ("company", "contractor"):
+            r = c.get(
+                f"/reports/critical-items?jalali_year=1405&jalali_month=6&segment={seg}&renovation={reno}"
+            )
+            assert r.status_code == 200 and r.content[:4] == b"%PDF", (seg, reno, r.status_code)
+            fname = r.headers.get("content-disposition", "")
+            assert ("%D8%A8%D8%AF%D9%88%D9%86" in fname) == (reno == "without"), fname  # «بدون»
+            pth = tmp / f"web_critical_{seg}_{reno}.pdf"
+            pth.write_bytes(r.content)
+            _assert_portrait(pth)
+            out[f"web_critical_{seg}_{reno}"] = pth
+        r = c.get(f"/reports/critical-items.xlsx?jalali_year=1405&jalali_month=6&renovation={reno}")
+        assert r.status_code == 200 and r.content[:2] == b"PK"
+        wb = load_workbook(io.BytesIO(r.content))
+        label = "بدون نوسازی" if reno == "without" else "با نوسازی"
+        notes = " ".join(str(x.value) for row in wb["توضیحات"].iter_rows() for x in row if x.value)
+        assert f"«{label}»" in notes, notes[:300]
     r = c.get("/reports/critical-items?jalali_year=1405&jalali_month=7", follow_redirects=False)
     assert r.status_code == 303
     # other web PDF endpoints: PDF (portrait) or a redirect with a Persian error

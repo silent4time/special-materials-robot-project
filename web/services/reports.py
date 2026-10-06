@@ -320,8 +320,11 @@ def generate_critical_items_files(
     *,
     jalali_year: int,
     jalali_month: int,
+    reno_mode: str = "with",
 ):
     """اقلام بحرانی (company PDF / contractor PDF / 2-sheet xlsx).
+
+    ``reno_mode``: "with" «با نوسازی» | "without" «بدون نوسازی».
 
     Thin wrapper over the shared ``services.critical_items_report`` (same code
     path as the bot). Returns a ``CriticalItemsResult``.
@@ -336,6 +339,7 @@ def generate_critical_items_files(
             jalali_month=int(jalali_month),
             file_prefix=_stamp_stem("critical_items"),
             letterhead_path=letterhead_path(db),
+            reno_mode=reno_mode,
         )
     except Exception as exc:  # noqa: BLE001
         from services.critical_items_report import CriticalItemsResult

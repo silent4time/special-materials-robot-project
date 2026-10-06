@@ -31,7 +31,7 @@
 <div class="card" id="critical-items">
   <h2>🚨 اقلام بحرانی نسوز تاندیش</h2>
   <p class="muted">
-    همان منطق ربات: نیاز ماهانه ≈ تعداد تاندیش × (نوسازی+پچینگ) + سطح ریخته‌گری.
+    همان منطق ربات: نیاز ماهانه ≈ تعداد تاندیش × (نوسازی+پچینگ یا فقط پچینگ) + سطح ریخته‌گری.
     نقش‌های مجاز: مالک، مدیر، کاردان مسئول.
   </p>
   <form method="post" action="/reports/critical-items/counts" class="form-grid">
@@ -65,11 +65,21 @@
   <form method="get" class="report-actions" style="margin-top:1rem">
     <input type="hidden" name="jalali_year" value="{{ critical_year }}">
     <input type="hidden" name="jalali_month" value="{{ critical_month }}">
+    <fieldset class="reno-mode" style="border:0;padding:0;margin:0 0 .5rem 0">
+      <legend class="muted">حالت محاسبه نیاز:</legend>
+      {% for val, label in reno_modes %}
+      <label style="margin-inline-end:1rem">
+        <input type="radio" name="renovation" value="{{ val }}" {% if val == critical_reno %}checked{% endif %}>
+        {{ label }}
+      </label>
+      {% endfor %}
+    </fieldset>
     <button class="btn" formaction="/reports/critical-items" name="segment" value="company">گزارش اصلی — اقلام شرکت (PDF)</button>
     <button class="btn" formaction="/reports/critical-items" name="segment" value="contractor">گزارش جداگانه — اقلام پیمانکار (PDF)</button>
     <button class="btn" formaction="/reports/critical-items.xlsx">اکسل (شیت شرکت + شیت پیمانکار)</button>
   </form>
-  <p class="muted">تفکیک بر اساس ستون «پیمانکار / شرکت» منبع اصلی؛ گزارش اصلی فقط اقلام شرکت است و اقلام پیمانکار جدا می‌آید.</p>
+  <p class="muted">تفکیک بر اساس ستون «پیمانکار / شرکت» منبع اصلی؛ گزارش اصلی فقط اقلام شرکت است و اقلام پیمانکار جدا می‌آید.
+    «با نوسازی» = نرخ نوسازی + پچینگ (+ سطح ریخته‌گری)؛ «بدون نوسازی» = فقط پچینگ (+ سطح ریخته‌گری) — اقلامی که فقط نرخ نوسازی دارند حذف می‌شوند.</p>
   {% if recent_counts %}
   <p class="muted" style="margin-top:1rem">ثبت‌های اخیر:</p>
   <ul class="muted">

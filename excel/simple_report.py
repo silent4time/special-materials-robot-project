@@ -171,8 +171,9 @@ def generate_simple_report_xlsx(
     used_titles: set[str] = set()
     for i, section in enumerate(built):
         sec_title = section.get("title")
+        sheet_label = section.get("sheet_title") or sec_title
         sheet_name = _safe_sheet_title(
-            str(sec_title) if sec_title else (title if len(built) == 1 else f"بخش_{i + 1}"),
+            str(sheet_label) if sheet_label else (title if len(built) == 1 else f"بخش_{i + 1}"),
             fallback="گزارش",
             used=used_titles,
         )

@@ -2268,7 +2268,8 @@ class BotApp:
             "🚨 اقلام بحرانی\n"
             "۱) تعداد تاندیش بیلت/بلوم/اسلب ماه را ثبت کنید\n"
             "۲) گزارش را بگیرید: PDF اصلی (فقط اقلام شرکت)، PDF جداگانه "
-            "اقلام پیمانکار و اکسل با دو شیت جدا\n"
+            "اقلام پیمانکار و اکسل با دو شیت جدا؛ پس از انتخاب ماه، حالت "
+            "«با نوسازی» یا «بدون نوسازی» را انتخاب کنید\n"
             "نقش‌های مجاز: مالک، مدیر، کاردان مسئول."
             f"{extra}",
             kb.critical_items_menu(),
@@ -2322,6 +2323,7 @@ class BotApp:
         if await_kind not in {
             "year",
             "month",
+            "reno_mode",
             "count_billet",
             "count_bloom",
             "count_slab",
@@ -2390,8 +2392,9 @@ class BotApp:
             pending["month"] = int(month)
             year = int(pending["year"])
             if mode == "report":
+                pending["await"] = "reno_mode"
                 self._critical_pending[uid] = pending
-                self._run_critical_items_report(message, user, year, int(month))
+                self._ask_critical_reno_mode(message, year, int(month))
                 return True
             # counts mode — load existing and ask billet
             existing = self.db.get_monthly_tundish_counts(year, int(month))
@@ -2408,6 +2411,24 @@ class BotApp:
                 message,
                 f"تعداد تاندیش بیلت در {name} {year} را بفرستید (عدد صحیح ≥ ۰):{hint}",
                 kb.critical_items_menu(),
+            )
+            return True
+
+        if await_kind == "reno_mode":
+            from analytics.critical_items import RENO_WITH, RENO_WITHOUT
+
+            norm = raw.replace("🔧", "").replace("🩹", "").strip()
+            if norm == kb.BTN_CRITICAL_RENO_WITHOUT:
+                reno = RENO_WITHOUT
+            elif norm == kb.BTN_CRITICAL_RENO_WITH:
+                reno = RENO_WITH
+            else:
+                self._ask_critical_reno_mode(
+                    message, int(pending["year"]), int(pending["month"]), retry=True
+                )
+                return True
+            self._run_critical_items_report(
+                message, user, int(pending["year"]), int(pending["month"]), reno_mode=reno
             )
             return True
 
@@ -2488,20 +2509,67 @@ class BotApp:
 
         return False
 
+    def _ask_critical_reno_mode(
+        self, message: dict, year: int, month: int, *, retry: bool = False
+    ) -> None:
+        """Inline «با نوسازی» / «بدون نوسازی» choice (typed label also accepted)."""
+        from bot.jalali import format_month_year
+
+        label = format_month_year(year, month, named=True)
+        head = "لطفاً یکی از دو دکمه را بزنید.\n" if retry else ""
+        self._reply(
+            message,
+            f"{head}حالت محاسبه نیاز اقلام بحرانی برای {label} را انتخاب کنید:\n"
+            "• با نوسازی: نرخ نوسازی + پچینگ (+ سطح ریخته‌گری)\n"
+            "• بدون نوسازی: فقط پچینگ (+ سطح ریخته‌گری)؛ اقلامی که فقط نرخ نوسازی "
+            "دارند فهرست نمی‌شوند.",
+            kb.critical_reno_inline_keyboard(),
+        )
+
+    def _on_critical_reno_callback(self, cq_data: str, message: dict, user: dict, answer) -> None:
+        from analytics.critical_items import RENO_LABEL_FA, normalize_reno_mode
+
+        uid = str(user["bale_user_id"])
+        pending = self._critical_pending.get(uid)
+        if not pending or pending.get("await") != "reno_mode":
+            answer("این انتخاب منقضی شده؛ دوباره «تولید گزارش اقلام بحرانی» را بزنید.", alert=True)
+            return
+        if self._deny_technician(message, user):
+            self._clear_critical_pending(uid)
+            answer()
+            return
+        reno = normalize_reno_mode(cq_data[len(kb.CB_CRITICAL_RENO_PREFIX):])
+        answer(f"حالت: {RENO_LABEL_FA[reno]}")
+        chat_id = (message.get("chat") or {}).get("id")
+        if chat_id is not None and message.get("message_id") is not None:
+            try:
+                self.client.edit_message_reply_markup(
+                    chat_id, int(message["message_id"]), {"inline_keyboard": []}
+                )
+            except BaleAPIError:
+                pass
+        self._run_critical_items_report(
+            message, user, int(pending["year"]), int(pending["month"]), reno_mode=reno
+        )
+
     def _run_critical_items_report(
-        self, message: dict, user: dict, year: int, month: int
+        self, message: dict, user: dict, year: int, month: int, *, reno_mode: str = "with"
     ) -> None:
         """Send company report, then contractor report, then the 2-sheet xlsx.
 
         All building is in the shared ``services.critical_items_report`` (same
         code path as the web panel; ledger applied once by load_primary_inventory).
         """
+        from analytics.critical_items import RENO_LABEL_FA, normalize_reno_mode
         from bot.jalali import format_month_year
         from services.critical_items_report import (
             SEGMENT_COMPANY,
             SEGMENT_CONTRACTOR,
             generate_critical_items_files,
         )
+
+        reno_mode = normalize_reno_mode(reno_mode)
+        reno_label = RENO_LABEL_FA[reno_mode]
 
         uid = str(user["bale_user_id"])
         self._clear_critical_pending(uid)
@@ -2524,6 +2592,7 @@ class BotApp:
                 output_dir=REPORT_DIR / "critical_items" / uid,
                 file_prefix="لیست_اقلام_بحرانی",
                 letterhead_path=self._letterhead_path(),
+                reno_mode=reno_mode,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("critical items report failed")
@@ -2536,7 +2605,7 @@ class BotApp:
             elif text.startswith("قلمی"):
                 text = (
                     "قلمی با نرخ نوسازی/پچینگ/سطح ریخته‌گری و نیاز مثبت "
-                    "برای این تعداد تاندیش یافت نشد."
+                    f"برای این تعداد تاندیش ({reno_label}) یافت نشد."
                 )
             self._reply(message, text, menu)
             return
@@ -2559,13 +2628,16 @@ class BotApp:
                 self.client.send_document(
                     chat_id,
                     res.xlsx,
-                    caption="نسخه اکسل اقلام بحرانی — شیت «شرکت» و شیت «پیمانکار» جدا",
+                    caption=(
+                        f"نسخه اکسل اقلام بحرانی ({reno_label}) — "
+                        "شیت «شرکت» و شیت «پیمانکار» جدا"
+                    ),
                 )
         except Exception as exc:  # noqa: BLE001
             logger.exception("critical items send failed")
             self._reply(message, f"خطا در ارسال گزارش اقلام بحرانی: {exc}", menu)
             return
-        lines = [f"گزارش اقلام بحرانی {label} ارسال شد."]
+        lines = [f"گزارش اقلام بحرانی {label} — حالت «{reno_label}» ارسال شد."]
         lines.append(
             f"• شرکت (گزارش اصلی): {n_company} قلم"
             + ("" if n_company else " — قلمی با نیاز مثبت نبود")
@@ -2576,9 +2648,11 @@ class BotApp:
         )
         self._reply(message, "\n".join(lines), menu)
         if SEGMENT_COMPANY in sent:
-            log_activity(self.db, user, "report_critical_items")
+            log_activity(self.db, user, "report_critical_items", renovation=reno_mode)
         if SEGMENT_CONTRACTOR in sent:
-            log_activity(self.db, user, "report_critical_items_contractor")
+            log_activity(
+                self.db, user, "report_critical_items_contractor", renovation=reno_mode
+            )
 
     def on_remaining_critical(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -4222,6 +4296,14 @@ class BotApp:
                 self.client.answer_callback_query(cq_id, text=text, show_alert=alert)
             except BaleAPIError as exc:
                 logger.warning("answerCallbackQuery failed: %s", exc)
+
+        if data.startswith(kb.CB_CRITICAL_RENO_PREFIX):
+            user = ensure_registered(self.db, uid, self._display_name(message))
+            if not user:
+                answer("شما در سیستم ثبت نشده‌اید.", alert=True)
+                return
+            self._on_critical_reno_callback(data, message, user, answer)
+            return
 
         if not data.startswith("ss|"):
             answer()

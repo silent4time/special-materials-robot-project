@@ -2,10 +2,15 @@
 
 Shared by Bale bot and web panel. Do not duplicate this logic elsewhere.
 
-ASSUMPTION (renovation vs patching): when the monthly split between نوسازی and
-پچینگ is unknown, per-tundish material for a type is the SUM of both columns
-(e.g. billet_renovation + billet_patching). When daily tundish logs exist,
-replace the sum with separate renovation/patching counts × rates.
+MODES (نوسازی): the user picks one before generating.
+  • «با نوسازی» (RENO_WITH, default / previous behavior): per-tundish material
+    for a type = renovation + patching (e.g. billet_renovation + billet_patching).
+  • «بدون نوسازی» (RENO_WITHOUT): per-tundish material = patching only; every
+    *_renovation column is ignored. Items whose need comes only from renovation
+    (e.g. «بتن 86 نوسازی», patching rate 0) get need 0 and are NOT listed.
+  The سطح ریخته گری (casting_floor) share is kept in BOTH modes — it is consumed
+  by casting on the floor, independent of tundish renovation.
+Rates stay separate in منبع اصلی (billet/bloom/slab × renovation/patching).
 
 SPLIT (پیمانکار / شرکت): rows of منبع اصلی are split by the
 ``contractor_or_company`` column («پیمانکار / شرکت» in sheet «ریز اطلاعات»)
@@ -40,6 +45,28 @@ SEGMENT_CONTRACTOR = "contractor"
 SEGMENTS = (SEGMENT_COMPANY, SEGMENT_CONTRACTOR)
 SEGMENT_LABEL_FA = {SEGMENT_COMPANY: "شرکت", SEGMENT_CONTRACTOR: "پیمانکار"}
 CONTRACTOR_COLUMN = "contractor_or_company"
+
+RENO_WITH = "with"
+RENO_WITHOUT = "without"
+RENO_MODES = (RENO_WITH, RENO_WITHOUT)
+RENO_LABEL_FA = {RENO_WITH: "با نوسازی", RENO_WITHOUT: "بدون نوسازی"}
+RENOVATION_COLS = ("billet_renovation", "bloom_renovation", "slab_renovation")
+
+
+def normalize_reno_mode(value: object) -> str:
+    """Accept with/without, 1/0, true/false or the Persian labels; default RENO_WITH."""
+    text = "".join(str(value or "").split()).replace("\u200c", "").lower()
+    if text in {"without", "without_renovation", "0", "false", "no", "بدوننوسازی", "بدون"}:
+        return RENO_WITHOUT
+    return RENO_WITH
+
+
+def active_rate_cols(reno_mode: str = RENO_WITH) -> tuple[str, ...]:
+    """Rate columns that contribute to need in the given mode."""
+    if normalize_reno_mode(reno_mode) == RENO_WITHOUT:
+        return tuple(c for c in RATE_COLS if c not in RENOVATION_COLS)
+    return RATE_COLS
+
 
 RATE_COLS = (
     "billet_renovation",
@@ -178,7 +205,9 @@ def _short_desc(text: object, limit: int = 80) -> str:
     return s[: max(1, limit - 1)].rstrip() + "…"
 
 
-def _pick_description(group: pd.DataFrame) -> tuple[str, str]:
+def _pick_description(
+    group: pd.DataFrame, rate_cols: tuple[str, ...] | None = None
+) -> tuple[str, str]:
     """Return (description, unit) from best keyword / product_name row."""
     work = group.copy()
     prio = (
@@ -187,7 +216,7 @@ def _pick_description(group: pd.DataFrame) -> tuple[str, str]:
         else pd.Series(1.0, index=work.index)
     )
     work["_prio"] = prio
-    rate_sum = sum(_num_series(work, c) for c in RATE_COLS)
+    rate_sum = sum(_num_series(work, c) for c in (rate_cols or RATE_COLS))
     work["_has_rate"] = rate_sum > 0
     candidates = work.loc[work["_has_rate"]].copy()
     if candidates.empty:
@@ -229,12 +258,17 @@ def monthly_need_for_rates(
     slab_patching: float,
     casting_floor: float,
     counts: TundishMonthCounts,
+    reno_mode: str = RENO_WITH,
 ) -> float:
-    """Monthly need from per-tundish rates × counts (+ casting_floor rule)."""
-    # ASSUMPTION: renovation + patching summed until daily logs split them.
-    per_billet = float(billet_renovation) + float(billet_patching)
-    per_bloom = float(bloom_renovation) + float(bloom_patching)
-    per_slab = float(slab_renovation) + float(slab_patching)
+    """Monthly need from per-tundish rates × counts (+ casting_floor rule).
+
+    «با نوسازی»: per tundish = renovation + patching. «بدون نوسازی»: patching
+    only. casting_floor is applied in both modes.
+    """
+    reno = 1.0 if normalize_reno_mode(reno_mode) == RENO_WITH else 0.0
+    per_billet = reno * float(billet_renovation) + float(billet_patching)
+    per_bloom = reno * float(bloom_renovation) + float(bloom_patching)
+    per_slab = reno * float(slab_renovation) + float(slab_patching)
     need = (
         float(counts.count_billet) * per_billet
         + float(counts.count_bloom) * per_bloom
@@ -256,12 +290,16 @@ def build_critical_items_rows(
     *,
     days_in_month: int | None = None,
     segment: str | None = None,
+    reno_mode: str = RENO_WITH,
 ) -> pd.DataFrame:
     """One row per category_code with any renovation/patching/casting_floor > 0.
 
     ``segment`` = SEGMENT_COMPANY / SEGMENT_CONTRACTOR restricts the input rows
     (stock, rates, critical-point totals) to that «پیمانکار / شرکت» side before
     aggregation. None keeps every row (legacy / tests).
+
+    ``reno_mode`` = RENO_WITH (renovation + patching) or RENO_WITHOUT (patching
+    only; renovation-only categories drop out). casting_floor counts in both.
 
     Columns match the sample: کد چهاررقمی | ردیف | کد و شرح کالا | موجودی |
     واحد | نیاز | حد تحمل(روز). Extra columns (critical_point, filtered_stock,
@@ -295,7 +333,9 @@ def build_critical_items_rows(
         work[c] = _num_series(work, c)
 
     # Categories with any positive rate on any row
-    rate_any = work[list(RATE_COLS)].sum(axis=1) > 0
+    reno_mode = normalize_reno_mode(reno_mode)
+    use_cols = active_rate_cols(reno_mode)
+    rate_any = work[list(use_cols)].sum(axis=1) > 0
     work = work.loc[rate_any]
     if work.empty:
         return pd.DataFrame(columns=empty_cols)
@@ -315,15 +355,17 @@ def build_critical_items_rows(
     rows: list[dict[str, Any]] = []
     for code, group in work.groupby("category_code", sort=True):
         rates = {c: float(_num_series(group, c).sum()) for c in RATE_COLS}
+        if sum(rates[c] for c in use_cols) <= 0:
+            continue
         # Skip if aggregated rates are all zero (defensive)
         if sum(rates.values()) <= 0:
             continue
-        need = monthly_need_for_rates(counts=counts, **rates)
+        need = monthly_need_for_rates(counts=counts, reno_mode=reno_mode, **rates)
         if need <= 0:
             # Still include zero-need only when rates exist but counts are all 0
             # and casting_floor is 0 — skip those.
             continue
-        desc, unit = _pick_description(group)
+        desc, unit = _pick_description(group, use_cols)
         stock = _real_stock(group)
         daily = need / float(days)
         if daily > 0:
@@ -376,26 +418,53 @@ def _pretty_num(val: object) -> int | float:
     return round(num, 3)
 
 
-def report_title(counts: TundishMonthCounts, segment: str | None = None) -> str:
-    if segment in SEGMENT_LABEL_FA:
-        return (
-            f"لیست اقلام بحرانی نسوز تاندیش — {SEGMENT_LABEL_FA[segment]} "
-            f"({counts.month_label()})"
-        )
-    return f"لیست اقلام بحرانی نسوز تاندیش ({counts.month_label()})"
+def report_title(
+    counts: TundishMonthCounts,
+    segment: str | None = None,
+    reno_mode: str | None = None,
+) -> str:
+    seg = f" — {SEGMENT_LABEL_FA[segment]}" if segment in SEGMENT_LABEL_FA else ""
+    mode = (
+        f" — {RENO_LABEL_FA[normalize_reno_mode(reno_mode)]}" if reno_mode is not None else ""
+    )
+    return f"لیست اقلام بحرانی نسوز تاندیش{seg}{mode} ({counts.month_label()})"
 
 
 def report_subtitle(
-    counts: TundishMonthCounts, *, row_count: int, segment: str | None = None
+    counts: TundishMonthCounts,
+    *,
+    row_count: int,
+    segment: str | None = None,
+    reno_mode: str | None = None,
 ) -> str:
     seg = f"اقلام {SEGMENT_LABEL_FA[segment]}: " if segment in SEGMENT_LABEL_FA else ""
+    mode = (
+        f"حالت: {RENO_LABEL_FA[normalize_reno_mode(reno_mode)]} | "
+        if reno_mode is not None
+        else ""
+    )
     return (
-        f"{seg}{row_count} قلم | تعداد تاندیش — بیلت: {counts.count_billet}، "
+        f"{mode}{seg}{row_count} قلم | تعداد تاندیش — بیلت: {counts.count_billet}، "
         f"بلوم: {counts.count_bloom}، اسلب: {counts.count_slab}"
     )
 
 
-def report_footer_notes(counts: TundishMonthCounts) -> list[str]:
+def reno_mode_note(reno_mode: str | None = None) -> str:
+    if normalize_reno_mode(reno_mode) == RENO_WITHOUT:
+        return (
+            "حالت محاسبه: «بدون نوسازی» — مصرف هر تاندیش فقط نرخ پچینگ "
+            "(بیلت/بلوم/اسلب) است و ستون‌های نوسازی نادیده گرفته می‌شوند؛ اقلامی که "
+            "نیازشان فقط از نوسازی است (نرخ پچینگ صفر، مثل «بتن 86 نوسازی») فهرست نمی‌شوند."
+        )
+    return (
+        "حالت محاسبه: «با نوسازی» — برای هر نوع تاندیش، مصرف هر تاندیش = "
+        "نوسازی + پچینگ (تا وقتی لاگ روزانه نوسازی/پچینگ جدا شود)."
+    )
+
+
+def report_footer_notes(
+    counts: TundishMonthCounts, reno_mode: str | None = None
+) -> list[str]:
     """توضیحات footer matching the sample sheet style."""
     return [
         (
@@ -403,12 +472,10 @@ def report_footer_notes(counts: TundishMonthCounts) -> list[str]:
             f"بلوم {counts.count_bloom} و اسلب {counts.count_slab} "
             f"در نظر گرفته شده است."
         ),
+        reno_mode_note(reno_mode),
         (
-            "فرض محاسبه نیاز: برای هر نوع تاندیش، مصرف هر تاندیش = "
-            "نوسازی + پچینگ (تا وقتی لاگ روزانه نوسازی/پچینگ جدا شود)."
-        ),
-        (
-            "فرض سطح ریخته‌گری: نرخ ستون × مجموع تعداد تاندیش‌های ماه."
+            "فرض سطح ریخته‌گری: نرخ ستون × مجموع تعداد تاندیش‌های ماه "
+            "(در هر دو حالت با/بدون نوسازی منظور می‌شود)."
         ),
         (
             f"حد تحمل (روز) = موجودی واقعی ÷ (نیاز ماهانه ÷ "
