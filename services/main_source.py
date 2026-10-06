@@ -363,6 +363,10 @@ def upsert_row(
         raise KeyError(f"ردیفی با شناسه «{item_id}» یافت نشد.")
     allowed = {k: v for k, v in updates.items() if k in INVENTORY_COLUMNS and k != "id"}
     for key, value in allowed.items():
+        if key not in {"quantity", "priority"} and key in df.columns and df[key].dtype != object:
+            # Text cells (e.g. an all-empty «نقطه بحرانی» column reads as float64 NaN):
+            # widen to object so a string value can be stored.
+            df[key] = df[key].astype(object)
         if key == "quantity":
             df.at[idx, key] = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
         elif key == "priority":

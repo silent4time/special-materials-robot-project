@@ -505,6 +505,35 @@ def _basis_label() -> str:
     return basis_from_months([(y, m, 0, 0, 0, "manual") for y, m in _basis_months()]).basis_label()
 
 
+def test_upsert_critical_point(tmp: Path) -> None:
+    """Sanctioned edit path writes «نقطه بحرانی» even when the column is all empty
+    (float64 NaN) — t211s979 bug: TypeError on assigning a string."""
+    import _smoke_isolation
+    from db.models import Database
+    from services.main_source import load_primary_frame, persist_primary_frame, upsert_row
+
+    import services.main_source as ms
+
+    _smoke_isolation.isolate_uploads()
+    assert ms.UPLOAD_DIR == _smoke_isolation.SMOKE_UPLOAD_DIR
+    db = Database(tmp / "upsert.db")
+    db.upsert_user("901", role="owner", display_name="مالک تست")
+    inv = _inventory_frame()
+    inv["critical_point"] = float("nan")
+    persist_primary_frame(db, inv, bale_user_id="901")
+    before = load_primary_frame(db, bale_user_id="901")
+    assert before["critical_point"].isna().all()
+    upsert_row(db, COMPANY_ID, {"critical_point": 31500}, bale_user_id="901")
+    upsert_row(db, "378177771111E", {"critical_point": 0}, bale_user_id="901")
+    after = load_primary_frame(db, bale_user_id="901")
+    cp = dict(zip(after["id"].astype(str), after["critical_point"]))
+    assert float(cp[COMPANY_ID]) == 31500 and float(cp["378177771111E"]) == 0, cp
+    assert pd.isna(cp["378199991234C"]) or str(cp["378199991234C"]) in {"", "nan"}, cp
+    for col in ("quantity", "priority", "billet_renovation", "product_name"):
+        assert list(after[col].astype(str)) == list(before[col].astype(str)), col
+    print("upsert_row «نقطه بحرانی» on empty column OK")
+
+
 def test_basis_sequence_log(tmp: Path) -> None:
     """t211u: report date = today; basis = 3 complete months before it; sequence log
     (one sequence = one tundish use) preferred over manual counts; a manual SAMPLE
@@ -926,6 +955,7 @@ def main() -> int:
         test_aggregation_rule()
         test_horizon_rule()
         test_basis_sequence_log(tmp)
+        test_upsert_critical_point(tmp)
         pdfs: dict[str, Path] = {}
         for sub in ("svc", "bot", "web", "gen", "merge"):
             (tmp / sub).mkdir()
