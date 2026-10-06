@@ -230,6 +230,11 @@ async def main_source_upload(
                 clean_dir=Path(tmp) / "cleaned",
             )
             new_df = pd.read_excel(result.clean_path, engine="openpyxl")
+            # Authorized (require_catalog_admin) full-source upload: new 4-digit codes
+            # allowed, but a NEW کد 1800 row is never auto-added (t214u, same as bot).
+            new_df, skipped = main_source_svc.filter_inventory_upload(
+                old, new_df, allow_new_codes=True
+            )
             if old is not None and not old.empty:
                 merged = merge_clean_frames(old, new_df, "product_inventory")
             else:
@@ -254,6 +259,7 @@ async def main_source_upload(
             f"✅ فایل منبع اصلی دریافت و همسان‌سازی شد "
             f"({int(len(merged))} ردیف)."
             + segment_mismatch_note_fa(result.segment_mismatches)
+            + main_source_svc.skipped_rows_note_fa(skipped)
         )
     except (ExcelValidationError, ValueError, KeyError) as exc:
         error = str(exc)

@@ -461,6 +461,99 @@ def add_row(
     return {"path": str(path), "row": row_data, "id": item_id, "action": action}
 
 
+def delete_row(db: Database, item_id: str, *, bale_user_id: str | int) -> dict[str, Any]:
+    """Remove one inventory row by id (sanctioned path; callers log the activity).
+
+    The previous cleaned file is kept as a snapshot by ``persist_primary_frame``.
+    """
+    df = load_primary_frame(db, bale_user_id=bale_user_id)
+    if df is None or df.empty:
+        raise ValueError("منبع اصلی هنوز آپلود نشده است.")
+    idx, current = find_row_by_id(df, item_id)
+    if idx is None or current is None:
+        raise KeyError(f"ردیفی با شناسه «{item_id}» یافت نشد.")
+    df = df.drop(index=idx).reset_index(drop=True)
+    path = persist_primary_frame(db, df, bale_user_id=bale_user_id)
+    return {"path": str(path), "row": current, "id": _norm_id(item_id)}
+
+
+# ---- t213u/t214u: منبع اصلی is the user's reference file ------------------------
+# File uploads never introduce a 4-digit code that منبع اصلی lacks (stock /
+# warehouse updates) and never auto-add a NEW کد 1800 (مازاد) row (any file upload).
+# New codes: only the settings add-record form or an authorized full-source upload;
+# new 1800 rows: only the add-record form. Updates of EXISTING ids are always fine.
+SURPLUS_CATEGORY_CODE = "1800"
+
+
+def _norm_code4(value: object) -> str:
+    text = _cell_str(value)
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    if text.isdigit() and len(text) <= 4:
+        text = text.zfill(4)
+    return text
+
+
+def filter_inventory_upload(
+    old: pd.DataFrame | None,
+    new: pd.DataFrame | None,
+    *,
+    allow_new_codes: bool,
+) -> tuple[pd.DataFrame | None, list[dict[str, Any]]]:
+    """Drop rows of an uploaded inventory frame that may not be auto-added.
+
+    Rows whose id already exists in ``old`` (live منبع اصلی) always pass (stock /
+    field updates). A NEW id is skipped when its code is 1800, or when
+    ``allow_new_codes`` is False and its 4-digit code is absent from ``old``.
+    No live منبع اصلی yet (``old`` empty) → first load, nothing filtered.
+    Returns (kept frame, skipped [{id, category_code, product_name, quantity, reason}]).
+    """
+    if new is None or new.empty or old is None or old.empty:
+        return new, []
+    old_ids = {_norm_id(v) for v in old.get("id", [])} - {""}
+    old_codes = {_norm_code4(v) for v in old.get("category_code", [])} - {""}
+    keep_mask = []
+    skipped: list[dict[str, Any]] = []
+    for _, row in new.iterrows():
+        iid = _norm_id(row.get("id"))
+        code = _norm_code4(row.get("category_code"))
+        reason = ""
+        if iid not in old_ids:
+            if code == SURPLUS_CATEGORY_CODE:
+                reason = "کد 1800 (مازاد) — فقط با «افزودن رکورد» دستی"
+            elif not allow_new_codes and code not in old_codes:
+                reason = "کد ۴ رقمی در منبع اصلی نیست"
+        keep_mask.append(not reason)
+        if reason:
+            skipped.append({
+                "id": _cell_str(row.get("id")),
+                "category_code": code,
+                "product_name": _cell_str(row.get("product_name")),
+                "quantity": row.get("quantity"),
+                "reason": reason,
+            })
+    kept = new.loc[keep_mask].reset_index(drop=True)
+    return kept, skipped
+
+
+def skipped_rows_note_fa(skipped: list[dict[str, Any]], *, limit: int = 15) -> str:
+    """Upload-summary lines for rows that were NOT added (Persian)."""
+    if not skipped:
+        return ""
+    lines = [
+        f"\n⛔ {len(skipped)} ردیف اضافه نشد (منبع اصلی مرجع است؛ کد جدید فقط با «افزودن رکورد» "
+        "یا آپلود فایل کامل منبع اصلی توسط کاربر مجاز، و ردیف جدید کد 1800 فقط دستی):"
+    ]
+    for r in skipped[:limit]:
+        qty = r.get("quantity")
+        qty_txt = "" if qty is None or (isinstance(qty, float) and pd.isna(qty)) else f"، موجودی {qty:g}" if isinstance(qty, (int, float)) else f"، موجودی {qty}"
+        name = f" {r['product_name'][:40]}" if r.get("product_name") else ""
+        lines.append(f"• {r['id']} (کد {r['category_code'] or '—'}){name}{qty_txt} — {r['reason']}")
+    if len(skipped) > limit:
+        lines.append(f"… و {len(skipped) - limit} ردیف دیگر")
+    return "\n".join(lines)
+
+
 def apply_usage_locations(
     inv_df: pd.DataFrame,
     location_map: Mapping[str, str],

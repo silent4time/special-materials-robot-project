@@ -1260,6 +1260,9 @@ class BotApp:
             return
         session = self.db.get_or_create_session(user["bale_user_id"])
         pending = session.get("pending_file_type")
+        # «ورود فایل اکسل منبع اصلی» (main-source submenu) = full-source upload; the
+        # «موجودی انبار» / consumables buttons = stock update (t213u: no new codes).
+        upload_origin = self._upload_return_menu.get(str(user["bale_user_id"]))
         if user.get("role") == "technician":
             if pending:
                 self.db.set_pending_file_type(user["bale_user_id"], None)
@@ -1400,9 +1403,27 @@ class BotApp:
 
         new_kept = int(result.kept_row_count)
         merge_note = ""
+        skipped_note = ""
         if old_df is not None and not old_df.empty:
             try:
                 new_df = pd.read_excel(result.clean_path, engine="openpyxl")
+                if pending == "product_inventory":
+                    # منبع اصلی is the reference: a stock update never adds a new
+                    # 4-digit code; no file upload auto-adds a NEW 1800 row.
+                    full_source = (
+                        upload_origin == "main_source"
+                        and not format_redirect_note
+                        and can_configure_catalog(user)
+                    )
+                    new_df, skipped = main_source_svc.filter_inventory_upload(
+                        old_df, new_df, allow_new_codes=full_source
+                    )
+                    skipped_note = main_source_svc.skipped_rows_note_fa(skipped)
+                    if skipped:
+                        logger.info(
+                            "inventory upload: %d rows skipped (full_source=%s)",
+                            len(skipped), full_source,
+                        )
                 merged = merge_clean_frames(old_df, new_df, pending)
                 if pending == "product_inventory":
                     from excel.id_parse import apply_id_segment_rule
@@ -1532,6 +1553,7 @@ class BotApp:
             from excel.id_parse import segment_mismatch_note_fa
 
             dropped_note += segment_mismatch_note_fa(result.segment_mismatches)
+            dropped_note += skipped_note
         extra_cols_note = ""
         if result.extra_columns_dropped:
             extra_cols_note = "\nستون‌های اضافی کنار گذاشته شد."

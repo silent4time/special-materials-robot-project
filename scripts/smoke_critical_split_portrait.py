@@ -534,6 +534,135 @@ def test_upsert_critical_point(tmp: Path) -> None:
     print("upsert_row «نقطه بحرانی» on empty column OK")
 
 
+def _inv_upload_xlsx(path: Path, rows: list[tuple]) -> Path:
+    from openpyxl import Workbook
+
+    wb = Workbook(); ws = wb.active; ws.title = "ریز اطلاعات"
+    ws.append(["کد دسته بندی", "شناسه مواد", "شرح کالا", "موجودی", "اولویت", "تأمین‌کننده",
+               "نوسازی تاندیش بیلت", "واحد"])
+    for r in rows:
+        ws.append(list(r))
+    wb.save(path)
+    return path
+
+
+def test_inventory_upload_rules(tmp: Path) -> None:
+    """t213u/t214u: منبع اصلی is the reference. Stock/warehouse upload never adds a
+    new 4-digit code; no file upload auto-adds a NEW 1800 row; existing ids (incl.
+    1800) still get stock updates; full-source upload by an authorized user may add
+    new codes. Skipped rows are listed in the bot and web upload summary."""
+    import _smoke_isolation
+    import bot.handlers as handlers_mod
+    from db.models import Database
+    from services.main_source import (
+        filter_inventory_upload,
+        load_primary_frame,
+        persist_primary_frame,
+        skipped_rows_note_fa,
+    )
+
+    _smoke_isolation.isolate_uploads()
+    base = pd.DataFrame([
+        dict(category_code="1203", id=COMPANY_ID, product_name="بتن 85", quantity=100, priority=1,
+             contractor_or_company="شرکت", billet_renovation=10, unit="Kg"),
+        dict(category_code="1800", id="378124311111A", product_name="مازاد قدیمی", quantity=5,
+             priority=0, contractor_or_company="شرکت", unit="Kg"),
+    ])
+    new = pd.DataFrame([
+        dict(category_code=1203, id=COMPANY_ID, quantity=150),          # existing → update
+        dict(category_code=1203, id="378112342222B", quantity=7),       # new id, known code → add
+        dict(category_code=1999, id="378119991234C", quantity=9),       # new code
+        dict(category_code=1800, id="378124312222D", quantity=3),       # new 1800 row
+        dict(category_code=1800, id="378124311111A", quantity=8),       # existing 1800 → update
+    ])
+    kept, skipped = filter_inventory_upload(base, new, allow_new_codes=False)
+    assert list(kept["id"]) == [COMPANY_ID, "378112342222B", "378124311111A"], kept
+    assert [(s["id"], s["category_code"]) for s in skipped] == [("378119991234C", "1999"), ("378124312222D", "1800")]
+    kept2, skipped2 = filter_inventory_upload(base, new, allow_new_codes=True)
+    assert "378119991234C" in set(kept2["id"]) and [s["id"] for s in skipped2] == ["378124312222D"]
+    assert filter_inventory_upload(None, new, allow_new_codes=False) == (new, [])  # first load
+    note = skipped_rows_note_fa(skipped)
+    assert "378119991234C" in note and "1800" in note and "⛔ 2 ردیف" in note, note
+
+    # --- bot: «موجودی انبار» (stock update) vs «ورود فایل اکسل منبع اصلی» (full source)
+    db = Database(tmp / "invrules.db")
+    db.upsert_user("901", role="owner", display_name="مالک تست")
+    db.add_category_code("1999", created_by="901")
+    user = db.get_user("901")
+    persist_primary_frame(db, base, bale_user_id="901")
+    src = _inv_upload_xlsx(tmp / "stock.xlsx", [
+        (1203, COMPANY_ID, "بتن 85", 150, 1, "شرکت", 10, "Kg"),
+        (1203, "378112342222B", "بتن 85 ب", 7, 1, "شرکت", 0, "Kg"),
+        (1999, "378119991234C", "کد جدید", 9, 1, "شرکت", 0, "No"),
+        (1800, "378124312222D", "مازاد جدید", 3, 0, "شرکت", 0, "Kg"),
+        (1800, "378124311111A", "مازاد قدیمی", 8, 0, "شرکت", 0, "Kg"),
+    ])
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.msgs: list[str] = []
+
+        def download_file(self, file_id, dest):
+            shutil.copy2(src, dest)
+            return Path(dest)
+
+        def send_message(self, chat_id, text, reply_markup=None, **_kw):
+            self.msgs.append(text)
+            return {"ok": True}
+
+        def __getattr__(self, name):
+            return lambda *a, **k: {"ok": True}
+
+    client = FakeClient()
+    app = handlers_mod.BotApp(client, db)
+    msg = {"chat": {"id": 901}, "from": {"id": 901, "first_name": "مالک"}, "text": ""}
+    doc = dict(msg, document={"file_id": "f1", "file_name": "stock.xlsx"})
+
+    def ids_qty() -> dict[str, float]:
+        f = load_primary_frame(db, bale_user_id="901")
+        return {str(i): float(q) for i, q in zip(f["id"], f["quantity"])}
+
+    app.on_pick_file_type(msg, "product_inventory", return_menu="upload")
+    app.on_document(doc)
+    got = ids_qty()
+    assert got.get(COMPANY_ID) == 150 and got.get("378124311111A") == 8, got  # updates incl. 1800
+    assert "378112342222B" in got, got  # known code, new id
+    assert "378119991234C" not in got and "378124312222D" not in got, got
+    reply = client.msgs[-1]
+    assert "⛔ 2 ردیف اضافه نشد" in reply and "378119991234C" in reply and "378124312222D" in reply, reply
+
+    app.on_pick_file_type(msg, "product_inventory", return_menu="main_source")
+    app.on_document(doc)
+    got = ids_qty()
+    assert "378119991234C" in got and "378124312222D" not in got, got  # full source: new code ok, 1800 never
+    assert "⛔ 1 ردیف اضافه نشد" in client.msgs[-1], client.msgs[-1]
+
+    # --- web settings upload (authorized full source): same shared rule
+    from fastapi.testclient import TestClient
+
+    import web.deps as deps
+    from web.app import create_app
+
+    db2 = Database(tmp / "invrules_web.db")
+    db2.upsert_user("902", role="owner", display_name="مالک وب")
+    db2.add_category_code("1999", created_by="902")
+    persist_primary_frame(db2, base, bale_user_id="902")
+    deps._db = db2
+    wapp = create_app()
+    wapp.dependency_overrides[deps.current_user_optional] = lambda: db2.get_user("902")
+    wapp.dependency_overrides[deps.current_user] = lambda: db2.get_user("902")
+    c = TestClient(wapp)
+    r = c.post("/settings/main-source/upload",
+               files={"file": ("stock.xlsx", src.read_bytes(),
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert r.status_code == 200, (r.status_code, r.text[-1500:])
+    f = load_primary_frame(db2, bale_user_id="902")
+    wids = set(f["id"].astype(str))
+    assert "378119991234C" in wids and "378124312222D" not in wids, wids
+    assert "378124312222D" in r.text and "اضافه نشد" in r.text
+    print("inventory upload rules (no new codes on stock update, no auto 1800, bot+web) OK")
+
+
 def test_basis_sequence_log(tmp: Path) -> None:
     """t211u: report date = today; basis = 3 complete months before it; sequence log
     (one sequence = one tundish use) preferred over manual counts; a manual SAMPLE
@@ -956,6 +1085,7 @@ def main() -> int:
         test_horizon_rule()
         test_basis_sequence_log(tmp)
         test_upsert_critical_point(tmp)
+        test_inventory_upload_rules(tmp)
         pdfs: dict[str, Path] = {}
         for sub in ("svc", "bot", "web", "gen", "merge"):
             (tmp / sub).mkdir()
