@@ -230,4 +230,7 @@ def write_inbound_excel(
     out.parent.mkdir(parents=True, exist_ok=True)
     frame = inbound_df if inbound_df is not None else pd.DataFrame(columns=INBOUND_COLUMNS)
     frame.to_excel(out, index=False, engine="openpyxl")
+    from excel.table_style import finalize_path
+
+    finalize_path(out)
     return out

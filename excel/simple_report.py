@@ -63,6 +63,23 @@ def _cell_value(val: Any, col: str | None = None) -> Any:
     return val
 
 
+SHORTAGE_HEADERS = frozenset({"کسری", "کمبود", "مقدار کسری", "shortage"})
+
+
+def _is_shortage_row(row: dict[str, Any], columns: list[str], header_map: dict[str, str] | None) -> bool:
+    for col in columns:
+        label = _header_label(col, header_map)
+        if str(label).strip() in SHORTAGE_HEADERS or str(col).strip() in SHORTAGE_HEADERS:
+            raw = str(row.get(col, "") or "").replace(",", "").replace("٬", "").strip()
+            raw = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٫", "0123456789."))
+            try:
+                if float(raw) > 0:
+                    return True
+            except ValueError:
+                continue
+    return False
+
+
 def _write_table_sheet(
     ws,
     columns: list[str],
@@ -115,6 +132,8 @@ def _write_table_sheet(
             emphasised.append(row_idx)
         if ri in set(highlight_rows or ()):
             alerts.append(row_idx)
+        elif not highlight_rows and _is_shortage_row(row, columns, header_map):
+            alerts.append(row_idx)  # 20: shortages highlighted by default
         row_idx += 1
 
     # Shared auto-size / wrap / usage_location coloring
@@ -220,6 +239,9 @@ def generate_simple_report_xlsx(
         ws = wb.create_sheet(title=_safe_sheet_title(title))
         ws.cell(row=1, column=1, value=empty_message)
 
+    from excel.table_style import finalize_workbook
+
+    finalize_workbook(wb)
     wb.save(output_path)
     return output_path
 

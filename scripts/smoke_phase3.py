@@ -181,11 +181,137 @@ def test_errors_and_expiry() -> None:
     print("  19d OK (tracking code bot+web, details only in log, expired-flow notice after restart)")
 
 
+def check_xlsx(path: Path) -> list[str]:
+    from openpyxl import load_workbook
+
+    from excel.table_style import _first_table_row
+
+    bad: list[str] = []
+    wb = load_workbook(path)
+    for ws in wb.worksheets:
+        if not ws.sheet_view.rightToLeft:
+            bad.append(f"{path.name}/{ws.title}: not RTL")
+        header = _first_table_row(ws)
+        for row in ws.iter_rows():
+            for c in row:
+                if c.value in (None, ""):
+                    continue
+                if c.font.name != "Vazirmatn":
+                    bad.append(f"{path.name}/{ws.title}!{c.coordinate} font {c.font.name}")
+                if c.alignment.horizontal != "center":
+                    bad.append(f"{path.name}/{ws.title}!{c.coordinate} align {c.alignment.horizontal}")
+                if header and c.row >= header and c.border.left.style != "thin" and c.border.left.style is None:
+                    bad.append(f"{path.name}/{ws.title}!{c.coordinate} no border")
+        if header:
+            hcells = [c for c in ws[header] if c.value not in (None, "")]
+            if any(c.fill.fill_type is None for c in hcells):
+                bad.append(f"{path.name}/{ws.title}: header row {header} without fill")
+    return bad[:5]
+
+
+def pdf_fonts(path: Path) -> list[str]:
+    import subprocess
+
+    out = subprocess.run(["pdffonts", str(path)], capture_output=True, text=True).stdout
+    return [ln.split()[0].split("+")[-1] for ln in out.splitlines()[2:] if ln.strip()]
+
+
+LETTERHEAD_FONTS: set[str] = set()
+
+
+def check_pdf(path: Path) -> list[str]:
+    names = pdf_fonts(path)
+    report_fonts = [n for n in names if "Vazirmatn" in n]
+    # fonts embedded in the user's own letterhead artwork are not ours to change
+    others = [n for n in names if "Vazirmatn" not in n and n not in LETTERHEAD_FONTS]
+    bad = []
+    if not report_fonts:
+        bad.append(f"{path.name}: no Vazirmatn ({names})")
+    if any(x in n for n in others for x in ("Helvetica", "DejaVu", "Tahoma", "Times")):
+        bad.append(f"{path.name}: other fonts {others}")
+    return bad
+
+
+def test_styling() -> None:
+    import logging
+    import shutil
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import smoke_phase1 as p1
+    from bot.handlers import BotApp
+    from pdf import generator as gen
+
+    gen._register_fonts()
+    assert gen.FONT_NAME == "Vazirmatn" and gen.FONT_BOLD == "Vazirmatn-Bold", gen.FONT_NAME
+    assert (ROOT / "fonts" / "Vazirmatn-Regular.ttf").is_file() and (ROOT / "fonts" / "Vazirmatn-Bold.ttf").is_file()
+
+    tmp = TMP / "style"
+    tmp.mkdir()
+    db = p1._db_copy(tmp)
+    owner = next(u for u in db.list_users() if u.get("role") == "owner" and u.get("active"))
+    uid = str(owner["bale_user_id"])
+    client = p1.FakeClient()
+    app = BotApp(client, db)  # type: ignore[arg-type]
+    catcher = p1.ErrCatcher()
+    logging.getLogger().addHandler(catcher)
+    lh = app._letterhead_path()
+    if lh and Path(lh).suffix.lower() == ".pdf":
+        LETTERHEAD_FONTS.update(pdf_fonts(Path(lh)))
+    p1.walk_role(app, client, catcher, uid, "owner")
+    # explicit generators not reached by the walk
+    from excel.inbound import write_inbound_excel
+    import pandas as pd
+
+    write_inbound_excel(pd.DataFrame([{"کد کالا": "1234", "مقدار": 3}]), TMP / "reports" / "inb.xlsx")
+    client.docs.append(("x", str(TMP / "reports" / "inb.xlsx")))
+    from web.services import reports as wrep
+
+    for fn in ("generate_monthly_summary_files", "generate_user_activity_files"):
+        f = getattr(wrep, fn, None)
+        if f:
+            try:
+                res = f(db, owner) if fn == "generate_monthly_summary_files" else f(db, owner, days=30)
+                for x in res:
+                    if isinstance(x, (str, Path)) and Path(x).suffix in {".pdf", ".xlsx"}:
+                        client.docs.append(("x", str(x)))
+            except TypeError:
+                pass
+    def _collect(obj):
+        for v in (obj if isinstance(obj, (list, tuple)) else vars(obj).values() if hasattr(obj, "__dict__") else []):
+            if isinstance(v, (str, Path)) and Path(v).suffix in {".pdf", ".xlsx"}:
+                client.docs.append(("x", str(v)))
+            elif isinstance(v, (list, tuple)):
+                _collect(v)
+
+    for name in ("generate_remaining_critical_files", "generate_surplus_files"):
+        _collect(getattr(wrep, name)(db, owner, days=30))
+    from services import critical_items_report as cir, period_consumption as pc
+    from datetime import date, timedelta
+
+    _collect(cir.generate_critical_items_files(db, owner))
+    end = date.today()
+    _collect(pc.generate_files(db, end - timedelta(days=30), end, range_label="۳۰ روز"))
+    logging.getLogger().removeHandler(catcher)
+    docs = sorted({Path(p) for _c, p in client.docs if Path(p).is_file()})
+    xs = [d for d in docs if d.suffix == ".xlsx"]
+    ps = [d for d in docs if d.suffix == ".pdf"]
+    assert len(xs) >= 6 and len(ps) >= 6, (len(xs), len(ps))
+    bad = [b for d in xs for b in check_xlsx(d)] + [b for d in ps for b in check_pdf(d)]
+    assert not bad, bad[:15]
+    keep = Path("/tmp/phase3_style_samples")
+    shutil.rmtree(keep, ignore_errors=True)
+    keep.mkdir()
+    for d in docs:
+        shutil.copy2(d, keep / d.name)
+    print(f"  20 styling OK ({len(xs)} xlsx: RTL/Vazirmatn/center/border/header fill; {len(ps)} pdf: Vazirmatn) → {keep}")
+
+
 def main() -> int:
     print("smoke phase3…")
     test_housekeeping()
     test_cache_and_audit()
     test_errors_and_expiry()
+    test_styling()
     print("SMOKE_PHASE3_OK")
     return 0
 

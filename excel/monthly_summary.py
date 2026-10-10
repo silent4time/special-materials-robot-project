@@ -978,6 +978,9 @@ def build_monthly_summary(
     excel_out = Path(excel_out)
     excel_out.parent.mkdir(parents=True, exist_ok=True)
     wb = build_monthly_summary_workbook(data)
+    from excel.table_style import finalize_workbook
+
+    finalize_workbook(wb)
     wb.save(excel_out)
     return data, excel_out
 

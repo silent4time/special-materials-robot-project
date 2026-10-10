@@ -1,6 +1,8 @@
 """Generate a combined Persian/RTL PDF report from Excel datasets + tundish analytics."""
 from __future__ import annotations
 
+import logging
+
 from datetime import datetime
 from functools import lru_cache
 from xml.sax.saxutils import escape as _xml_escape
@@ -92,7 +94,12 @@ def _register_fonts() -> None:
         FONTS_DIR / "Vazirmatn-Bold.ttf",
     ):
         _FONT_REGISTERED = True
+        # 20: canvas default (normally Helvetica) → Vazirmatn, so every PDF has one font
+        from reportlab import rl_config
+
+        rl_config.canvas_basefontname = FONT_NAME
         return
+    logging.getLogger(__name__).warning("Vazirmatn font files missing/unusable under %s — PDF falls back", FONTS_DIR)
 
     # 2) System Tahoma fallback
     tahoma_reg = next((p for p in _TAHOMA_REGULAR_CANDIDATES if p.is_file()), None)
