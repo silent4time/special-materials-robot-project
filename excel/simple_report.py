@@ -72,6 +72,7 @@ def _write_table_sheet(
     title: str | None = None,
     subtitle: str | None = None,
     bold_rows: set[int] | None = None,
+    highlight_rows: set[int] | None = None,
 ) -> None:
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", fgColor="1F4E79")
@@ -101,6 +102,7 @@ def _write_table_sheet(
     header_row_idx = row_idx - 1  # last written header row
     bold_set = set(bold_rows or ())
     emphasised: list[int] = []
+    alerts: list[int] = []
     for ri, row in enumerate(rows):
         for c_i, col in enumerate(columns, start=1):
             cell = ws.cell(
@@ -111,6 +113,8 @@ def _write_table_sheet(
             cell.alignment = center
         if ri in bold_set:
             emphasised.append(row_idx)
+        if ri in set(highlight_rows or ()):
+            alerts.append(row_idx)
         row_idx += 1
 
     # Shared auto-size / wrap / usage_location coloring
@@ -124,6 +128,11 @@ def _write_table_sheet(
                 cell = ws.cell(row=r_i, column=c_i)
                 cell.font = Font(bold=True)
                 cell.fill = group_fill
+    if alerts:
+        alert_fill = PatternFill("solid", fgColor="FFCDD2")
+        for r_i in alerts:
+            for c_i in range(1, len(columns) + 1):
+                ws.cell(row=r_i, column=c_i).fill = alert_fill
 
 
 def generate_simple_report_xlsx(
@@ -204,6 +213,7 @@ def generate_simple_report_xlsx(
             title=title if i == 0 else (str(sec_title) if sec_title else None),
             subtitle=subtitle if i == 0 else None,
             bold_rows=set(section.get("bold_rows") or ()),
+            highlight_rows=set(section.get("highlight_rows") or ()),
         )
 
     if not wb.sheetnames:

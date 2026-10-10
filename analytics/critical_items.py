@@ -525,6 +525,75 @@ def monthly_need_for_rates(
     return need
 
 
+def prepare_code_rates(
+    inventory_df: pd.DataFrame | None,
+    *,
+    segment: str | None = None,
+    shared_mode: str | None = None,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], set[str]] | None:
+    """Shared rate preparation for «اقلام بحرانی» and «نیاز مواد برای N تاندیش».
+
+    1800 dropped → section/supplier attribution on the full frame → segment filter →
+    shared-need groups (merged-cell rate_group) → priority ≠ 0 → one entry per
+    4-digit code: merged-cell rates counted ONCE (max over rows), real stock summed,
+    critical point. Returns (per_code, groups, grouped_codes) or None when empty.
+    """
+    if inventory_df is None or inventory_df.empty or "category_code" not in inventory_df.columns:
+        return None
+    # Section attribution on the FULL frame (needs both segments): codes with
+    # شرکت + پیمانکار rows → billet from company, bloom from contractor, slab
+    # from contractor + company rows located «اسلب» (analytics.section_rules).
+    # کد 1800 = اقلام مازاد → never a consumable (rule B, 1405-07-14).
+    inventory_df = drop_surplus_rows(inventory_df)
+    inventory_df, _changes = apply_section_rate_attribution(inventory_df)
+    inventory_df = filter_inventory_segment(inventory_df, segment)
+    if inventory_df is None or inventory_df.empty:
+        return None
+    group_source = inventory_df
+    # اولویت 0 = unused → excluded from stock, rates and critical point.
+    inventory_df = drop_priority_zero_rows(inventory_df)
+    if inventory_df.empty:
+        return None
+    work = inventory_df.copy()
+    work["category_code"] = work["category_code"].map(
+        lambda v: str(v).strip() if v is not None and str(v).strip() not in {"", "nan", "None"} else ""
+    )
+    work["category_code"] = work["category_code"].map(
+        lambda s: s[:-2] if isinstance(s, str) and s.endswith(".0") and s[:-2].isdigit() else s
+    )
+    work = work.loc[work["category_code"] != ""].copy()
+    if work.empty:
+        return None
+    for c in RATE_COLS:
+        work[c] = _num_series(work, c)
+    per_code: dict[str, dict[str, Any]] = {}
+    for code, group in work.groupby("category_code", sort=True):
+        per_code[str(code)] = {
+            "rates": {c: float(_num_series(group, c).max()) for c in RATE_COLS},
+            "cp": _critical_point_value(group),
+            "stock": _real_stock(group),
+            "group": group,
+        }
+    groups = (
+        shared_need_groups(group_source, set(per_code))
+        if shared_merge_mode(shared_mode) == SHARED_POOLED
+        else []
+    )
+    grouped_codes = {code for g in groups for code in g["codes"]}
+    return per_code, groups, grouped_codes
+
+
+def group_rates(per_code: dict[str, dict[str, Any]], g: dict[str, Any]) -> dict[str, float]:
+    """Rates of a shared-need group: merged columns once (max), others summed."""
+    members = list(g["codes"])
+    merged_cols = set(g["columns"])
+    rates = {}
+    for c in RATE_COLS:
+        vals = [per_code[k]["rates"][c] for k in members]
+        rates[c] = max(vals) if c in merged_cols else sum(vals)
+    return rates
+
+
 def build_critical_items_rows(
     inventory_df: pd.DataFrame | None,
     counts: TundishMonthCounts,
@@ -563,60 +632,14 @@ def build_critical_items_rows(
         "row_kind",
         "group_codes",
     ]
-    if inventory_df is None or inventory_df.empty or "category_code" not in inventory_df.columns:
+    prepared = prepare_code_rates(inventory_df, segment=segment, shared_mode=shared_mode)
+    if prepared is None:
         return pd.DataFrame(columns=empty_cols)
-    # Section attribution on the FULL frame (needs both segments): codes with
-    # شرکت + پیمانکار rows → billet from company, bloom from contractor, slab
-    # from contractor + company rows located «اسلب» (analytics.section_rules).
-    # کد 1800 = اقلام مازاد → never a consumable (rule B, 1405-07-14).
-    inventory_df = drop_surplus_rows(inventory_df)
-    inventory_df, _changes = apply_section_rate_attribution(inventory_df)
-    inventory_df = filter_inventory_segment(inventory_df, segment)
-    if inventory_df is None or inventory_df.empty:
-        return pd.DataFrame(columns=empty_cols)
-    # Shared-need groups come from the merge structure (all rows of the segment).
-    group_source = inventory_df
-    # اولویت 0 = unused → excluded from stock, rates and critical point.
-    # (No quantity threshold: rows with موجودی < 100 are kept.)
-    inventory_df = drop_priority_zero_rows(inventory_df)
-    if inventory_df.empty:
-        return pd.DataFrame(columns=empty_cols)
-
-    work = inventory_df.copy()
-    work["category_code"] = work["category_code"].map(
-        lambda v: str(v).strip() if v is not None and str(v).strip() not in {"", "nan", "None"} else ""
-    )
-    # Normalize 4-digit-ish codes (drop trailing .0)
-    work["category_code"] = work["category_code"].map(
-        lambda s: s[:-2] if isinstance(s, str) and s.endswith(".0") and s[:-2].isdigit() else s
-    )
-    work = work.loc[work["category_code"] != ""].copy()
-    if work.empty:
-        return pd.DataFrame(columns=empty_cols)
-
-    for c in RATE_COLS:
-        work[c] = _num_series(work, c)
-
+    per_code, groups, grouped_codes = prepared
     reno_mode = normalize_reno_mode(reno_mode)
     use_cols = active_rate_cols(reno_mode)
     # 30-day months for day conversions (horizon 90 / 180 days).
     days = max(1, int(days_in_month) if days_in_month is not None else DAYS_PER_MONTH)
-
-    per_code: dict[str, dict[str, Any]] = {}
-    for code, group in work.groupby("category_code", sort=True):
-        per_code[str(code)] = {
-            "rates": {c: float(_num_series(group, c).max()) for c in RATE_COLS},
-            "cp": _critical_point_value(group),
-            "stock": _real_stock(group),
-            "group": group,
-        }
-
-    groups = (
-        shared_need_groups(group_source, set(per_code))
-        if shared_merge_mode(shared_mode) == SHARED_POOLED
-        else []
-    )
-    grouped_codes = {code for g in groups for code in g["codes"]}
 
     def _metrics(
         rates: dict[str, float], stock: float, cp: float | None, origin: tuple[str, str, str]
@@ -696,10 +719,7 @@ def build_critical_items_rows(
     for g in groups:
         members = list(g["codes"])
         merged_cols = set(g["columns"])
-        rates = {}
-        for c in RATE_COLS:
-            vals = [per_code[k]["rates"][c] for k in members]
-            rates[c] = max(vals) if c in merged_cols else sum(vals)
+        rates = group_rates(per_code, g)
         cps = [per_code[k]["cp"] for k in members if per_code[k]["cp"] is not None]
         if not cps:
             cp = None

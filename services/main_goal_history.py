@@ -16,6 +16,8 @@
 """
 from __future__ import annotations
 
+import logging
+
 import json
 import math
 import re
@@ -288,11 +290,30 @@ def store_month_set(
         jalali_date=format_date(now),
     )
     # Also persist normalized production + consumption rows for DB-backed reports
-    try:
-        _persist_normalized_from_result(db, result, file_meta, user=user, source=source)
-    except Exception:  # noqa: BLE001
-        pass
+    # (was a call to an undefined helper whose NameError was swallowed → web 4-file
+    # uploads never reached the normalized tables used by every DB-backed report)
+    _persist_normalized_from_files(db, file_meta, user=user, source=source, inventory=inventory)
     return StoreOutcome(ok=True, error_fa=None, result=result, row=row, replaced=replaced)
+
+
+def _persist_normalized_from_files(
+    db: Any, file_meta: dict[str, Any], *, user: dict, source: str, inventory: pd.DataFrame | None
+) -> None:
+    """Store a validated 4-file month also in main_goal_production / _consumption."""
+    from services import main_goal_persist as mgp
+
+    for kind, meta in file_meta.items():
+        path, fname = Path(meta["path"]), meta.get("filename") or ""
+        try:
+            if kind == "production":
+                mgp.store_production_from_excel(db, path, user=user, source=source, filename=fname)
+            elif kind.endswith("_consumption"):
+                mgp.store_consumption_from_excel(
+                    db, path, kind.split("_", 1)[0], user=user, source=source,
+                    filename=fname, inventory=inventory,
+                )
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("normalized main-goal store failed (%s)", kind)
 
 
 # ---------------------------------------------------------------- historical model

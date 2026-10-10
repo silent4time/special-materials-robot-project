@@ -315,6 +315,8 @@ def build_rtl_table(
     bold_rows: set[int] | None = None,
     shade_rows: set[int] | None = None,
     shade_color: str = "#ffe0b2",
+    alert_rows: set[int] | None = None,
+    alert_color: str = "#ffcdd2",
 ) -> Table:
     """Portrait-friendly RTL table: auto widths, logical wrapping, repeat header.
 
@@ -386,6 +388,12 @@ def build_rtl_table(
         if 0 <= bi < len(body):
             cmds.append(
                 ("BACKGROUND", (0, bi + off), (-1, bi + off), colors.HexColor(shade_color))
+            )
+    # alert (e.g. shortage) rows: light red
+    for bi in sorted(set(alert_rows or ())):
+        if 0 <= bi < len(body):
+            cmds.append(
+                ("BACKGROUND", (0, bi + off), (-1, bi + off), colors.HexColor(alert_color))
             )
     table.setStyle(TableStyle(cmds))
     return table
@@ -1119,6 +1127,7 @@ def _rows_table(
     max_rows: int = 500,
     avail: float | None = None,
     bold_rows: set[int] | None = None,
+    highlight_rows: set[int] | None = None,
 ) -> Table | Paragraph:
     labels = header_map or SIMPLE_HEADER_FA
     if not columns:
@@ -1135,6 +1144,7 @@ def _rows_table(
         header_bg=header_bg,
         bold_rows=bold_rows,
         shade_rows=bold_rows,
+        alert_rows=highlight_rows,
     )
 
 
@@ -1220,6 +1230,7 @@ def generate_simple_report_pdf(
                 header_bg=str(header_bg),
                 avail=avail,
                 bold_rows=set(section.get("bold_rows") or ()),
+                highlight_rows=set(section.get("highlight_rows") or ()),
             )
         )
         story.append(Spacer(1, 0.4 * cm))
