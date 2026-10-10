@@ -43,6 +43,10 @@ def _header_label(col: str, header_map: dict[str, str] | None) -> str:
 def _cell_value(val: Any, col: str | None = None) -> Any:
     if val is None:
         return ""
+    from services.units import is_unit_column, unit_fa
+
+    if is_unit_column(col):
+        return unit_fa(val)  # display only — stored data keeps its code (NO/KG/…)
     try:
         import math
 

@@ -60,6 +60,7 @@ from bot.jalali import (
 from bot.bale_api import BaleAPIError, BaleClient, public_markup
 from services import permissions as perm
 from services import user_errors
+from services.units import unit_fa
 from bot.background import BackgroundRunner, heavy
 from services import comprehensive_report as comprehensive_svc
 from bot.settings_text import (
@@ -5207,7 +5208,7 @@ class BotApp:
         return (
             f"🛒 پیشنهاد درخواست مواد برای پوشش {days_label} روز — {len(lines)} قلم:\n"
             + "\n".join(
-                f"{i}) {ln.get('item_name') or ln.get('item_id')}: {float(ln.get('quantity') or 0):g} {ln.get('unit') or ''}".strip()
+                f"{i}) {ln.get('item_name') or ln.get('item_id')}: {float(ln.get('quantity') or 0):g} {unit_fa(ln.get('unit'))}".strip()
                 for i, ln in enumerate(lines[:40], 1)
             )
             + ("\n…" if len(lines) > 40 else "")
@@ -5225,7 +5226,7 @@ class BotApp:
                 g_label = GROUP_LABELS_FA.get(g) or TUNDISH_TYPES.get(g) or g
             else:
                 g_label = "—"
-            unit = ln.get("unit") or ""
+            unit = unit_fa(ln.get("unit"))
             rows.append(
                 {
                     "ردیف": i,
@@ -5571,7 +5572,7 @@ class BotApp:
             "اقلام تأییدشده:",
         ]
         for ln in req.get("lines") or []:
-            unit = ln.get("unit") or ""
+            unit = unit_fa(ln.get("unit"))
             iid = ln.get("item_id") or "—"
             out.append(
                 f"• {ln.get('item_name')} (شناسه: {iid}): "
@@ -5595,7 +5596,7 @@ class BotApp:
         lines = pending["lines"]
         body = ["✏️ اصلاح — شماره یا نام قلم را بفرستید (۰ برای حذف بعد از انتخاب مقدار):", ""]
         for i, ln in enumerate(lines, 1):
-            unit = ln.get("unit") or ""
+            unit = unit_fa(ln.get("unit"))
             body.append(
                 f"{i}) {ln.get('item_name')}: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
             )
@@ -5678,7 +5679,7 @@ class BotApp:
             pending["edit_index"] = idx
             self._material_req_pending[uid] = pending
             ln = lines[idx]
-            unit = ln.get("unit") or ""
+            unit = unit_fa(ln.get("unit"))
             self._reply(
                 message,
                 f"مقدار جدید برای «{ln.get('item_name')}» را بفرستید "
@@ -5753,7 +5754,7 @@ class BotApp:
     def _wr_lines_to_pdf_rows(self, lines: list[dict]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for i, ln in enumerate(lines, 1):
-            unit = ln.get("unit") or ""
+            unit = unit_fa(ln.get("unit"))
             rows.append(
                 {
                     "ردیف": i,
@@ -5938,7 +5939,7 @@ class BotApp:
             "اقلام برگشتی:",
         ]
         for ln in ret.get("lines") or []:
-            unit = ln.get("unit") or ""
+            unit = unit_fa(ln.get("unit"))
             iid = ln.get("item_id") or "—"
             out.append(
                 f"• {ln.get('item_name')} (شناسه: {iid}): "
@@ -5962,7 +5963,7 @@ class BotApp:
         lines = pending["lines"]
         body = ["✏️ اصلاح برگشت — شماره یا نام قلم را بفرستید:", ""]
         for i, ln in enumerate(lines, 1):
-            unit = ln.get("unit") or ""
+            unit = unit_fa(ln.get("unit"))
             body.append(
                 f"{i}) {ln.get('item_name')}: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
             )
@@ -6042,7 +6043,7 @@ class BotApp:
             pending["edit_index"] = idx
             self._warehouse_ret_pending[uid] = pending
             ln = lines[idx]
-            unit = ln.get("unit") or ""
+            unit = unit_fa(ln.get("unit"))
             self._reply(
                 message,
                 f"مقدار برگشت برای «{ln.get('item_name')}» را بفرستید "

@@ -651,6 +651,10 @@ HEADER_FA = {
 
 
 def _df_cell_text(val: Any, col: str) -> str:
+    from services.units import is_unit_column, unit_fa
+
+    if is_unit_column(col):
+        return unit_fa(val)
     if col in {"date", "start", "end", "entry_date", "created_at"} and val not in ("", None):
         try:
             from datetime import date as _date, datetime as _datetime
@@ -1108,6 +1112,10 @@ SIMPLE_HEADER_FA = {
 def _format_simple_cell(val: Any, col: str | None = None) -> str:
     if val is None:
         return ""
+    from services.units import is_unit_column, unit_fa
+
+    if is_unit_column(col):
+        return unit_fa(val)
     if isinstance(val, float):
         if val != val:  # NaN
             return ""

@@ -513,7 +513,9 @@ def summary_text_fa(report: dict[str, Any], *, limit: int = 10) -> str:
         + (f"، ⛔ رد شده {report.get('n_rejected', 0)}" if report.get("n_rejected") else ""),
     ]
     for r in (report.get("lines") or [])[:limit]:
-        unit = f" {r.get(COL_UNIT)}" if r.get(COL_UNIT) else ""
+        from services.units import unit_fa
+
+        unit = f" {unit_fa(r.get(COL_UNIT))}" if r.get(COL_UNIT) else ""
         lines.append(
             f"• {r.get(COL_CODE)} | {str(r.get(COL_KEYWORD))[:40]} | "
             f"+{r.get(COL_INBOUND)}{unit} ({r.get(COL_TYPE)})"

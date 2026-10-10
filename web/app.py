@@ -34,9 +34,11 @@ from web.routers import settings as settings_router
 from web.routers import stock as stock_router
 from web.routers import tundish_report as tundish_report_router
 from web.routers import main_goal_report as main_goal_report_router
+from services.units import unit_fa
 
 WEB_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(WEB_DIR / "templates"))
+TEMPLATES.env.filters["unit_fa"] = unit_fa  # «NO» → «عدد» (display only)
 
 
 def create_app() -> FastAPI:

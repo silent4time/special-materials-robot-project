@@ -5,6 +5,8 @@ import re
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from services.units import unit_fa
+
 import pandas as pd
 
 from config import (
@@ -802,7 +804,7 @@ def format_suggest_list_fa(suggest_df: pd.DataFrame, limit: int = 20) -> str:
     if shown.empty:
         return "پیشنهادی نیست — موجودی برای بازه درخواست کافی به‌نظر می‌رسد."
     for _, row in shown.iterrows():
-        unit = row.get("unit") or ""
+        unit = unit_fa(row.get("unit"))
         lines.append(
             f"• {row['material_name']}: {float(row['suggest_qty']):.2f} {unit}".strip()
         )
@@ -1000,7 +1002,7 @@ def format_surplus_list_fa(surplus_df: pd.DataFrame, limit: int = 30) -> str:
         return "ماده مازادی شناسایی نشد."
     lines: list[str] = []
     for _, row in surplus_df.head(limit).iterrows():
-        unit = row.get("unit") or ""
+        unit = unit_fa(row.get("unit"))
         cover = row.get("days_of_cover")
         if cover == float("inf"):
             cover_s = "∞"
