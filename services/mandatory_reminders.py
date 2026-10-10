@@ -191,6 +191,14 @@ class ReminderStatus:
         }.get(self.phase, self.phase)
 
 
+DISABLED_FA = "⏸ غیرفعال — یادآوری ارسال نمی‌شود"
+
+
+def status_label_fa(status: "ReminderStatus", cfg: dict[str, Any]) -> str:
+    """Settings screens (bot + web): «غیرفعال» while reminders are off, else the phase."""
+    return status.phase_fa() if cfg.get("enabled") else DISABLED_FA
+
+
 def compute_status(db: Any, cfg: dict[str, Any], *, today: jdatetime.date | None = None) -> ReminderStatus:
     today = today or jdatetime.date.fromgregorian(date=tehran_now().date())
     present_keys = set(db.main_goal_month_keys())
@@ -278,7 +286,7 @@ def status_text(db: Any, cfg: dict[str, Any] | None = None) -> str:
         "",
         f"ماه‌های الزامی: "
         + "، ".join(f"{format_month_year(y, m)} {'✅' if ok else '❌'}" for y, m, ok in st.required),
-        f"وضعیت فعلی: {st.phase_fa()}",
+        f"وضعیت فعلی: {status_label_fa(st, cfg)}",
     ]
     last = state.get("last_result")
     if last:
