@@ -113,6 +113,13 @@ def purge_reports(*, days: int = REPORT_KEEP_DAYS, root: Path | None = None, now
                 n += 1
             except OSError:
                 pass
+    # per-report private folders (services.file_names.unique_dir) left empty
+    for d in sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)):
+        try:
+            if not any(d.iterdir()) and now - d.stat().st_mtime > days * 86400:
+                d.rmdir()
+        except OSError:
+            pass
     return n
 
 

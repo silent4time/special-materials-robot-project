@@ -25,6 +25,7 @@ from services import permissions as perm
 from services import user_errors
 from bot.activity import log_activity
 from bot.jalali import tehran_now
+from services.file_names import unique_dir
 from config import REPORT_DIR, UPLOAD_DIR, ensure_dirs
 from services import main_goal_history as mgh
 from services import main_goal_persist as mgp
@@ -755,10 +756,11 @@ class MainGoalReportFlow:
         except Exception:  # noqa: BLE001
             logger.exception("main_goal scenario persist failed")
         ensure_dirs()
-        stem = f"{stem_prefix}_{tehran_now().strftime('%Y%m%d_%H%M%S')}"
+        stem = mgh.file_stem_fa(result)
         try:
             pdf_path, xlsx_path = mgh.export_scenario(
-                result, stem=stem, report_dir=REPORT_DIR, letterhead_path=self.app._letterhead_path()
+                result, stem=stem, report_dir=unique_dir(REPORT_DIR, "main_goal"),
+                letterhead_path=self.app._letterhead_path()
             )
             chat = self.app._chat_id(message)
             self.app.client.send_document(chat, pdf_path, caption=result.title)

@@ -496,7 +496,7 @@ def _deliver(request: Request, db: Database, user: dict, model, result, *, prefi
     mgh.persist_scenario(db, result, model, user=user, source="web")
     log_activity(db, user, f"report_{prefix.removeprefix('web_')}")
     ensure_dirs()
-    stem = f"{prefix}_{tehran_now().strftime('%Y%m%d_%H%M%S')}"
+    stem = mgh.file_stem_fa(result)
     mgh.export_scenario(result, stem=stem, report_dir=REPORT_DIR, letterhead_path=letterhead_path(db))
     return _page(request, db, user, message="گزارش ساخته شد.", summary=result.summary, download_stem=stem)
 
@@ -543,7 +543,7 @@ async def scenario_forecast(
 
 
 def _report_file(stem: str, suffix: str) -> Path:
-    if "/" in stem or ".." in stem or "main_goal" not in stem:
+    if "/" in stem or "\\" in stem or ".." in stem or not stem.startswith(("هدف_اصلی", "main_goal")):
         raise ForbiddenFa("فایل یافت نشد.")
     path = REPORT_DIR / f"{stem}{suffix}"
     if not path.is_file():

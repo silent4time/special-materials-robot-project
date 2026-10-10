@@ -404,15 +404,18 @@ def test_web(tmp: Path) -> None:
     assert r.status_code == 200 and "مرداد 1405" in r.text and "شهریور 1405" in r.text, r.text[:2000]
     assert len(db.list_main_goal_months()) == 3
     r = c.post("/reports/main-goal/scenario/target", data={"period_text": "۳ ماه", "billet": "30000", "total": ""})
-    assert r.status_code == 200 and "download/web_main_goal_target_" in r.text, r.text[:1500]
     import re
+    from urllib.parse import unquote
 
-    stem = re.search(r"download/(web_main_goal_target_[\d_]+)\.pdf", r.text).group(1)
+    page = unquote(r.text)
+    # Persian descriptive stem (never a user id): «هدف_اصلی_سناریو_۱_تناژ_هدف_…»
+    assert r.status_code == 200 and "download/هدف_اصلی_سناریو_۱_تناژ_هدف_" in page, r.text[:1500]
+    stem = re.search(r'download/([^"/]+?)\.pdf"', r.text).group(1)
     # download (REPORT_DIR patched) — route reads module-level REPORT_DIR
     r2 = c.get(f"/reports/main-goal/download/{stem}.pdf")
     assert r2.status_code == 200 and r2.content[:4] == b"%PDF"
     r = c.post("/reports/main-goal/scenario/forecast", data={"months_ahead": "6"})
-    assert r.status_code == 200 and "download/web_main_goal_forecast_" in r.text
+    assert r.status_code == 200 and "download/هدف_اصلی_سناریو_۲_پیش‌بینی_" in unquote(r.text)
     r = c.post("/reports/main-goal/scenario/forecast", data={"months_ahead": "99"})
     assert r.status_code == 400
     # officer cannot delete; owner can

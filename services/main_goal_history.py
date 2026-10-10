@@ -921,6 +921,24 @@ def _future_months(model: HistoryModel, n: int) -> list[tuple[str, float, tuple[
     return out
 
 
+def file_stem_fa(result: "ScenarioResult") -> str:
+    """Visible Persian file name of a هدف اصلی report (bot + web), never a user id:
+    «هدف_اصلی_سناریو_۲_پیش‌بینی_۳_ماه_آینده_1405-07-19_0140»."""
+    from services.file_names import fa_digits, fa_stem
+
+    sub = (result.subtitle or "").split("|")[0].replace("بازه:", "").strip()
+    if result.kind == "forecast":
+        n = re.search(r"پیش‌بینی\s+(\d+)\s+ماه", result.title or "")
+        parts = ["هدف اصلی", "سناریو", fa_digits(2), "پیش‌بینی", fa_digits(n.group(1)) if n else "", "ماه آینده"]
+    elif result.kind == "target":
+        parts = ["هدف اصلی", "سناریو", fa_digits(1), "تناژ هدف", sub[:40]]
+    elif result.kind == "range":
+        parts = ["هدف اصلی", "گزارش سابقه", sub[:40]]
+    else:
+        parts = [result.title or "هدف اصلی"]
+    return fa_stem(*parts, with_time=True)
+
+
 def scenario_forecast(model: HistoryModel, months_ahead: int) -> ScenarioResult:
     if model.n_months == 0:
         return _no_history()

@@ -147,7 +147,13 @@ def generate_files(
     frames = section_frames(frames, section)
     analytics = build_bundle(db, frames, start=start, end=end)
     res.metas = metas
-    res.pdf = generate_report(frames, metas, user, analytics=analytics, letterhead_path=letterhead_path)
+    from config import REPORT_DIR
+    from services.file_names import fa_stem, unique_dir
+
+    out = unique_dir(REPORT_DIR, "comprehensive") / f"{fa_stem('گزارش جامع', range_label, section_label(section))}.pdf"
+    res.pdf = generate_report(
+        frames, metas, user, output_path=out, analytics=analytics, letterhead_path=letterhead_path
+    )
     try:
         res.xlsx = generate_analytics_report_xlsx(
             frames, metas, analytics=analytics, output_path=res.pdf.with_suffix(".xlsx"),

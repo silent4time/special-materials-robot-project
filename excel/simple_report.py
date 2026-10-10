@@ -174,8 +174,9 @@ def generate_simple_report_xlsx(
     """
     ensure_dirs()
     if output_path is None:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = REPORT_DIR / f"{filename_stem}_{stamp}.xlsx"
+        from services.file_names import fa_stem, unique_dir
+
+        output_path = unique_dir(REPORT_DIR, filename_stem) / f"{fa_stem(title)}.xlsx"
     output_path = Path(output_path)
     if output_path.suffix.lower() != ".xlsx":
         output_path = output_path.with_suffix(".xlsx")
@@ -299,8 +300,9 @@ def generate_analytics_report_xlsx(
     """Multi-sheet workbook of the same key tables used in ``generate_report`` PDF."""
     ensure_dirs()
     if output_path is None:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = REPORT_DIR / f"{filename_stem}_{stamp}.xlsx"
+        from services.file_names import fa_stem, unique_dir
+
+        output_path = unique_dir(REPORT_DIR, filename_stem) / f"{fa_stem('گزارش جامع')}.xlsx"
     output_path = Path(output_path)
     if output_path.suffix.lower() != ".xlsx":
         output_path = output_path.with_suffix(".xlsx")

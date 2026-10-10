@@ -2251,7 +2251,9 @@ class BotApp:
             )
             return
         try:
-            out = REPORT_DIR / "منبع_اصلی.xlsx"
+            from services.file_names import fa_stem, unique_dir
+
+            out = unique_dir(REPORT_DIR, "main_source") / f"{fa_stem('منبع اصلی')}.xlsx"
             export_dataframe_xlsx(
                 frame,
                 out,
@@ -3497,7 +3499,11 @@ class BotApp:
             )
             return None
         try:
-            out = REPORT_DIR / (output_name or f"{filename_stem}.pdf")
+            from services.file_names import fa_stem, unique_dir
+
+            # visible name = Persian title + Jalali date; private folder keeps it unique
+            base = Path(output_name).stem if output_name else title
+            out = unique_dir(REPORT_DIR, filename_stem) / f"{fa_stem(base)}.pdf"
             pdf_path = generate_simple_report_pdf(
                 title,
                 subtitle=subtitle,
@@ -3937,8 +3943,10 @@ class BotApp:
         try:
             from config import REPORT_DIR
 
-            out_dir = REPORT_DIR
-            excel_path = out_dir / SUMMARY_FILE_NAME
+            from services.file_names import fa_stem, unique_dir
+
+            out_dir = unique_dir(REPORT_DIR, "monthly_summary")
+            excel_path = out_dir / f"{fa_stem('خلاصه مصرفی ماهیانه', range_label)}.xlsx"
             data, excel_path = build_monthly_summary(
                 source,
                 excel_out=excel_path,
@@ -3947,7 +3955,7 @@ class BotApp:
             )
             sections = summary_sections_for_pdf(data)
             pdf_title = f"خلاصه مصرفی ماهیانه — {range_label}"
-            pdf_path = out_dir / "خلاصه مصرفی ماهیانه.pdf"
+            pdf_path = excel_path.with_suffix(".pdf")
             generate_monthly_summary_pdf(
                 sections,
                 grand_kg=data.grand_kg,

@@ -838,7 +838,10 @@ def generate_report(
 
     if output_path is None:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = REPORT_DIR / f"report_{user.get('bale_user_id')}_{stamp}.pdf"
+        from services.file_names import fa_stem, unique_dir
+
+        _ = stamp
+        output_path = unique_dir(REPORT_DIR, "comprehensive") / f"{fa_stem('گزارش جامع')}.pdf"
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -976,7 +979,10 @@ def generate_monthly_summary_pdf(
 
     if output_path is None:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = REPORT_DIR / f"monthly_summary_{stamp}.pdf"
+        from services.file_names import fa_stem, unique_dir
+
+        _ = stamp
+        output_path = unique_dir(REPORT_DIR, "monthly_summary") / f"{fa_stem('خلاصه مصرفی ماهیانه')}.pdf"
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1176,8 +1182,9 @@ def generate_simple_report_pdf(
     styles = _styles()
 
     if output_path is None:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = REPORT_DIR / f"{filename_stem}_{stamp}.pdf"
+        from services.file_names import fa_stem, unique_dir
+
+        output_path = unique_dir(REPORT_DIR, filename_stem) / f"{fa_stem(title)}.pdf"
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 

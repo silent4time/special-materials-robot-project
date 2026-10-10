@@ -42,10 +42,22 @@ def _df_rows(df: pd.DataFrame | None, cols: list[str]) -> list[dict[str, Any]]:
     return work[cols].to_dict(orient="records")
 
 
+_STEM_FA = {
+    "remaining_critical": ("پوشش کوتاه‌مدت موجودی سایت", True),
+    "surplus": ("گزارش مواد مازاد", True),
+    "user_activity": ("گزارش فعالیت کاربران", True),
+    "critical_items": ("لیست اقلام بحرانی", False),  # the report appends its own date
+}
+
+
 def _stamp_stem(stem: str) -> str:
+    """«<private folder>/<Persian name>» relative to REPORT_DIR (download name = Persian)."""
+    from services.file_names import fa_stem, unique_dir
+
     ensure_dirs()
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"web_{stem}_{stamp}"
+    label, dated = _STEM_FA.get(stem, (stem, True))
+    folder = unique_dir(REPORT_DIR, f"web_{stem}")
+    return f"{folder.name}/{fa_stem(label, dated=dated)}"
 
 
 def generate_remaining_critical_pdf(
@@ -286,10 +298,12 @@ def generate_monthly_summary_files(
         return None, None, "مسیر فایل مصرف ماهیانه روی دیسک یافت نشد."
     try:
         ensure_dirs()
-        excel_path = REPORT_DIR / f"web_{SUMMARY_FILE_NAME}"
+        from services.file_names import fa_stem, unique_dir
+
+        excel_path = unique_dir(REPORT_DIR, "web_monthly_summary") / f"{fa_stem('خلاصه مصرفی ماهیانه')}.xlsx"
         data, excel_path = build_monthly_summary(source, excel_out=excel_path)
         sections = summary_sections_for_pdf(data)
-        path = REPORT_DIR / "web_خلاصه_مصرفی_ماهیانه.pdf"
+        path = Path(excel_path).with_suffix(".pdf")
         generate_monthly_summary_pdf(
             sections,
             grand_kg=data.grand_kg,

@@ -320,9 +320,11 @@ def generate_files(
     if res.error:
         return res
     ensure_dirs()
-    out = Path(output_dir) if output_dir else REPORT_DIR
-    out.mkdir(parents=True, exist_ok=True)
-    stem = f"n_tundish_{section}_{n}_{res.reno_mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    from services.file_names import fa_digits, fa_stem, unique_dir
+
+    out = unique_dir(Path(output_dir) if output_dir else REPORT_DIR, "n_tundish")
+    # «نیاز_مواد_۲_تاندیش_بلوم_با_نوسازی_1405-07-19»
+    stem = fa_stem("نیاز مواد", fa_digits(n), "تاندیش", SECTIONS[section], RENO_LABEL_FA[res.reno_mode])
     res.pdf = generate_simple_report_pdf(
         res.title,
         subtitle=res.subtitle,

@@ -11,8 +11,8 @@
   {% if ocr_preview %}<pre class="muted" style="white-space:pre-wrap;max-height:240px;overflow:auto">{{ ocr_preview }}</pre>{% endif %}
   {% if download_stem %}
   <div class="report-actions">
-    <a class="btn" href="/reports/main-goal/download/{{ download_stem }}.pdf">دانلود PDF</a>
-    <a class="btn" href="/reports/main-goal/download/{{ download_stem }}.xlsx">دانلود اکسل</a>
+    <a class="btn" href="/reports/main-goal/download/{{ download_stem|urlencode }}.pdf">دانلود PDF</a>
+    <a class="btn" href="/reports/main-goal/download/{{ download_stem|urlencode }}.xlsx">دانلود اکسل</a>
   </div>
   {% endif %}
 </div>
