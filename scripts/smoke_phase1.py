@@ -84,6 +84,20 @@ def test_services(tmp: Path) -> None:
     from services import period_consumption as pc
 
     db = _db_copy(tmp)
+    # item 9 migration on the copy: work_order auto-assignments gone, site lists intact
+    from services.site_stock_lists import items_for_group
+
+    with db.connect() as conn:
+        n_wo = conn.execute(
+            "SELECT COUNT(*) FROM catalog_group_assignments WHERE assigned_by='system:work_order'"
+        ).fetchone()[0]
+        n_manual = conn.execute(
+            "SELECT COUNT(*) FROM catalog_group_assignments WHERE assigned_by NOT LIKE 'system:%'"
+        ).fetchone()[0]
+    assert n_wo == 0, n_wo
+    sizes = {g: len(items_for_group(db, g)) for g in ("slab", "bloom", "billet")}
+    assert all(sizes.values()), sizes
+    print(f"  migration OK work_order=0 manual={n_manual} site lists={sizes}")
     assert nt.parse_shortcut("اسلب ۴") == ("slab", 4)
     assert nt.parse_shortcut("بیلت 12") == ("billet", 12)
     assert nt.parse_count("۰") is None and nt.parse_count("abc") is None

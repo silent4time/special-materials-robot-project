@@ -558,6 +558,7 @@ class Database:
             self._migrate_users_role_check(conn)
             self._migrate_add_columns(conn)
             self._migrate_site_group_check(conn)
+            self._migrate_drop_work_order_assignments(conn)
             self._ensure_default_category_codes(conn)
             self._ensure_tundish_report_seed(conn)
 
@@ -631,6 +632,21 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_users_bale ON users(bale_user_id);
             """
         )
+
+    @staticmethod
+    def _migrate_drop_work_order_assignments(conn: sqlite3.Connection) -> None:
+        """Phase 1 item 9: catalog groups come only from منبع اصلی (auto-sync).
+
+        Legacy ``system:work_order`` auto-assignments are dropped (idempotent).
+        Manual assignments (assigned_by not starting with ``system:``) are kept;
+        on 1405-07-18 the live DB had none.
+        """
+        try:
+            conn.execute(
+                "DELETE FROM catalog_group_assignments WHERE assigned_by = 'system:work_order'"
+            )
+        except sqlite3.OperationalError:
+            pass
 
     def _migrate_site_group_check(self, conn: sqlite3.Connection) -> None:
         """Widen CHECK(tundish_group IN …) on site-stock tables to all SITE_STOCK_GROUPS
