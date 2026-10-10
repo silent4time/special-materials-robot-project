@@ -77,6 +77,20 @@ def main() -> int:
     assert "150) " in joined and "\n…" not in joined and ": 150 عدد" in joined, joined[-300:]
     rows = app._mr_lines_to_pdf_rows(lines[:3])
     assert rows[1]["پیشنهاد"] == "2" and rows[1]["واحد"] == "عدد", rows[1]
+    # inbound wording: clear reason per set-aside group
+    from services import inbound_report as ir
+    rep = {"has_baseline": True, "n_inbound": 0, "n_rejected": 3, "n_zero_new": 2, "rejected": [
+        {"کد دسته": "1605", "موجودی": 626, "دلیل": "کد ۴ رقمی در منبع اصلی نیست"},
+        {"کد دسته": "1800", "موجودی": 0, "دلیل": "ردیف جدید کد 1800 (مازاد) — فقط با «افزودن رکورد»"},
+        {"کد دسته": "1800", "موجودی": 5, "دلیل": "ردیف جدید کد 1800 (مازاد) — فقط با «افزودن رکورد»"}]}
+    txt = ir.summary_text_fa(rep)
+    assert "1 ردیف با کد ۴ رقمی ناموجود در منبع اصلی" in txt and "2 ردیف جدید کد 1800" in txt, txt
+    assert "رد شده" not in txt and "2 شناسهٔ جدید با موجودی صفر" in txt, txt
+    # reminders: disabled → «غیرفعال» instead of the overdue phase
+    from services import mandatory_reminders as rem
+    cfg = dict(rem.load_config(db), enabled=False)
+    st = rem.compute_status(db, cfg)
+    assert rem.status_label_fa(st, cfg).startswith("⏸ غیرفعال")
     print("SMOKE_BOT_NAV_QA4_OK")
     return 0
 
