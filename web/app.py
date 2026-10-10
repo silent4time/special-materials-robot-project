@@ -40,6 +40,25 @@ WEB_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 TEMPLATES.env.filters["unit_fa"] = unit_fa  # «NO» → «عدد» (display only)
 
+_INTERNAL_TAG = __import__("re").compile(r"\b[a-z]\d{3}[a-z0-9]*\b[،,]?\s*")
+
+
+def clean_note(text: object) -> str:
+    """Drop internal task tags (e.g. «t211u») from notes shown to users."""
+    out = _INTERNAL_TAG.sub("", str(text or ""))
+    return out.replace("( ", "(").replace("()", "").strip()
+
+
+def jdt(value: object) -> str:
+    """Any stored timestamp/ISO date → Jalali «1405/07/19 13:40» (Tehran)."""
+    from bot.jalali import format_datetime
+
+    return format_datetime(value) or (str(value) if value else "—")
+
+
+TEMPLATES.env.filters["clean_note"] = clean_note
+TEMPLATES.env.filters["jdt"] = jdt
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="داشبورد مواد تاندیش", docs_url=None, redoc_url=None)

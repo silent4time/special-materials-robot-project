@@ -16,7 +16,7 @@
     {% for r in required %}{{ r.label }} {{ "✅" if r.ok else "❌" }}{% if not loop.last %}، {% endif %}{% endfor %}
   </p>
   {% if last_result %}
-  <p class="muted">آخرین ارسال: {{ last_result.at_fa or last_result.at }} — موفق {{ last_result.sent }}، ناموفق {{ (last_result.failed or [])|length }}{% if last_result.forced %} (دستی){% endif %}</p>
+  <p class="muted">آخرین ارسال: <bdi>{{ last_result.at_fa or (last_result.at|jdt) }}</bdi> — موفق {{ last_result.sent }}، ناموفق {{ (last_result.failed or [])|length }}{% if last_result.forced %} (دستی){% endif %}</p>
   {% endif %}
   {% if force_pending %}<p class="muted">⏳ یک درخواست «ارسال همین حالا» در صف ربات است.</p>{% endif %}
 </div>
@@ -45,11 +45,13 @@
     </label>
 
     <h3>زمان‌بندی</h3>
+    <div class="kv-grid">
     {% for key, (lo, hi) in limits.items() %}
-    <label>{{ field_labels[key] }} ({{ lo }}–{{ hi }})
-      <input type="number" name="{{ key }}" min="{{ lo }}" max="{{ hi }}" value="{{ cfg[key] }}" required>
-    </label>
+      <label for="rm_{{ key }}">{{ field_labels[key] }}</label>
+      <input id="rm_{{ key }}" type="number" name="{{ key }}" min="{{ lo }}" max="{{ hi }}" value="{{ cfg[key] }}" required>
+      <span class="hint">مجاز: {{ lo }} تا {{ hi }}</span>
     {% endfor %}
+    </div>
     <p class="muted">
       مهلت فایل‌های هر ماه = روز «{{ cfg.due_day }}» ماه بعد. از {{ cfg.lead_days }} روز قبل از مهلت یادآوری می‌شود؛
       بعد از مهلت (یا اگر ماه‌های قدیمی‌تر ناقص باشند) هر {{ cfg.repeat_days }} روز تکرار می‌شود؛ ارسال از ساعت {{ cfg.hour }} تهران.

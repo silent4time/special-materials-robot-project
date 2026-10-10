@@ -10,12 +10,13 @@
     <label for="coverage_days">روز پوشش</label>
     <input id="coverage_days" name="coverage_days" type="number" step="1" min="1" value="{{ coverage_days }}">
     <table style="margin-top:1rem">
-      <thead><tr><th>نام</th><th>گروه</th><th>مقدار درخواستی</th></tr></thead>
+      <thead><tr><th>نام قلم (کلید واژه)</th><th>محل استفاده</th><th>واحد</th><th>مقدار درخواستی</th></tr></thead>
       <tbody>
         {% for it in items %}
         <tr>
-          <td>{{ it.name_desc }}</td>
-          <td class="muted">{{ it.tundish_group or "—" }}</td>
+          <td><b>{{ it.display_name }}</b>{% if it.secondary %}<br><span class="secondary-text">{{ it.secondary }}</span>{% endif %}</td>
+          <td class="muted">{{ it.group_fa or "—" }}</td>
+          <td class="muted">{{ it.unit|unit_fa if it.unit else "—" }}</td>
           <td><input type="number" step="any" min="0" name="qty_{{ it.id }}" placeholder="۰"></td>
         </tr>
         {% endfor %}
@@ -33,7 +34,7 @@
       {% for r in history %}
       <tr>
         <td>{{ r.id }}</td>
-        <td>{{ r.created_at }}</td>
+        <td><bdi>{{ r.created_at|jdt }}</bdi></td>
         <td>{{ r.coverage_days }}</td>
         <td>{{ r.line_count }}</td>
         <td>{{ r.actor_display_name or r.bale_user_id }}</td>

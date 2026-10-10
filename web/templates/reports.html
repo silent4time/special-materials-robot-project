@@ -9,7 +9,7 @@
   <p class="muted">
     موجودی روزانه سایت:
     {% if completeness.tank_consumption %}✅ Excel
-    {% elif completeness.site_stock or site_stock_date %}✅ تعاملی ({{ site_stock_date or "—" }})
+    {% elif completeness.site_stock or site_stock_date %}✅ تعاملی (آخرین ثبت <bdi>{{ shamsi(site_stock_date) if site_stock_date else "—" }}</bdi>)
     {% else %}⏳{% endif %}
     |
     منبع اصلی: {% if completeness.product_inventory %}✅{% else %}⏳{% endif %} |
@@ -184,7 +184,7 @@
   <p class="muted" style="margin-top:1rem">ثبت‌های اخیر:</p>
   <ul class="muted">
     {% for r in recent_counts %}
-    <li>{{ r.label }} — بیلت {{ r.count_billet }}، بلوم {{ r.count_bloom }}، اسلب {{ r.count_slab }}{% if r.exclude_from_basis %} — در مبنای اقلام بحرانی استفاده نمی‌شود ({{ r.basis_note or "نمونه" }}){% endif %}</li>
+    <li>{{ r.label }} — بیلت {{ r.count_billet }}، بلوم {{ r.count_bloom }}، اسلب {{ r.count_slab }}{% if r.exclude_from_basis %} — در مبنای اقلام بحرانی استفاده نمی‌شود{% if r.basis_note|clean_note %} — <bdi>{{ r.basis_note|clean_note }}</bdi>{% endif %}{% endif %}</li>
     {% endfor %}
   </ul>
   {% endif %}

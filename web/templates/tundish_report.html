@@ -88,7 +88,7 @@
     {% for r in recent %}
       <tr>
         <td>{{ r.id }}</td>
-        <td>{{ r.created_at_tehran }}</td>
+        <td><bdi>{{ r.created_at_tehran|jdt }}</bdi></td>
         <td>{{ r.line }}</td>
         <td>{{ r.tundish_no }}</td>
         <td>{{ r.sequence }}</td>
