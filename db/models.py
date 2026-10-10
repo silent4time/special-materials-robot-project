@@ -1271,10 +1271,22 @@ class Database:
             ).fetchone()
             return dict(row) if row else None
 
-    def list_catalog_items(self, active_only: bool = True) -> list[dict[str, Any]]:
-        q = "SELECT * FROM catalog_items"
+    # Daily-stock input lines generated from منبع اصلی (services.site_stock_lists) use
+    # synthetic ids «SS:…»; they are not warehouse items, so catalog listings
+    # (material requests, catalog menus) skip them unless asked.
+    _SITE_LINE_SQL = "id NOT LIKE 'SS:%'"
+
+    def list_catalog_items(
+        self, active_only: bool = True, *, include_site_lines: bool = False
+    ) -> list[dict[str, Any]]:
+        conds = []
         if active_only:
-            q += " WHERE active = 1"
+            conds.append("active = 1")
+        if not include_site_lines:
+            conds.append(self._SITE_LINE_SQL)
+        q = "SELECT * FROM catalog_items"
+        if conds:
+            q += " WHERE " + " AND ".join(conds)
         q += " ORDER BY name_desc COLLATE NOCASE, id"
         with self.connect() as conn:
             return [dict(r) for r in conn.execute(q).fetchall()]
@@ -1459,16 +1471,19 @@ class Database:
             return [dict(r) for r in conn.execute(q, (group,)).fetchall()]
 
     def list_catalog_with_assignments(
-        self, active_only: bool = True
+        self, active_only: bool = True, *, include_site_lines: bool = False
     ) -> list[dict[str, Any]]:
         q = """
             SELECT c.id, c.name_desc, c.category_code, c.active,
                    a.tundish_group, a.assigned_by, a.updated_at AS assigned_at
             FROM catalog_items c
             LEFT JOIN catalog_group_assignments a ON a.item_id = c.id
+            WHERE 1 = 1
         """
         if active_only:
-            q += " WHERE c.active = 1"
+            q += " AND c.active = 1"
+        if not include_site_lines:
+            q += " AND c.id NOT LIKE 'SS:%'"
         q += " ORDER BY (a.tundish_group IS NULL) DESC, a.tundish_group, c.name_desc COLLATE NOCASE, c.id"
         with self.connect() as conn:
             return [dict(r) for r in conn.execute(q).fetchall()]
@@ -1480,7 +1495,7 @@ class Database:
             SELECT c.*
             FROM catalog_items c
             LEFT JOIN catalog_group_assignments a ON a.item_id = c.id
-            WHERE a.item_id IS NULL
+            WHERE a.item_id IS NULL AND c.id NOT LIKE 'SS:%'
         """
         if active_only:
             q += " AND c.active = 1"

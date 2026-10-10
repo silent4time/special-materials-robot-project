@@ -3889,13 +3889,16 @@ class BotApp:
         if not label:
             self._reply(message, "گروه نامعتبر.", kb.site_stock_menu())
             return
-        items = self.db.list_items_for_group(group_key, active_only=True)
+        # Lists come from the live منبع اصلی (name = «کلید واژه»), shared with web.
+        from services.site_stock_lists import items_for_group as site_items_for_group
+
+        items = site_items_for_group(self.db, group_key)
         if not items:
             try:
                 self.db.sync_catalog_groups_from_latest_monthly()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("WO sync before site stock group failed: %s", exc)
-            items = self.db.list_items_for_group(group_key, active_only=True)
+            items = site_items_for_group(self.db, group_key)
         if not items:
             self._reply(
                 message,

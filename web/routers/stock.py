@@ -9,6 +9,7 @@ from bot.activity import log_activity
 from config import SITE_STOCK_GROUP_KEYS, SITE_STOCK_GROUPS
 from db.models import Database
 from services import site_stock_notify
+from services.site_stock_lists import items_for_group as site_items_for_group
 from web.deps import current_user, get_db
 from web.templating import render
 
@@ -30,7 +31,7 @@ async def stock_form(
     if g not in SITE_STOCK_GROUP_KEYS:
         g = "slab"
     day = (entry_date or db.tehran_today()).strip()
-    items = db.list_items_for_group(g)
+    items = site_items_for_group(db, g)
     existing = {
         e["item_id"]: e
         for e in db.list_site_stock_entries(entry_date=day, tundish_group=g)
@@ -77,7 +78,7 @@ async def stock_save(
             },
             status_code=400,
         )
-    items = db.list_items_for_group(g)
+    items = site_items_for_group(db, g)
     form = await request.form()
     saved = 0
     errors: list[str] = []
