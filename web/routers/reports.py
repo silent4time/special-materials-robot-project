@@ -389,3 +389,48 @@ async def period_xlsx(request: Request, user=Depends(require_feature(perm.REPORT
         return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#period", status_code=303)
     log_activity(db, user, "report_period_xlsx")
     return FileResponse(res.xlsx, media_type=_XLSX, filename=res.xlsx.name)
+
+
+# ---------------------------------------------------------------- 📊 گزارش جامع (shared core, 19f)
+def _comprehensive(request: Request, db: Database, user: dict):
+    from bot.jalali import format_month_year_range, month_year_to_gregorian_bounds
+    from services import comprehensive_report as cr
+    from web.services.reports import letterhead_path
+
+    q = request.query_params
+    today = jalali_today()
+    try:
+        fy, fm = int(q.get("from_year") or today.year), int(q.get("from_month") or today.month)
+        ty, tm = int(q.get("to_year") or today.year), int(q.get("to_month") or today.month)
+    except ValueError:
+        return None, "بازهٔ ماه نامعتبر است."
+    start_ym, end_ym = (fy, fm), (ty, tm)
+    if ty * 12 + tm < fy * 12 + fm:
+        start_ym, end_ym = end_ym, start_ym
+    start, end = month_year_to_gregorian_bounds(start_ym, end_ym)
+    section = (q.get("section") or "").strip().lower() or None
+    if section not in (None, "slab", "bloom", "billet"):
+        section = None
+    res = cr.generate_files(
+        db, user, start, end, range_label=format_month_year_range(start_ym, end_ym),
+        section=section, letterhead_path=letterhead_path(db),
+    )
+    return res, res.error
+
+
+@router.get("/comprehensive")
+async def comprehensive_pdf(request: Request, user=Depends(require_feature(perm.REPORT_COMPREHENSIVE)), db: Database = Depends(get_db)):
+    res, err = _comprehensive(request, db, user)
+    if err or not res or not res.pdf:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#comprehensive", status_code=303)
+    log_activity(db, user, "report_comprehensive")
+    return FileResponse(res.pdf, media_type="application/pdf", filename=res.pdf.name)
+
+
+@router.get("/comprehensive.xlsx")
+async def comprehensive_xlsx(request: Request, user=Depends(require_feature(perm.REPORT_COMPREHENSIVE)), db: Database = Depends(get_db)):
+    res, err = _comprehensive(request, db, user)
+    if err or not res or not res.xlsx:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#comprehensive", status_code=303)
+    log_activity(db, user, "report_comprehensive")
+    return FileResponse(res.xlsx, media_type=_XLSX, filename=res.xlsx.name)

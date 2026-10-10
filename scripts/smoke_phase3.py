@@ -306,12 +306,86 @@ def test_styling() -> None:
     print(f"  20 styling OK ({len(xs)} xlsx: RTL/Vazirmatn/center/border/header fill; {len(ps)} pdf: Vazirmatn) → {keep}")
 
 
+def test_shared_core() -> None:
+    import subprocess
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import smoke_phase1 as p1
+    from openpyxl import load_workbook
+
+    from analytics.frames import load_frames
+    from bot import keyboards as kb
+    from bot.handlers import BotApp
+    from services import comprehensive_report as cr
+
+    tmp = TMP / "core"
+    tmp.mkdir()
+    db = p1._db_copy(tmp)
+    owner = next(u for u in db.list_users() if u.get("role") == "owner" and u.get("active"))
+    uid = str(owner["bale_user_id"])
+    client = p1.FakeClient()
+    app = BotApp(client, db)  # type: ignore[arg-type]
+    # 19f: bot frames == analytics.frames.load_frames
+    bf, _ = app._load_frames(owner, db.get_or_create_session(uid))
+    wf = {k: v for k, v in load_frames(db, owner).items() if v is not None}
+    assert set(bf) == set(wf) and all(bf[k].shape == wf[k].shape for k in wf), ({k: v.shape for k, v in bf.items()}, {k: v.shape for k, v in wf.items()})
+
+    def send(text):
+        app.handle_message({"from": {"id": int(uid), "first_name": "x"}, "chat": {"id": int(uid)}, "text": text})
+
+    send(kb.BTN_ANALYTICS); send(kb.BTN_COMPREHENSIVE)
+    nd = len(client.docs)
+    send(kb.BTN_MY_CURRENT)
+    if len(client.docs) == nd:  # section step
+        send(next(iter(kb.SECTION_STEP_BUTTONS)))
+    bot_docs = [Path(p) for _c, p in client.docs[nd:]]
+    assert any(d.suffix == ".pdf" for d in bot_docs) and any(d.suffix == ".xlsx" for d in bot_docs), client.sent[-3:]
+    bot_x = next(d for d in bot_docs if d.suffix == ".xlsx")
+    bot_p = next(d for d in bot_docs if d.suffix == ".pdf")
+
+    from fastapi.testclient import TestClient
+
+    import web.deps as deps
+    from web.app import create_app
+
+    wapp = create_app()
+    wapp.dependency_overrides[deps.get_db] = lambda: db
+    who = {"u": owner}
+    wapp.dependency_overrides[deps.current_user_optional] = lambda: who["u"]
+    c = TestClient(wapp)
+    html = c.get("/reports").text
+    assert 'id="comprehensive"' in html and "/reports/comprehensive.xlsx" in html
+    from bot.jalali import jalali_today
+
+    t = jalali_today()
+    q = f"from_year={t.year}&from_month={t.month}&to_year={t.year}&to_month={t.month}"
+    r = c.get(f"/reports/comprehensive?{q}")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/pdf"), (r.status_code, r.text[:200])
+    rx = c.get(f"/reports/comprehensive.xlsx?{q}")
+    assert rx.status_code == 200 and rx.content[:2] == b"PK"
+    wx = TMP / "web_comp.xlsx"
+    wx.write_bytes(rx.content)
+    wp = TMP / "web_comp.pdf"
+    wp.write_bytes(r.content)
+    assert load_workbook(bot_x).sheetnames == load_workbook(wx).sheetnames, (load_workbook(bot_x).sheetnames, load_workbook(wx).sheetnames)
+    heads = lambda pdf: [ln for ln in subprocess.run(["pdftotext", "-layout", str(pdf), "-"], capture_output=True, text=True).stdout.splitlines() if ln.strip()][:3]
+    assert heads(bot_p)[:1] == heads(wp)[:1], (heads(bot_p), heads(wp))
+    assert not check_xlsx(wx) and not check_pdf(wp)
+    # technician: denied on web (default permissions)
+    db.upsert_user("777", role="technician", display_name="T")
+    who["u"] = db.get_user("777")
+    r = c.get(f"/reports/comprehensive?{q}", follow_redirects=False)
+    assert r.status_code in (303, 403) or "دسترسی" in r.text, r.status_code
+    print("  19f OK (bot frames = load_frames; bot+web comprehensive share core: same sheets/title; web route gated)")
+
+
 def main() -> int:
     print("smoke phase3…")
     test_housekeeping()
     test_cache_and_audit()
     test_errors_and_expiry()
     test_styling()
+    test_shared_core()
     print("SMOKE_PHASE3_OK")
     return 0
 

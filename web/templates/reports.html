@@ -44,6 +44,24 @@
 </div>
 {% endif %}
 
+{% if can(user, "report.comprehensive") %}
+<div class="card" id="comprehensive">
+  <h2>📊 گزارش جامع</h2>
+  <p class="muted">همان گزارش ربات (هستهٔ مشترک): خلاصهٔ داده‌ها، نرخ مصرف، مصرف بازه، مانده، اقلام بحرانی، پیش‌بینی و پیشنهاد درخواست — PDF و اکسل.</p>
+  <form method="get" action="/reports/comprehensive" class="form-grid">
+    <label>از سال<input type="number" name="from_year" value="{{ critical_year }}"></label>
+    <label>از ماه<select name="from_month">{% for n, name in month_names %}<option value="{{ n }}" {% if n == critical_month %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+    <label>تا سال<input type="number" name="to_year" value="{{ critical_year }}"></label>
+    <label>تا ماه<select name="to_month">{% for n, name in month_names %}<option value="{{ n }}" {% if n == critical_month %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+    <label>بخش<select name="section"><option value="">همه بخش‌ها</option><option value="slab">اسلب</option><option value="bloom">بلوم</option><option value="billet">بیلت</option></select></label>
+    <div class="report-actions">
+      <button type="submit" class="btn">PDF</button>
+      <button type="submit" class="btn" formaction="/reports/comprehensive.xlsx">اکسل</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
 {% if can(user, "report.period") %}
 <div class="card" id="period">
   <h2>📅 گزارش مصرف بازه‌ای</h2>

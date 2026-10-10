@@ -60,6 +60,7 @@ from bot.jalali import (
 from bot.bale_api import BaleAPIError, BaleClient, public_markup
 from services import permissions as perm
 from services import user_errors
+from services import comprehensive_report as comprehensive_svc
 from bot.settings_text import (
     DEFAULT_INVITE_TEXT,
     PLACEHOLDER_HINT_INVITE,
@@ -517,12 +518,18 @@ class BotApp:
         return data_completeness(self.db, user, session=session)
 
     def _load_frames(self, user: dict, session: dict) -> tuple[dict, dict]:
+        """19f: same loader as the web (analytics.frames.load_frames, factory-wide).
+
+        A session-only upload without an extract row (legacy) is still read from disk.
+        """
+        frames, metas = comprehensive_svc.load(self.db, user)
         paths = self._resolved_file_paths(user, session)
-        # only process present paths
-        present = {k: v for k, v in paths.items() if v}
-        if not present:
-            return {}, {}
-        return process_session_files(present, user)
+        legacy = {k: v for k, v in paths.items() if v and k not in frames}
+        if legacy:
+            extra, extra_meta = process_session_files(legacy, user)
+            frames.update(extra)
+            metas.update(extra_meta)
+        return frames, metas
 
     def _load_latest_inventory_frame(
         self, user: dict, *, include_catalog_fallback: bool = True
@@ -1689,16 +1696,11 @@ class BotApp:
 
     @staticmethod
     def _section_frames(frames: dict, section: str | None) -> dict:
-        if not section:
-            return frames
-        return {
-            k: (filter_by_tundish_type(f, section) if f is not None else f)
-            for k, f in frames.items()
-        }
+        return comprehensive_svc.section_frames(frames, section)
 
     @staticmethod
     def _section_label(section: str | None) -> str:
-        return {"slab": "اسلب", "bloom": "بلوم", "billet": "بیلت"}.get(section or "", "همه بخش‌ها")
+        return comprehensive_svc.section_label(section)
 
     # ---------- 🧮 نیاز مواد برای N تاندیش ----------
     def on_n_tundish_start(self, message: dict) -> None:
@@ -2438,37 +2440,10 @@ class BotApp:
         end: date | None = None,
         forecast_days: float | None = None,
     ) -> dict[str, Any]:
-        tank = frames.get("tank_consumption")
-        inv = frames.get("product_inventory")
-        monthly = frames.get("monthly_consumption")
-        if start is None or end is None:
-            end = end or date.today()
-            start = start or (end - timedelta(days=29))
-        days = forecast_days if forecast_days is not None else float(range_day_count(start, end))
-        rates = daily_rates(tank, monthly)
-        rates_in_range = daily_rates(tank, monthly, start=start, end=end)
-        rem = remaining(self._inventory_with_ledger(inv))
-        period = period_consumption(tank, start, end)
-        crit = critical_materials(rates, rem, CRITICAL_DAYS)
-        fc = forecast(rates_in_range if not rates_in_range.empty else rates, days)
-        sug = suggest_requests(
-            rates_in_range if not rates_in_range.empty else rates,
-            rem,
-            days,
-            inventory_df=inv,
+        """Shared with the web (services.comprehensive_report.build_bundle)."""
+        return comprehensive_svc.build_bundle(
+            self.db, frames, start=start, end=end, forecast_days=forecast_days
         )
-        return {
-            "start": start,
-            "end": end,
-            "days": days,
-            "critical_days": CRITICAL_DAYS,
-            "daily_rates": rates,
-            "period_consumption": period,
-            "remaining": rem,
-            "critical": crit,
-            "forecast": fc,
-            "suggest": sug,
-        }
 
     def on_analytics_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -3729,47 +3704,29 @@ class BotApp:
         if not loaded:
             return
         session, frames, metas = loaded
-        frames = self._section_frames(frames, section)
-        range_label = f"{range_label} — {self._section_label(section)}"
-        self._reply(message, f"در حال ساخت گزارش جامع ({range_label})…")
+        self._reply(message, f"در حال ساخت گزارش جامع ({range_label} — {self._section_label(section)})…")
         try:
-            analytics = self._build_analytics_bundle(frames, start=start, end=end)
-            pdf_path = generate_report(
-                frames, metas, user, analytics=analytics, letterhead_path=self._letterhead_path()
+            res = comprehensive_svc.generate_files(
+                self.db, user, start, end, range_label=range_label, section=section or None,
+                letterhead_path=self._letterhead_path(), frames=frames, metas=metas,
             )
             self.db.save_report(
                 user["bale_user_id"],
                 session["id"],
-                str(pdf_path),
+                str(res.pdf),
                 {k: int(metas[k]["visible_rows"]) for k in metas},
             )
             self.client.send_document(
-                self._chat_id(message),
-                pdf_path,
-                caption=f"{kb.BTN_COMPREHENSIVE} — {range_label}",
+                self._chat_id(message), res.pdf, caption=f"{kb.BTN_COMPREHENSIVE} — {res.range_label}"
             )
-            excel_ok = False
-            try:
-                xlsx_path = pdf_path.with_suffix(".xlsx")
-                generate_analytics_report_xlsx(
-                    frames,
-                    metas,
-                    analytics=analytics,
-                    output_path=xlsx_path,
-                    filename_stem="comprehensive",
-                )
+            if res.xlsx:
                 self.client.send_document(
-                    self._chat_id(message),
-                    xlsx_path,
-                    caption=f"نسخه اکسل — {kb.BTN_COMPREHENSIVE} — {range_label}",
+                    self._chat_id(message), res.xlsx,
+                    caption=f"نسخه اکسل — {kb.BTN_COMPREHENSIVE} — {res.range_label}",
                 )
-                excel_ok = True
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("analytics excel companion failed")
-                logger.warning("excel companion failed: %s", exc)
             self._reply(
                 message,
-                "گزارش جامع (PDF و اکسل) ارسال شد." if excel_ok else "PDF گزارش جامع ارسال شد.",
+                "گزارش جامع (PDF و اکسل) ارسال شد." if res.xlsx else "PDF گزارش جامع ارسال شد.",
                 kb.analytics_menu(user),
             )
             log_activity(self.db, user, "report_comprehensive")
