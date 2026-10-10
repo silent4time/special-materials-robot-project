@@ -565,13 +565,16 @@ def full_replace_confirm_menu() -> dict:
     return _kb([[BTN_FULL_REPLACE_CONFIRM], [BTN_CANCEL]], "flow", nav=False)
 
 
-def cancel_pending_menu(*, guide: bool = False) -> dict:
-    """While waiting for a file / typed value: cancel (+ file guide when relevant)."""
+def cancel_pending_menu(*, guide: bool = False, nav: bool = False) -> dict:
+    """While waiting for a file / typed value: cancel (+ file guide when relevant).
+
+    ``nav=True`` adds the standard «⬅️ بازگشت / 🏠 منوی اصلی» row.
+    """
     rows = [[BTN_CANCEL]]
     if guide:
         rows[0].append(BTN_FILE_GUIDE)
     rows.append([BTN_HELP])
-    return _kb(rows, "flow", nav=False)
+    return _kb(rows, "flow", nav=nav)
 
 
 def analytics_menu(user: dict | None = None) -> dict:

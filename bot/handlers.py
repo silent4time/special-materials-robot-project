@@ -1999,9 +1999,8 @@ class BotApp:
         self._reply(
             message,
             "کد دسته بندی ۴ رقمی را ارسال کنید (مثال: 1201).\n"
-            f"برای انصراف دکمه «{kb.BTN_CANCEL_PENDING}» را بزنید "
-            f"(یا «بازگشت به منوی اصلی»).",
-            kb.cancel_pending_menu(),
+            f"برای انصراف «{kb.BTN_CANCEL_PENDING}» یا برای خروج «{kb.BTN_BACK}» / «{kb.BTN_HOME}» را بزنید.",
+            kb.cancel_pending_menu(nav=True),
         )
 
     def on_category_code_text(self, message: dict, text: str) -> bool:
@@ -2208,7 +2207,7 @@ class BotApp:
             message,
             (
                 f"اضافه کردن رکورد جدید به منبع اصلی.\n"
-                f"مقدار «{label}» ({first}) را بفرستید.\n"
+                f"مقدار «{label}»{main_source_svc.FIELD_HINTS_FA.get(first, '')} را بفرستید.\n"
                 f"برای رد کردن فیلدهای اختیاری «-» بفرستید.\n"
                 f"برای انصراف «{kb.BTN_CANCEL_PENDING}» را بزنید."
             ),
@@ -2266,7 +2265,7 @@ class BotApp:
                 "item_id": str(row.get("id") or item_id),
             }
             fields_hint = "، ".join(
-                f"{main_source_svc.FIELD_LABELS_FA.get(c, c)} ({c})"
+                f"{main_source_svc.FIELD_LABELS_FA.get(c, c)}"
                 for c in main_source_svc.INVENTORY_COLUMNS
                 if c != "id"
             )
@@ -2276,9 +2275,9 @@ class BotApp:
                     "رکورد فعلی:\n"
                     + main_source_svc.format_row_fa(row)
                     + "\n\nبرای ویرایش، یک یا چند خط به صورت "
-                    "نام_فیلد=مقدار بفرستید.\n"
+                    "«نام فیلد=مقدار» بفرستید.\n"
                     f"فیلدها: {fields_hint}\n"
-                    "مثال:\nquantity=120\nusage_location=اسلب، بیلت\nkeyword=نسوز"
+                    "مثال:\nموجودی=120\nمحل استفاده=اسلب، بیلت\nکلید واژه=نسوز"
                 ),
                 kb.cancel_pending_menu(),
             )
@@ -2303,7 +2302,7 @@ class BotApp:
             if not updates:
                 self._reply(
                     message,
-                    "هیچ فیلد معتبری یافت نشد. قالب: نام_فیلد=مقدار",
+                    "هیچ فیلد معتبری یافت نشد. قالب: «نام فیلد=مقدار» (مثال: موجودی=120)",
                     kb.cancel_pending_menu(),
                 )
                 return True
@@ -2439,7 +2438,7 @@ class BotApp:
             )
             self._reply(
                 message,
-                f"مقدار «{label}» ({nxt}){optional} را بفرستید.",
+                f"مقدار «{label}»{main_source_svc.FIELD_HINTS_FA.get(nxt, '')}{optional} را بفرستید.",
                 kb.cancel_pending_menu(),
             )
             return True

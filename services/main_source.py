@@ -36,6 +36,14 @@ logger = logging.getLogger(__name__)
 
 INVENTORY_COLUMNS: list[str] = list(REQUIRED_COLUMNS["product_inventory"])
 
+# Short Persian format hints shown next to the label in «➕ افزودن رکورد» prompts
+FIELD_HINTS_FA: dict[str, str] = {
+    "category_code": " (کد دسته ۴ رقمی، مثال: 1201)",
+    "id": " (شناسهٔ کامل کالا؛ ۴ رقم اول = کد دسته)",
+    "quantity": " (عدد)",
+    "work_order": " (۱۰ رقم)",
+}
+
 FIELD_LABELS_FA: dict[str, str] = {
     "category_code": "کد دسته بندی",
     "id": "شناسه مواد",
