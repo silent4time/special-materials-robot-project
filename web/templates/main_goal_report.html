@@ -7,8 +7,8 @@
   <p class="muted">الف) ثبت ورودی ماه (عکس تب «ریخته‌گری» آمار تولید / اکسل مصرف یا سکوئنس تاندیش؛ پس از هر ورودی بخش‌های باقی‌ماندهٔ همان ماه نمایش داده می‌شود) ← ب) درخواست گزارش از سابقه با بازه ۳/۶/۱۲ ماهه یا سفارشی. سناریوها همچنان فعال‌اند.</p>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err" style="white-space:pre-wrap">{{ error }}</div>{% endif %}
-  {% if summary %}<pre class="muted" style="white-space:pre-wrap">{{ summary }}</pre>{% endif %}
-  {% if ocr_preview %}<pre class="muted" style="white-space:pre-wrap;max-height:240px;overflow:auto">{{ ocr_preview }}</pre>{% endif %}
+  {% if summary %}<pre class="muted">{{ summary }}</pre>{% endif %}
+  {% if ocr_preview %}<details><summary>جزئیات خوانش عکس</summary><pre class="muted" style="max-height:240px;overflow:auto">{{ ocr_preview }}</pre></details>{% endif %}
   {% if download_stem %}
   <div class="report-actions">
     <a class="btn" href="/reports/main-goal/download/{{ download_stem|urlencode }}.pdf">دانلود PDF</a>
@@ -45,16 +45,20 @@
       <tr>
         <td>{{ loop.index }}</td>
         <td>{{ m.label }}</td>
+        {% if (m.production.total_tons or 0) > 0 %}
         <td>{{ "{:,.0f}".format(m.production.billet_tons) }}</td>
         <td>{{ "{:,.0f}".format(m.production.bloom_tons) }}</td>
         <td>{{ "{:,.0f}".format(m.production.slab_tons) }}</td>
         <td>{{ "{:,.0f}".format(m.production.total_tons) }}</td>
+        {% else %}
+        <td colspan="4" class="muted">تناژ ثبت نشده{% if m.consumptions %} — فقط دادهٔ تاندیش{% endif %}</td>
+        {% endif %}
         <td>{{ m.jalali_date }} — {{ m.actor }}</td>
         {% if can_delete %}
-        <td>
-          <form method="post" action="/reports/main-goal/months/delete" onsubmit="return confirm('حذف؟')">
+        <td class="actions">
+          <form method="post" action="/reports/main-goal/months/delete" onsubmit="return confirm('ماه «{{ m.label }}» از سابقه حذف شود؟')">
             <input type="hidden" name="period_key" value="{{ m.period_key }}">
-            <button type="submit" class="linkish">حذف</button>
+            <button type="submit" class="linkish">🗑 حذف</button>
           </form>
         </td>
         {% endif %}
@@ -68,7 +72,7 @@
 <div class="card">
   <h2>📥 الف) ثبت ورودی</h2>
   <h3>📸 عکس آمار تولید (فقط تب «ریخته گری»)</h3>
-  <p class="muted">فقط تصویر صفحه (اسکرین‌شات) تب «ریخته گری» صفحه otsteel.ksc.ir/productionstatistics همراه با فیلتر تاریخ پذیرفته می‌شود؛ عکس تب «کوره» رد می‌شود. نگاشت: CCM1/2=اسلب، CCM3=بلوم، CCM4/5=بیلت. پارسر تب ریخته‌گری هنوز با عکس واقعی اعتبارسنجی نشده است.</p>
+  <p class="muted">فقط تصویر صفحه (اسکرین‌شات) تب «ریخته گری» صفحه otsteel.ksc.ir/productionstatistics همراه با فیلتر تاریخ پذیرفته می‌شود؛ عکس تب «کوره» رد می‌شود. اعداد خوانده‌شده را پس از ذخیره با تصویر مقایسه کنید و در صورت مغایرت از «اصلاح / ورود دستی تولید» اصلاح کنید.</p>
   <form method="post" action="/reports/main-goal/inputs/production-photo" enctype="multipart/form-data" class="form-grid">
     <label>تصویر صفحه (اسکرین‌شات)
       <input type="file" name="photo" accept="image/*" required>
@@ -94,7 +98,7 @@
         <option value="billet">بیلت</option>
       </select>
     </label>
-    <label>فایل .xlsx<input type="file" name="file" accept=".xlsx" required></label>
+    <label>فایل اکسل<input type="file" name="file" accept=".xlsx" required></label>
     <div class="report-actions"><button type="submit" class="btn">استخراج و ذخیره</button></div>
   </form>
   {{ file_guide("mg_consumption")|safe }}
@@ -139,13 +143,4 @@
   </form>
 </div>
 
-<div class="card">
-  <h2>📤 آپلود ۴ فایل یک ماه (قدیمی)</h2>
-  <form method="post" action="/reports/main-goal/months/upload" enctype="multipart/form-data" class="form-grid">
-    {% for key, label in file_kinds %}
-    <label>{{ label }}<input type="file" name="{{ key }}" accept=".xlsx" required></label>
-    {% endfor %}
-    <div class="report-actions"><button type="submit" class="btn">ذخیره ماه</button></div>
-  </form>
-</div>
 {% endblock %}

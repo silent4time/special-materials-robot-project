@@ -39,6 +39,18 @@ def require_main_goal(user=Depends(current_user)) -> dict:
     return user
 
 
+_CHECK_NUMBERS_FA = "⚠ اعداد خوانده‌شده از عکس را با تصویر مقایسه کنید؛ در صورت مغایرت از «اصلاح / ورود دستی تولید» اصلاح کنید."
+
+
+def _user_text(text: str | None) -> str | None:
+    """Replace internal/developer notes from the shared OCR layer with user guidance."""
+    if not text:
+        return text
+    from services.main_goal_production_ocr import CASTING_VALIDATION_NOTE_FA
+
+    return text.replace(CASTING_VALIDATION_NOTE_FA, _CHECK_NUMBERS_FA)
+
+
 def _ctx(
     db: Database,
     user: dict,
@@ -56,6 +68,10 @@ def _ctx(
     except Exception:  # noqa: BLE001
         missing = []
     completeness = mgp.month_completeness(db)
+    for c in completeness:
+        if "اعتبارسنجی" in str(c.get("production_note") or ""):
+            c["production_note"] = "(از عکس — اعداد را بررسی کنید)"
+    summary, error, ocr_preview = _user_text(summary), _user_text(error), _user_text(ocr_preview)
     return {
         "user": user,
         "title_fa": mg.TITLE_FA,
@@ -74,7 +90,7 @@ def _ctx(
         "can_delete": mgh.can_delete_month(user),
         "missing_required": missing,
         "max_forecast": mgh.MAX_FORECAST_MONTHS,
-        "ccm_note": "CCM1/2=اسلب، CCM3=بلوم، CCM4/5=بیلت",
+        "ccm_note": "ماشین ریخته‌گری ۱ و ۲ = اسلب، ۳ = بلوم، ۴ و ۵ = بیلت",
         "sections_fa": mg.SECTION_LABEL_FA,
     }
 
