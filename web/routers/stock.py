@@ -19,6 +19,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/stock", tags=["stock"])
 
 
+def _day(raw: str | None, db: Database) -> tuple[str, str | None]:
+    """Jalali «1405/07/19» (or legacy Gregorian ISO) → Gregorian ISO used by the DB.
+
+    Empty/invalid → today (Tehran) + a Persian error for invalid input."""
+    from bot.jalali import parse_user_date
+
+    text = (raw or "").strip()
+    if not text:
+        return db.tehran_today(), None
+    d = parse_user_date(text)
+    if d is None:
+        return db.tehran_today(), "تاریخ نامعتبر است؛ به شکل ۱۴۰۵/۰۷/۱۹ وارد کنید (امروز نمایش داده شد)."
+    return d.isoformat(), None
+
+
 @router.get("")
 @router.get("/")
 async def stock_form(
@@ -31,7 +46,7 @@ async def stock_form(
     g = (group or "slab").strip().lower()
     if g not in SITE_STOCK_GROUP_KEYS:
         g = "slab"
-    day = (entry_date or db.tehran_today()).strip()
+    day, date_err = _day(entry_date, db)
     items = site_items_for_group(db, g)
     existing = {
         e["item_id"]: e
@@ -48,7 +63,7 @@ async def stock_form(
             "items": items,
             "existing": existing,
             "message": None,
-            "error": None,
+            "error": date_err,
         },
     )
 
@@ -62,7 +77,7 @@ async def stock_save(
     entry_date: str = Form(...),
 ):
     g = (group or "").strip().lower()
-    day = (entry_date or db.tehran_today()).strip()
+    day, _date_err = _day(entry_date, db)
     if g not in SITE_STOCK_GROUP_KEYS:
         return render(
             request,

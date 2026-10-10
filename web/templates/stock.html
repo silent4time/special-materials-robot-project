@@ -9,7 +9,7 @@
 
   <form method="get" action="/stock" class="row-inline">
     <div>
-      <label for="group">گروه</label>
+      <label for="group">بخش</label>
       <select id="group" name="group" onchange="this.form.submit()">
         {% for key, label in groups.items() %}
         <option value="{{ key }}" {% if key == group %}selected{% endif %}>{{ label }}</option>
@@ -17,28 +17,30 @@
       </select>
     </div>
     <div>
-      <label for="entry_date">تاریخ</label>
-      <input id="entry_date" name="entry_date" type="date" value="{{ entry_date }}" onchange="this.form.submit()">
-      <span class="muted">تاریخ شمسی: {{ shamsi(entry_date) }}</span>
+      <label for="entry_date">تاریخ موجودی (شمسی)</label>
+      <input id="entry_date" name="entry_date" type="text" inputmode="numeric" dir="ltr" class="jdate"
+             value="{{ shamsi(entry_date) }}" placeholder="۱۴۰۵/۰۷/۱۹" pattern="[0-9۰-۹]{4}/[0-9۰-۹]{1,2}/[0-9۰-۹]{1,2}"
+             onchange="this.form.submit()">
     </div>
+    <div><button type="submit" class="secondary">نمایش</button></div>
   </form>
 
   <form method="post" action="/stock/save">
     <input type="hidden" name="group" value="{{ group }}">
-    <input type="hidden" name="entry_date" value="{{ entry_date }}">
+    <input type="hidden" name="entry_date" value="{{ shamsi(entry_date) }}">
     {% if not items %}
     <p class="muted">برای این گروه هنوز قلمی در منبع اصلی نیست (فهرست گروه‌ها خودکار از منبع اصلی ساخته می‌شود).</p>
     {% else %}
     <table>
       <thead>
-        <tr><th>نام کالا</th><th>شناسه</th><th>مقدار فعلی</th><th>مقدار جدید</th></tr>
+        <tr><th>نام قلم</th><th>کد دسته</th><th>مقدار فعلی</th><th>مقدار جدید</th></tr>
       </thead>
       <tbody>
         {% for it in items %}
         {% set cur = existing.get(it.id) %}
         <tr>
           <td>{{ it.name_desc }}</td>
-          <td class="muted">{{ it.id }}</td>
+          <td class="muted">{{ it.category_code or "—" }}</td>
           <td>{% if cur %}{{ cur.quantity }}{% else %}—{% endif %}</td>
           <td>
             <input type="number" step="any" name="qty_{{ it.id }}"
