@@ -3092,8 +3092,9 @@ class BotApp:
         rows = self.db.list_user_activities(
             start_iso=start_iso, end_iso=end_iso, newest_first=True
         )
+        settings_kb = kb.bot_settings_menu(user)  # opened from ⚙️ تنظیمات → stay there
         if not rows:
-            self._empty_range_reply(message, range_label)
+            self._empty_range_reply(message, range_label, markup=settings_kb)
             return
         pdf_rows = []
         for r in rows:
@@ -3112,6 +3113,7 @@ class BotApp:
             output_name="گزارش_فعالیت_کاربران.pdf",
             caption=f"گزارش فعالیت کاربران — {range_label}",
             reply_ok="گزارش ارسال شد.",
+            reply_markup=settings_kb,
             log_user=user,
             log_action="report_user_activity",
         )
@@ -3393,6 +3395,7 @@ class BotApp:
                 message,
                 subtitle or title,
                 text=empty_message or "در این بازه داده‌ای برای این گزارش نیست.",
+                markup=markup,
             )
             return None
         try:
@@ -3461,6 +3464,7 @@ class BotApp:
         title: str | None = None,
         filename_stem: str = "empty_range",
         text: str | None = None,
+        markup: dict | None = None,
     ) -> None:
         """Text-only empty state — never generate or send an empty PDF."""
         _ = title, filename_stem  # kept for call-site compatibility
@@ -3470,7 +3474,7 @@ class BotApp:
             msg = f"در این بازه ({range_label}) داده‌ای برای این گزارش نیست."
         else:
             msg = "در این بازه داده‌ای برای این گزارش نیست."
-        self._reply(message, msg, kb.analytics_menu(self.db.get_user(self._uid(message))))
+        self._reply(message, msg, markup or kb.analytics_menu(self.db.get_user(self._uid(message))))
 
 
     def _run_month_ranged_report(
