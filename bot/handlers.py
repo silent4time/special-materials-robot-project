@@ -1290,12 +1290,27 @@ class BotApp:
         } else "upload"
         self.db.set_pending_file_type(user["bale_user_id"], file_type)
         label = FILE_TYPES[file_type]["label_fa"]
+        if file_type == "product_inventory" and return_menu != "main_source":
+            # «📥 به‌روزرسانی موجودی انبار» = stock update (not a full منبع اصلی replacement)
+            self._reply(
+                message,
+                "📥 به‌روزرسانی موجودی انبار\n"
+                "لطفاً فایل Excel «موجودی انبار» (خروجی سیستم انبار) را همین حالا به‌صورت Document ارسال کنید "
+                "(پسوند .xlsx).\n\n"
+                "• موجودی شناسه‌های موجود در منبع اصلی با این فایل به‌روز می‌شود.\n"
+                "• شناسهٔ جدید فقط وقتی خودکار اضافه می‌شود که کد ۴ رقمی آن از قبل در منبع اصلی باشد "
+                "و کد ۱۸۰۰ نباشد؛ بقیه رد و جداگانه اعلام می‌شوند.\n"
+                "• پس از پردازش، «گزارش اقلام ورودی به انبار» (PDF و اکسل) ارسال می‌شود.\n\n"
+                f"اگر منصرف شدید، «{kb.BTN_CANCEL_PENDING}» را بزنید.",
+                kb.cancel_pending_menu(guide=True),
+            )
+            return
         self._reply(
             message,
             f"لطفاً فایل Excel مربوط به «{label}» را همین حالا به‌صورت Document ارسال کنید.\n"
             f"پسوند باید .xlsx باشد.\n"
             f"اگر منصرف شدید، «{kb.BTN_CANCEL_PENDING}» را بزنید.",
-            kb.cancel_pending_menu(),
+            kb.cancel_pending_menu(guide=file_type == "monthly_consumption"),
         )
 
     def _keyboard_for_upload_return(
