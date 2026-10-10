@@ -547,10 +547,11 @@ def _inv_upload_xlsx(path: Path, rows: list[tuple]) -> Path:
 
 
 def test_inventory_upload_rules(tmp: Path) -> None:
-    """t213u/t214u: منبع اصلی is the reference. Stock/warehouse upload never adds a
-    new 4-digit code; no file upload auto-adds a NEW 1800 row; existing ids (incl.
-    1800) still get stock updates; full-source upload by an authorized user may add
-    new codes. Skipped rows are listed in the bot and web upload summary."""
+    """t213u/t214u/t215u: منبع اصلی is the reference. Stock/warehouse upload never
+    adds a new 4-digit code nor a NEW 1800 row (rejected, listed with ⛔); existing
+    ids (incl. 1800) still get stock updates; a FULL منبع اصلی upload by an authorized
+    user (owner/manager/responsible_officer) adds new codes AND new 1800 rows; an
+    unauthorized user (technician) cannot do a full-source upload (bot + web)."""
     import _smoke_isolation
     import bot.handlers as handlers_mod
     from db.models import Database
@@ -579,7 +580,7 @@ def test_inventory_upload_rules(tmp: Path) -> None:
     assert list(kept["id"]) == [COMPANY_ID, "378112342222B", "378124311111A"], kept
     assert [(s["id"], s["category_code"]) for s in skipped] == [("378119991234C", "1999"), ("378124312222D", "1800")]
     kept2, skipped2 = filter_inventory_upload(base, new, allow_new_codes=True)
-    assert "378119991234C" in set(kept2["id"]) and [s["id"] for s in skipped2] == ["378124312222D"]
+    assert {"378119991234C", "378124312222D"} <= set(kept2["id"]) and skipped2 == [], (kept2, skipped2)
     assert filter_inventory_upload(None, new, allow_new_codes=False) == (new, [])  # first load
     note = skipped_rows_note_fa(skipped)
     assert "378119991234C" in note and "1800" in note and "⛔ 2 ردیف" in note, note
@@ -598,12 +599,14 @@ def test_inventory_upload_rules(tmp: Path) -> None:
         (1800, "378124311111A", "مازاد قدیمی", 8, 0, "شرکت", 0, "Kg"),
     ])
 
+    files_by_id: dict[str, Path] = {}
+
     class FakeClient:
         def __init__(self) -> None:
             self.msgs: list[str] = []
 
         def download_file(self, file_id, dest):
-            shutil.copy2(src, dest)
+            shutil.copy2(files_by_id.get(file_id, src), dest)
             return Path(dest)
 
         def send_message(self, chat_id, text, reply_markup=None, **_kw):
@@ -631,11 +634,45 @@ def test_inventory_upload_rules(tmp: Path) -> None:
     reply = client.msgs[-1]
     assert "⛔ 2 ردیف اضافه نشد" in reply and "378119991234C" in reply and "378124312222D" in reply, reply
 
+    # (c) unauthorized: a technician cannot do a full-source upload (denied, no change)
+    db.upsert_user("903", role="technician", display_name="تکنسین تست")
+    tmsg = {"chat": {"id": 903}, "from": {"id": 903, "first_name": "تکنسین"}, "text": ""}
+    tdoc = dict(tmsg, document={"file_id": "f3", "file_name": "stock.xlsx"})
+    before = ids_qty()
+    n_msgs = len(client.msgs)
+    app.on_pick_file_type(tmsg, "product_inventory", return_menu="main_source")
+    db.set_pending_file_type("903", "product_inventory")  # even if forced into the slot
+    app._upload_return_menu["903"] = "main_source"
+    app.on_document(tdoc)
+    assert ids_qty() == before, ids_qty()
+    assert len(client.msgs) > n_msgs and not any("✅" in m for m in client.msgs[n_msgs:]), client.msgs[n_msgs:]
+
+    # (a) authorized full-source upload (owner, «ورود فایل اکسل منبع اصلی»):
+    # new code AND new 1800 row are added, nothing skipped.
     app.on_pick_file_type(msg, "product_inventory", return_menu="main_source")
     app.on_document(doc)
     got = ids_qty()
-    assert "378119991234C" in got and "378124312222D" not in got, got  # full source: new code ok, 1800 never
-    assert "⛔ 1 ردیف اضافه نشد" in client.msgs[-1], client.msgs[-1]
+    assert "378119991234C" in got and got.get("378124312222D") == 3, got
+    assert "⛔" not in client.msgs[-1], client.msgs[-1]
+    # 1800 stays out of critical items / forecasts
+    from analytics.critical_items import drop_surplus_rows
+
+    assert "378124312222D" not in set(drop_surplus_rows(load_primary_frame(db, bale_user_id="901"))["id"].astype(str))
+
+    # (b) after that, a stock upload with yet another new 1800 row + new code is rejected again
+    src2 = _inv_upload_xlsx(tmp / "stock2.xlsx", [
+        (1800, "378124313333E", "مازاد جدیدتر", 4, 0, "شرکت", 0, "Kg"),
+        (1888, "378118881234F", "کد جدیدتر", 2, 1, "شرکت", 0, "Kg"),
+        (1800, "378124312222D", "مازاد جدید", 6, 0, "شرکت", 0, "Kg"),
+    ])
+    db.add_category_code("1888", created_by="901")
+    files_by_id["f2"] = src2
+    app.on_pick_file_type(msg, "product_inventory", return_menu="upload")
+    app.on_document(dict(msg, document={"file_id": "f2", "file_name": "stock2.xlsx"}))
+    got = ids_qty()
+    assert "378124313333E" not in got and "378118881234F" not in got, got
+    assert got.get("378124312222D") == 6, got  # existing (now) 1800 row → stock update ok
+    assert "⛔ 2 ردیف اضافه نشد" in client.msgs[-1] and "378124313333E" in client.msgs[-1], client.msgs[-1]
 
     # --- web settings upload (authorized full source): same shared rule
     from fastapi.testclient import TestClient
@@ -658,9 +695,22 @@ def test_inventory_upload_rules(tmp: Path) -> None:
     assert r.status_code == 200, (r.status_code, r.text[-1500:])
     f = load_primary_frame(db2, bale_user_id="902")
     wids = set(f["id"].astype(str))
-    assert "378119991234C" in wids and "378124312222D" not in wids, wids
-    assert "378124312222D" in r.text and "اضافه نشد" in r.text
-    print("inventory upload rules (no new codes on stock update, no auto 1800, bot+web) OK")
+    assert "378119991234C" in wids and "378124312222D" in wids, wids  # full source adds 1800 too
+    assert "اضافه نشد" not in r.text, r.text[-1500:]
+
+    # web: technician cannot do a full-source upload (403, no change)
+    db2.upsert_user("904", role="technician", display_name="تکنسین وب")
+    persist_primary_frame(db2, base, bale_user_id="902")
+    wapp.dependency_overrides[deps.current_user_optional] = lambda: db2.get_user("904")
+    wapp.dependency_overrides[deps.current_user] = lambda: db2.get_user("904")
+    r = c.post("/settings/main-source/upload",
+               files={"file": ("stock.xlsx", src.read_bytes(),
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert r.status_code == 403, (r.status_code, r.text[-800:])
+    wids = set(load_primary_frame(db2, bale_user_id="902")["id"].astype(str))
+    assert "378119991234C" not in wids and "378124312222D" not in wids, wids
+    print("inventory upload rules (stock upload: no new codes/1800; authorized full source adds new codes + 1800; "
+          "technician denied; bot+web) OK")
 
 
 def test_basis_sequence_log(tmp: Path) -> None:

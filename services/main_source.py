@@ -477,11 +477,12 @@ def delete_row(db: Database, item_id: str, *, bale_user_id: str | int) -> dict[s
     return {"path": str(path), "row": current, "id": _norm_id(item_id)}
 
 
-# ---- t213u/t214u: منبع اصلی is the user's reference file ------------------------
-# File uploads never introduce a 4-digit code that منبع اصلی lacks (stock /
-# warehouse updates) and never auto-add a NEW کد 1800 (مازاد) row (any file upload).
-# New codes: only the settings add-record form or an authorized full-source upload;
-# new 1800 rows: only the add-record form. Updates of EXISTING ids are always fine.
+# ---- t213u/t214u/t215u: منبع اصلی is the user's reference file -------------------
+# Stock / warehouse (inventory) uploads never introduce a 4-digit code that منبع اصلی
+# lacks and never add a NEW کد 1800 (مازاد) row. New codes and new 1800 rows come
+# only via the settings add-record form or a FULL منبع اصلی upload by an authorized
+# user (owner/manager/responsible_officer) → ``allow_new_codes=True``.
+# Updates of EXISTING ids are always fine.
 SURPLUS_CATEGORY_CODE = "1800"
 
 
@@ -503,8 +504,9 @@ def filter_inventory_upload(
     """Drop rows of an uploaded inventory frame that may not be auto-added.
 
     Rows whose id already exists in ``old`` (live منبع اصلی) always pass (stock /
-    field updates). A NEW id is skipped when its code is 1800, or when
-    ``allow_new_codes`` is False and its 4-digit code is absent from ``old``.
+    field updates). ``allow_new_codes`` = authorized FULL منبع اصلی upload: every
+    new id passes, including new کد 1800 rows. Otherwise (stock / inventory upload)
+    a NEW id is skipped when its code is 1800 or its 4-digit code is absent from ``old``.
     No live منبع اصلی yet (``old`` empty) → first load, nothing filtered.
     Returns (kept frame, skipped [{id, category_code, product_name, quantity, reason}]).
     """
@@ -518,10 +520,10 @@ def filter_inventory_upload(
         iid = _norm_id(row.get("id"))
         code = _norm_code4(row.get("category_code"))
         reason = ""
-        if iid not in old_ids:
+        if iid not in old_ids and not allow_new_codes:
             if code == SURPLUS_CATEGORY_CODE:
-                reason = "کد 1800 (مازاد) — فقط با «افزودن رکورد» دستی"
-            elif not allow_new_codes and code not in old_codes:
+                reason = "ردیف جدید کد 1800 (مازاد) — فقط با «افزودن رکورد» یا آپلود کامل منبع اصلی"
+            elif code not in old_codes:
                 reason = "کد ۴ رقمی در منبع اصلی نیست"
         keep_mask.append(not reason)
         if reason:
@@ -541,8 +543,8 @@ def skipped_rows_note_fa(skipped: list[dict[str, Any]], *, limit: int = 15) -> s
     if not skipped:
         return ""
     lines = [
-        f"\n⛔ {len(skipped)} ردیف اضافه نشد (منبع اصلی مرجع است؛ کد جدید فقط با «افزودن رکورد» "
-        "یا آپلود فایل کامل منبع اصلی توسط کاربر مجاز، و ردیف جدید کد 1800 فقط دستی):"
+        f"\n⛔ {len(skipped)} ردیف اضافه نشد (منبع اصلی مرجع است؛ کد جدید و ردیف جدید کد 1800 "
+        "فقط با «افزودن رکورد» یا آپلود فایل کامل منبع اصلی توسط کاربر مجاز):"
     ]
     for r in skipped[:limit]:
         qty = r.get("quantity")

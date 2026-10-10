@@ -1409,7 +1409,8 @@ class BotApp:
                 new_df = pd.read_excel(result.clean_path, engine="openpyxl")
                 if pending == "product_inventory":
                     # منبع اصلی is the reference: a stock update never adds a new
-                    # 4-digit code; no file upload auto-adds a NEW 1800 row.
+                    # 4-digit code nor a NEW 1800 row; an authorized full-source
+                    # upload may add both (shared rule in services.main_source).
                     full_source = (
                         upload_origin == "main_source"
                         and not format_redirect_note
