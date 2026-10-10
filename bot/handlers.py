@@ -549,10 +549,16 @@ class BotApp:
         )
         return True
 
-    def _status_text(self, session: dict, user: dict | None = None) -> str:
-        """DB-aware status: extracts + interactive site stock, not session slots alone."""
+    def _status_text(self, session: dict, user: dict | None = None, *, in_reports: bool = False) -> str:
+        """DB-aware status: extracts + interactive site stock, not session slots alone.
+
+        ``in_reports``: shown as the «📊 گزارش‌ها» header — only the data status, no
+        «choose an input type» / «go to reports» hints (the user is already there).
+        """
         lines = ["وضعیت داده‌های موجود (پایگاه + جلسه):"]
         lines.extend(completeness_status_lines(self.db, user, session=session))
+        if in_reports:
+            return "\n".join(lines)
         done = (
             self._effective_completeness(user, session)
             if user
@@ -936,7 +942,7 @@ class BotApp:
         self._reply(
             message,
             f"✅ گروه گزارش موجودی روزانه تنظیم شد{title_bit}.\n"
-            f"chat_id: `{chat_id}`\n"
+            f"شناسه گروه: {chat_id}\n"
             "از این پس با ثبت موفق «موجودی روزانه سایت»، خلاصه به این گروه ارسال می‌شود.",
         )
 
@@ -2594,9 +2600,9 @@ class BotApp:
         lines = [
             kb.BTN_ANALYTICS,
             "",
-            self._status_text(session, user),
+            self._status_text(session, user, in_reports=True),
             "",
-            "یک گزارش را انتخاب کنید:",
+            "گزارش موردنظر را از دکمه‌های زیر انتخاب کنید:",
         ]
         if not any(
             done.get(k)
@@ -4701,7 +4707,7 @@ class BotApp:
                 "روش تنظیم:\n"
                 "ربات را به گروه بله اضافه کنید، سپس داخل همان گروه دستور\n"
                 "/set_stock_group\n"
-                "را بفرستید (فقط مالک/مدیر). شناسه منفی گروه ذخیره می‌شود.\n"
+                "را بفرستید (فقط مالک/مدیر). شناسهٔ همان گروه، همان‌طور که بله اعلام می‌کند، ذخیره می‌شود.\n"
                 "اگر گروه تنظیم نشده باشد، ثبت موجودی سایت بدون خطا ادامه می‌یابد."
             )
         self._reply(
