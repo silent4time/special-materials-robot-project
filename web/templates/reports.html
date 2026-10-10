@@ -16,17 +16,18 @@
     ماهیانه: {% if completeness.monthly_consumption %}✅{% else %}⏳{% endif %}
   </p>
   <div class="report-actions">
-    <a class="btn" href="/reports/remaining-critical">⚠️ پوشش کوتاه‌مدت موجودی سایت (PDF)</a>
-    <a class="btn" href="/reports/remaining-critical.xlsx">⚠️ پوشش کوتاه‌مدت موجودی سایت (اکسل)</a>
-    <a class="btn" href="/reports/surplus">📦 مواد مازاد (PDF)</a>
-    <a class="btn" href="/reports/surplus.xlsx">📦 مواد مازاد (اکسل)</a>
-    <a class="btn" href="/reports/monthly-summary">📄 خلاصه مصرف ماهیانه (PDF)</a>
-    <a class="btn" href="/reports/monthly-summary.xlsx">📄 خلاصه مصرف ماهیانه (اکسل)</a>
+    {% if can(user, "report.short_cover") %}<a class="btn" href="/reports/remaining-critical">⚠️ پوشش کوتاه‌مدت موجودی سایت (PDF)</a>{% endif %}
+    {% if can(user, "report.short_cover") %}<a class="btn" href="/reports/remaining-critical.xlsx">⚠️ پوشش کوتاه‌مدت موجودی سایت (اکسل)</a>{% endif %}
+    {% if can(user, "report.surplus") %}<a class="btn" href="/reports/surplus">📦 مواد مازاد (PDF)</a>{% endif %}
+    {% if can(user, "report.surplus") %}<a class="btn" href="/reports/surplus.xlsx">📦 مواد مازاد (اکسل)</a>{% endif %}
+    {% if can(user, "report.monthly_summary") %}<a class="btn" href="/reports/monthly-summary">📄 خلاصه مصرف ماهیانه (PDF)</a>{% endif %}
+    {% if can(user, "report.monthly_summary") %}<a class="btn" href="/reports/monthly-summary.xlsx">📄 خلاصه مصرف ماهیانه (اکسل)</a>{% endif %}
   </div>
   <p class="muted">«⚠️ پوشش کوتاه‌مدت»: روزهای پوشش = موجودی فعلی ÷ میانگین مصرف روزانهٔ ۳۰ روز اخیر.
     «🎯 هدف اصلی» از نوار بالا؛ «📋 فعالیت کاربران» در تنظیمات (مالک/مدیر).</p>
 </div>
 
+{% if can(user, "report.n_tundish") %}
 <div class="card" id="n-tundish">
   <h2>🧮 نیاز مواد برای N تاندیش</h2>
   <p class="muted">همان نرخ‌ها و قواعد «اقلام بحرانی» از منبع اصلی: نوسازی+پچینگ («با نوسازی») یا فقط پچینگ، + سطح ریخته‌گری × N؛
@@ -41,7 +42,9 @@
     </div>
   </form>
 </div>
+{% endif %}
 
+{% if can(user, "report.period") %}
 <div class="card" id="period">
   <h2>📅 گزارش مصرف بازه‌ای</h2>
   <p class="muted">منبع: (الف) اختلاف ثبت‌های موجودی روزانهٔ سایت (کاهش = مصرف) و (ب) جداول مصرف تاندیش ماهانهٔ هدف اصلی برای ماه‌های کامل داخل بازه.</p>
@@ -57,7 +60,9 @@
     </div>
   </form>
 </div>
+{% endif %}
 
+{% if can(user, "report.inbound") %}
 <div class="card" id="inbound">
   <h2>📄 گزارش اقلام ورودی به انبار</h2>
   <p class="muted">
@@ -98,7 +103,9 @@
   <p class="muted">هنوز گزارش اقلام ورودی ثبت نشده است.</p>
   {% endif %}
 </div>
+{% endif %}
 
+{% if can(user, "report.critical") %}
 <div class="card" id="critical-items">
   <h2>🚨 اقلام بحرانی (نیاز ۳/۶ ماه)</h2>
   <p class="muted">
@@ -163,4 +170,5 @@
   </ul>
   {% endif %}
 </div>
+{% endif %}
 {% endblock %}

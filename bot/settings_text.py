@@ -83,7 +83,7 @@ def format_welcome_text(template: str | None, user: dict) -> str:
     body = (template or "").strip()
     if not body:
         # Legacy default path (matches previous _welcome_text)
-        if role == "technician":
+        if role in ("technician", "shift_supervisor"):
             return (
                 "سلام! به بازوی «گزارش مواد / تاندیش» خوش آمدید.\n\n"
                 f"نقش شما: {role_fa}\n"
@@ -108,6 +108,6 @@ def format_welcome_text(template: str | None, user: dict) -> str:
     ).strip()
     if not text:
         return format_welcome_text(None, user)
-    if role == "technician" and "موجودی روزانه سایت" not in text:
+    if role in ("technician", "shift_supervisor") and "موجودی روزانه سایت" not in text:
         text = text + "\n\n" + TECHNICIAN_WELCOME_TIP
     return text

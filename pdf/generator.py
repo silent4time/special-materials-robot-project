@@ -840,12 +840,9 @@ def generate_report(
 
     story: list = []
     story.append(_p("گزارش تاندیش / خلاصه داده‌های آپلود‌شده", styles["title"], avail))
-    role_fa = {
-        "owner": "مالک",
-        "manager": "مدیر",
-        "responsible_officer": "کاردان مسئول",
-        "technician": "تکنسین",
-    }.get(user.get("role"), user.get("role"))
+    from config import ROLES as _ROLES
+
+    role_fa = _ROLES.get(user.get("role"), user.get("role"))
     info = (
         f"کاربر: {user.get('display_name') or user.get('bale_user_id')} | "
         f"نقش: {role_fa} | "

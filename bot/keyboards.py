@@ -51,6 +51,7 @@ MENU_PARENT: dict[str, str | None] = {
     "stock_group": "settings",
     "appearance": "settings",
     "appearance_item": "appearance",
+    "role_perms": "settings",
     "letterhead": "appearance",
     "material_request": "main",
     "warehouse_return": "main",
@@ -239,11 +240,14 @@ BTN_ROLE_OWNER = "مالک"
 BTN_ROLE_MANAGER = "مدیر"
 BTN_ROLE_OFFICER = "کاردان مسئول"
 BTN_ROLE_TECH = "تکنسین"
+BTN_ROLE_SHIFT = "👷 مسئول شیفت"
 ROLE_BUTTON_TO_KEY = {
     BTN_ROLE_OWNER: "owner",
     BTN_ROLE_MANAGER: "manager",
     BTN_ROLE_OFFICER: "responsible_officer",
     BTN_ROLE_TECH: "technician",
+    BTN_ROLE_SHIFT: "shift_supervisor",
+    "مسئول شیفت": "shift_supervisor",
 }
 
 # یادآور گزارش‌های الزامی
@@ -507,10 +511,13 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
         [(perm.SITE_STOCK, BTN_SITE_STOCK), (perm.TUNDISH_REPORT, BTN_TR_MENU)],
         [(perm.MATERIAL_REQUEST, BTN_MATERIAL_REQUEST), (perm.WAREHOUSE_RETURN, BTN_WAREHOUSE_RETURN)],
         [(perm.REPORTS, BTN_ANALYTICS), (perm.MAIN_GOAL, BTN_MAIN_GOAL)],
-        [(perm.FILE_INPUTS, BTN_UPLOAD_MENU)],
+        [((perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT), BTN_UPLOAD_MENU)],
         [(perm.SETTINGS, BTN_BOT_SETTINGS)],
     ):
-        row = [label for feat, label in pair if perm.can(u, feat)]
+        row = [
+            label for feat, label in pair
+            if (perm.can_any(u, feat) if isinstance(feat, tuple) else perm.can(u, feat))
+        ]
         if row:
             rows.append(row)
     # «❓ راهنما» shares the settings row when it exists
@@ -523,8 +530,10 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
 
 def upload_files_menu(user: dict | None = None) -> dict:
     """«📤 ورود فایل‌ها»: stock update / monthly / منبع اصلی submenu."""
-    rows = [[BTN_WAREHOUSE_STOCK, BTN_MONTHLY]]
-    if user is None or perm.can(user, perm.MAIN_SOURCE_EDIT):
+    rows: list[list[str]] = []
+    if user is None or perm.can(user, perm.FILE_INPUTS):
+        rows.append([BTN_WAREHOUSE_STOCK, BTN_MONTHLY])
+    if user is None or perm.can_any(user, (perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT)):
         rows.append([BTN_MAIN_SOURCE_FILE])
     return _kb(rows, "files")
 
@@ -532,16 +541,20 @@ def upload_files_menu(user: dict | None = None) -> dict:
 file_entry_menu = upload_files_menu
 
 
-def main_source_file_menu() -> dict:
-    """«📦 منبع اصلی»: full replace / download / record + code edits."""
-    return _kb(
-        [
+def main_source_file_menu(user: dict | None = None) -> dict:
+    """«📦 منبع اصلی»: full replace / download / record + code edits.
+
+    Edit buttons need MAIN_SOURCE_EDIT; download + code list need file inputs or edit.
+    """
+    if user is None or perm.can(user, perm.MAIN_SOURCE_EDIT):
+        rows = [
             [BTN_FULL_REPLACE, BTN_INV_DOWNLOAD],
             [BTN_INV_ADD_RECORD, BTN_INV_EDIT_RECORD],
             [BTN_INV_ADD_CATEGORY, BTN_INV_LIST_CATEGORIES],
-        ],
-        "main_source",
-    )
+        ]
+    else:
+        rows = [[BTN_INV_DOWNLOAD, BTN_INV_LIST_CATEGORIES]]
+    return _kb(rows, "main_source")
 
 
 inventory_menu = main_source_file_menu
@@ -804,7 +817,7 @@ def role_menu(include_owner: bool = False) -> dict:
     rows: list[list[str]] = []
     if include_owner:
         rows.append([BTN_ROLE_OWNER])
-    rows.extend([[BTN_ROLE_MANAGER, BTN_ROLE_OFFICER], [BTN_ROLE_TECH]])
+    rows.extend([[BTN_ROLE_MANAGER, BTN_ROLE_OFFICER], [BTN_ROLE_TECH, BTN_ROLE_SHIFT]])
     return _kb(rows, "flow")
 
 
@@ -1045,3 +1058,103 @@ ALL_KEYBOARD_BUILDERS = (
     "tundish_report_required_menu", "tundish_report_back_section_menu",
     "tundish_report_delete_confirm_menu", "inbound_history_menu",
 )
+
+
+# ---------------------------------------------------------------------------
+# 🔐 دسترسی نقش‌ها (phase 2 item 18)
+# ---------------------------------------------------------------------------
+CB_ROLE_PERM_PREFIX = "rp|"
+RP_RESET = "__reset__"
+RP_ON = "✅ "
+RP_OFF = "⬜ "
+BTN_RP_ROLE_PREFIX = "🔐 "  # «🔐 مدیر» … one reply button per editable role
+
+
+def role_perm_button(role: str) -> str:
+    from config import ROLES
+
+    return BTN_RP_ROLE_PREFIX + ROLES.get(role, role)
+
+
+def role_perm_button_to_role(text: str) -> str | None:
+    from services import permissions as _perm
+
+    for r in _perm.EDITABLE_ROLES:
+        if text == role_perm_button(r):
+            return r
+    return None
+
+
+def role_perms_role_menu() -> dict:
+    from services import permissions as _perm
+
+    btns = [role_perm_button(r) for r in _perm.EDITABLE_ROLES]
+    rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    return _kb(rows, "role_perms")
+
+
+def role_perms_inline(role: str, rows: list[dict]) -> dict:
+    """Inline checklist: one button per feature (tap = toggle) + reset to defaults."""
+    kb_rows = [
+        [{
+            "text": (RP_ON if r["allowed"] else RP_OFF) + r["label"] + ("" if r["allowed"] == r["default"] else " •"),
+            "callback_data": f"{CB_ROLE_PERM_PREFIX}{role}|{r['feature']}",
+        }]
+        for r in rows
+    ]
+    kb_rows.append([{"text": "↺ بازگشت به پیش‌فرض", "callback_data": f"{CB_ROLE_PERM_PREFIX}{role}|{RP_RESET}"}])
+    return BaleClient.inline_keyboard(kb_rows)
+
+
+def _button_features() -> dict[str, tuple[str, ...]]:
+    P = perm
+    m: dict[str, tuple[str, ...]] = {
+        BTN_SITE_STOCK: (P.SITE_STOCK,),
+        BTN_TR_MENU: (P.TUNDISH_REPORT,),
+        BTN_MATERIAL_REQUEST: (P.MATERIAL_REQUEST,),
+        BTN_WAREHOUSE_RETURN: (P.WAREHOUSE_RETURN,),
+        BTN_ANALYTICS: P.REPORT_FEATURES,
+        BTN_MAIN_GOAL: (P.MAIN_GOAL,),
+        BTN_UPLOAD_MENU: (P.FILE_INPUTS, P.MAIN_SOURCE_EDIT),
+        BTN_BOT_SETTINGS: P.SETTINGS_FEATURES,
+        BTN_DAILY: (P.REPORT_DAILY,),
+        BTN_PERIOD: (P.REPORT_PERIOD,),
+        BTN_COMPREHENSIVE: (P.REPORT_COMPREHENSIVE,),
+        BTN_REMAINING: (P.REPORT_SHORT_COVER,),
+        BTN_CRITICAL_ITEMS: (P.REPORT_CRITICAL,),
+        BTN_N_TUNDISH: (P.REPORT_N_TUNDISH,),
+        BTN_SURPLUS: (P.REPORT_SURPLUS,),
+        BTN_INBOUND: (P.REPORT_INBOUND,),
+        BTN_MONTHLY_SUMMARY: (P.REPORT_MONTHLY_SUMMARY,),
+        BTN_WAREHOUSE_STOCK: (P.FILE_INPUTS,),
+        BTN_MONTHLY: (P.FILE_INPUTS,),
+        BTN_MAIN_SOURCE_FILE: (P.FILE_INPUTS, P.MAIN_SOURCE_EDIT),
+        BTN_INV_DOWNLOAD: (P.FILE_INPUTS, P.MAIN_SOURCE_EDIT),
+        BTN_INV_LIST_CATEGORIES: (P.FILE_INPUTS, P.MAIN_SOURCE_EDIT),
+        BTN_FULL_REPLACE: (P.MAIN_SOURCE_EDIT,),
+        BTN_INV_ADD_RECORD: (P.MAIN_SOURCE_EDIT,),
+        BTN_INV_EDIT_RECORD: (P.MAIN_SOURCE_EDIT,),
+        BTN_INV_ADD_CATEGORY: (P.MAIN_SOURCE_EDIT,),
+        BTN_USERS: (P.USERS,),
+        BTN_USERS_ADD: (P.USERS,),
+        BTN_USERS_EDIT: (P.USERS,),
+        BTN_USERS_DELETE: (P.USERS,),
+        BTN_USERS_LIST: (P.USERS,),
+        BTN_USER_ACTIVITY: (P.USER_ACTIVITY,),
+        BTN_ROLE_PERMS: (P.ROLE_PERMISSIONS,),
+        BTN_TR_SETTINGS: (P.TUNDISH_REPORT_SETTINGS,),
+        BTN_SET_REMINDERS: (P.REMINDERS,),
+        BTN_SET_STOCK_GROUP: (P.STOCK_GROUP,),
+        BTN_APPEARANCE: (P.APPEARANCE,),
+        BTN_SET_INVITE: (P.APPEARANCE,),
+        BTN_SET_WELCOME: (P.APPEARANCE,),
+        BTN_SET_LOGO: (P.APPEARANCE,),
+        BTN_SET_LETTERHEAD: (P.APPEARANCE,),
+        BTN_MG_DELETE: (P.MAIN_GOAL_DELETE,),
+    }
+    return m
+
+
+# canonical button label → features (any) required; checked centrally in
+# handlers.handle_message before any flow sees the text (bot "handlers also check").
+BUTTON_FEATURE: dict[str, tuple[str, ...]] = _button_features()

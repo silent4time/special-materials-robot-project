@@ -58,11 +58,15 @@ _DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890
 
 # ---------------------------------------------------------------- helpers
 def can_enter(user: dict | None) -> bool:
-    return bool(user and user.get("active") and user.get("role") in ENTRY_ROLES)
+    from services import permissions as perm
+
+    return perm.can(user, perm.TUNDISH_REPORT)
 
 
 def can_configure(user: dict | None) -> bool:
-    return bool(user and user.get("active") and user.get("role") in SETTINGS_ROLES)
+    from services import permissions as perm
+
+    return perm.can(user, perm.TUNDISH_REPORT_SETTINGS)
 
 
 def normalize_digits(text: Any) -> str:

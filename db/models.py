@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,12 @@ class Database:
         self.path = Path(path or DATABASE_PATH)
         ensure_dirs()
         self._init_schema()
+        # role-permission overrides: first Database of a process is the default
+        # source; BotApp / web get_db re-bind their own instance explicitly.
+        from services import permissions as _perm
+
+        if _perm.bound_db() is None:
+            _perm.bind(self)
 
     @contextmanager
     def connect(self) -> Generator[sqlite3.Connection, None, None]:
@@ -56,11 +63,20 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     bale_user_id TEXT NOT NULL UNIQUE,
                     display_name TEXT,
-                    role TEXT NOT NULL CHECK(role IN ('owner','manager','responsible_officer','technician')),
+                    role TEXT NOT NULL CHECK(role IN ('owner','manager','responsible_officer','technician','shift_supervisor')),
                     scope TEXT,
                     active INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS role_permissions (
+                    role TEXT NOT NULL,
+                    feature TEXT NOT NULL,
+                    allowed INTEGER NOT NULL,
+                    updated_by TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (role, feature)
                 );
 
                 CREATE TABLE IF NOT EXISTS upload_sessions (
@@ -556,6 +572,7 @@ class Database:
                 """.replace("{SITE_GROUP_SQL}", SITE_STOCK_GROUP_SQL)
             )
             self._migrate_users_role_check(conn)
+            self._migrate_users_shift_role(conn)
             self._migrate_add_columns(conn)
             self._migrate_site_group_check(conn)
             self._migrate_drop_work_order_assignments(conn)
@@ -617,7 +634,7 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 bale_user_id TEXT NOT NULL UNIQUE,
                 display_name TEXT,
-                role TEXT NOT NULL CHECK(role IN ('owner','manager','responsible_officer','technician')),
+                role TEXT NOT NULL CHECK(role IN ('owner','manager','responsible_officer','technician','shift_supervisor')),
                 scope TEXT,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
@@ -632,6 +649,70 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_users_bale ON users(bale_user_id);
             """
         )
+
+    def _migrate_users_shift_role(self, conn: sqlite3.Connection) -> None:
+        """Phase 2 item 17: allow role ``shift_supervisor`` in users.role CHECK.
+
+        Rebuilds the table (FK checks off, same pattern as the site-group CHECK
+        migration) so web_credentials rows referencing users stay intact.
+        """
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+        ).fetchone()
+        if not row or not row[0] or "'shift_supervisor'" in row[0]:
+            return
+        sql = row[0]
+        new_sql = re.sub(r"CREATE TABLE\s+\"?users\"?", "CREATE TABLE users__new", sql, count=1)
+        new_sql = new_sql.replace("'technician')", "'technician','shift_supervisor')")
+        if "'shift_supervisor'" not in new_sql:
+            raise RuntimeError("users CHECK migration: unexpected schema")
+        idx = [
+            r[0]
+            for r in conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='users' AND sql IS NOT NULL"
+            ).fetchall()
+        ]
+        cols = ", ".join(f'"{r[1]}"' for r in conn.execute("PRAGMA table_info(users)").fetchall())
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            conn.execute("BEGIN")
+            conn.execute(new_sql)
+            conn.execute(f"INSERT INTO users__new ({cols}) SELECT {cols} FROM users")
+            conn.execute("DROP TABLE users")
+            conn.execute("ALTER TABLE users__new RENAME TO users")
+            for isql in idx:
+                conn.execute(isql)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
+
+    # ---------- role permissions (phase 2 item 18) ----------
+    def list_role_permission_overrides(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            return [dict(r) for r in conn.execute(
+                "SELECT role, feature, allowed, updated_by, updated_at FROM role_permissions ORDER BY role, feature"
+            ).fetchall()]
+
+    def set_role_permission(self, role: str, feature: str, allowed: bool, *, updated_by: str | None = None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO role_permissions (role, feature, allowed, updated_by, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(role, feature) DO UPDATE SET
+                    allowed = excluded.allowed, updated_by = excluded.updated_by,
+                    updated_at = excluded.updated_at
+                """,
+                (str(role), str(feature), 1 if allowed else 0, updated_by, _utcnow()),
+            )
+
+    def reset_role_permissions(self, role: str) -> int:
+        with self.connect() as conn:
+            return conn.execute("DELETE FROM role_permissions WHERE role = ?", (str(role),)).rowcount
 
     @staticmethod
     def _migrate_drop_work_order_assignments(conn: sqlite3.Connection) -> None:

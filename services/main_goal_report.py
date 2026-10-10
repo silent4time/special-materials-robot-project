@@ -129,7 +129,9 @@ _SKIP_MATERIAL_NEEDLES = (
 
 # ---------------------------------------------------------------- roles
 def can_run(user: dict | None) -> bool:
-    return bool(user and user.get("active") and user.get("role") in ENTRY_ROLES)
+    from services import permissions as perm
+
+    return perm.can(user, perm.MAIN_GOAL)
 
 
 # ---------------------------------------------------------------- normalize

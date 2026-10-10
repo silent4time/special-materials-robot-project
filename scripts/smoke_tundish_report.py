@@ -204,7 +204,7 @@ def test_bot_flow(db) -> None:
 
     # technician denied settings
     txt, _ = send("501", kb.BTN_TR_SETTINGS)
-    assert "فقط مالک یا مدیر" in txt
+    assert "دسترسی ندارید" in txt or "فقط مالک یا مدیر" in txt
 
     # manager settings CRUD via bot
     txt, btns = send("502", kb.BTN_TR_SETTINGS)

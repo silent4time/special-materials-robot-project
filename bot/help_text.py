@@ -51,9 +51,18 @@ _SECTIONS: list[tuple[str, str]] = [
     ),
     (
         perm.SETTINGS,
-        f"{kb.BTN_BOT_SETTINGS} (مالک/مدیر)\n"
+        f"{kb.BTN_BOT_SETTINGS}\n"
         "• کاربران، فعالیت کاربران، دسترسی نقش‌ها، اقلام فرم گزارش تاندیش، یادآورها، "
-        "گروه گزارش موجودی (در گروه: /set_stock_group)، ظاهر (دعوت/خوشامد/لوگو/سربرگ).",
+        "گروه گزارش موجودی (در گروه: /set_stock_group)، ظاهر (دعوت/خوشامد/لوگو/سربرگ) — "
+        "هر کدام فقط اگر برای نقش شما فعال باشد.",
+    ),
+    (
+        perm.ROLE_PERMISSIONS,
+        f"{kb.BTN_ROLE_PERMS} (فقط مالک/مدیر)\n"
+        "• نقش را انتخاب کنید و با دکمه‌های ✅/⬜ هر بخش را برای آن نقش روشن/خاموش کنید؛ "
+        "«↺ بازگشت به پیش‌فرض» همه را برمی‌گرداند. مالک قفل است؛ کاربران و دسترسی نقش‌ها "
+        "همیشه فقط مالک/مدیر. هر تغییر در «📋 فعالیت کاربران» ثبت می‌شود (در وب: /settings/permissions).\n"
+        "• نقش‌ها: مالک، مدیر، کاردان مسئول، تکنسین، 👷 مسئول شیفت (پیش‌فرض: گزارش تاندیش بعد از ریخته‌گری + موجودی روزانه سایت).",
     ),
 ]
 
@@ -70,8 +79,11 @@ def help_text_for(user: dict | None) -> str:
         lines.append("شما در سیستم ثبت نشده‌اید؛ از مدیر لینک دعوت بگیرید.")
         return "\n\n".join(lines)
     lines.extend(shown)
-    if (user or {}).get("role") == "technician":
-        lines.append("نقش شما (تکنسین): ثبت موجودی روزانه سایت و گزارش تاندیش.")
+    if perm.is_limited(user):
+        from config import ROLES
+
+        role_fa = ROLES.get((user or {}).get("role"), "")
+        lines.append(f"نقش شما ({role_fa}): فقط بخش‌های بالا فعال است؛ تغییر با مالک/مدیر.")
     lines.append(_FOOTER)
     return "\n\n".join(lines)
 

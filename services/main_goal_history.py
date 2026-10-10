@@ -46,7 +46,9 @@ HISTORY_DIR_NAME = "main_goal_history"
 
 
 def can_delete_month(user: dict | None) -> bool:
-    return bool(user and user.get("active") and user.get("role") in ADMIN_ROLES)
+    from services import permissions as perm
+
+    return perm.can(user, perm.MAIN_GOAL_DELETE)
 
 
 # ---------------------------------------------------------------- serialization

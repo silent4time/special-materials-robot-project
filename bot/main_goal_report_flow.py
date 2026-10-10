@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from analytics.frames import load_primary_inventory
 from bot import keyboards as kb
+from services import permissions as perm
 from bot.activity import log_activity
 from bot.jalali import tehran_now
 from config import REPORT_DIR, UPLOAD_DIR, ensure_dirs
@@ -115,7 +116,7 @@ class MainGoalReportFlow:
         user = self.app._user_or_deny(message)
         if not user:
             return None
-        if self.app._deny_technician(message, user):
+        if self.app._deny_technician(message, user, perm.MAIN_GOAL):
             return None
         if not mg.can_run(user):
             self._reply(

@@ -13,24 +13,19 @@
     <a class="brand" href="/home">داشبورد مواد تاندیش</a>
     <nav class="nav">
       <a href="/home">خانه</a>
-      <a href="/stock">موجودی سایت</a>
-      <a href="/tundish-report">گزارش تاندیش</a>
-      {% if can_request_materials(user) %}
-      <a href="/materials/request">درخواست مواد</a>
-      <a href="/materials/return">برگشت انبار</a>
-      {% endif %}
-      {% if user_can_see_reports(user) %}
-      <a href="/reports">📊 گزارش‌ها</a>
-      <a href="/reports/main-goal">🎯 هدف اصلی</a>
-      {% endif %}
-      {% if can_configure_catalog(user) %}
+      {% if can(user, "site_stock") %}<a href="/stock">موجودی سایت</a>{% endif %}
+      {% if can(user, "tundish_report") %}<a href="/tundish-report">گزارش تاندیش</a>{% endif %}
+      {% if can(user, "material_request") %}<a href="/materials/request">درخواست مواد</a>{% endif %}
+      {% if can(user, "warehouse_return") %}<a href="/materials/return">برگشت انبار</a>{% endif %}
+      {% if can(user, "reports") %}<a href="/reports">📊 گزارش‌ها</a>{% endif %}
+      {% if can(user, "main_goal") %}<a href="/reports/main-goal">🎯 هدف اصلی</a>{% endif %}
+      {% if can(user, "file_inputs") or can(user, "main_source_edit") %}
       <a href="/settings/main-source">📤 ورود فایل‌ها / منبع اصلی</a>
       {% endif %}
-      {% if require_manager(user) %}
-      <a href="/settings/web-login">⚙️ تنظیم ورود وب</a>
-      <a href="/settings/reminders">🔔 یادآورها</a>
-      <a href="/reports/user-activity">📋 فعالیت کاربران</a>
-      {% endif %}
+      {% if require_manager(user) %}<a href="/settings/web-login">⚙️ تنظیم ورود وب</a>{% endif %}
+      {% if can(user, "role_permissions") %}<a href="/settings/permissions">🔐 دسترسی نقش‌ها</a>{% endif %}
+      {% if can(user, "reminders") %}<a href="/settings/reminders">🔔 یادآورها</a>{% endif %}
+      {% if can(user, "user_activity") %}<a href="/reports/user-activity">📋 فعالیت کاربران</a>{% endif %}
       <form action="/logout" method="post" style="display:inline">
         <button type="submit" class="linkish">خروج</button>
       </form>

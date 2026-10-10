@@ -6,25 +6,18 @@
   <h1>سلام، {{ user.display_name or user.bale_user_id }}</h1>
   <p class="muted">نقش شما: <strong>{{ role_fa }}</strong> (همان نقش در ربات بله)</p>
   {% if is_technician %}
-  <div class="alert ok">برای نقش تکنسین فقط «موجودی روزانه سایت» فعال است — مطابق ربات.</div>
+  <div class="alert ok">برای نقش شما فقط بخش‌های زیر فعال است (همان دسترسی ربات؛ تغییر توسط مالک/مدیر).</div>
   {% endif %}
   <div class="grid-links">
-    <a href="/stock">📦 موجودی روزانه سایت</a>
-    <a href="/tundish-report">🧾 گزارش تاندیش بعد از ریخته‌گری</a>
-    {% if show_materials %}
-    <a href="/materials/request">🛒 درخواست مواد</a>
-    <a href="/materials/return">↩️ برگشت به انبار</a>
-    {% else %}
-    <a class="disabled" href="#">🛒 درخواست مواد (بدون دسترسی)</a>
-    {% endif %}
-    {% if show_reports %}
-    <a href="/reports">📊 گزارش‌ها (PDF)</a>
-    {% else %}
-    <a class="disabled" href="#">📊 گزارش‌ها (بدون دسترسی)</a>
-    {% endif %}
-    {% if show_web_settings %}
-    <a href="/settings/web-login">🔐 تنظیم ورود وب</a>
-    {% endif %}
+    {% if can(user, "site_stock") %}<a href="/stock">📥 موجودی روزانه سایت</a>{% endif %}
+    {% if can(user, "tundish_report") %}<a href="/tundish-report">🧾 گزارش تاندیش بعد از ریخته‌گری</a>{% endif %}
+    {% if can(user, "material_request") %}<a href="/materials/request">🛒 درخواست مواد</a>{% endif %}
+    {% if can(user, "warehouse_return") %}<a href="/materials/return">↩️ برگشت به انبار</a>{% endif %}
+    {% if can(user, "reports") %}<a href="/reports">📊 گزارش‌ها</a>{% endif %}
+    {% if can(user, "main_goal") %}<a href="/reports/main-goal">🎯 هدف اصلی</a>{% endif %}
+    {% if can(user, "file_inputs") or can(user, "main_source_edit") %}<a href="/settings/main-source">📤 ورود فایل‌ها / منبع اصلی</a>{% endif %}
+    {% if can(user, "role_permissions") %}<a href="/settings/permissions">🔐 دسترسی نقش‌ها</a>{% endif %}
+    {% if show_web_settings %}<a href="/settings/web-login">⚙️ تنظیم ورود وب</a>{% endif %}
   </div>
 </div>
 {% endblock %}

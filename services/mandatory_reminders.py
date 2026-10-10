@@ -64,7 +64,9 @@ FIELD_LABELS_FA = {
 
 
 def can_edit(user: dict | None) -> bool:
-    return bool(user and user.get("active") and user.get("role") in ADMIN_ROLES)
+    from services import permissions as perm
+
+    return perm.can(user, perm.REMINDERS)
 
 
 # ---------------------------------------------------------------- config

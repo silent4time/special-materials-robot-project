@@ -20,7 +20,8 @@ from excel.processor import (
 )
 from services import main_source as main_source_svc
 from web.auth_web import set_credential
-from web.deps import get_db, require_admin_web, require_catalog_admin
+from services import permissions as perm
+from web.deps import get_db, require_admin_web, require_catalog_admin, require_feature
 from web.templating import render
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -128,7 +129,7 @@ async def main_source_settings(
 @router.post("/main-source/edit")
 async def main_source_edit(
     request: Request,
-    user=Depends(require_catalog_admin),
+    user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
     db: Database = Depends(get_db),
 ):
     form = await request.form()
@@ -165,7 +166,7 @@ async def main_source_edit(
 @router.post("/main-source/add")
 async def main_source_add(
     request: Request,
-    user=Depends(require_catalog_admin),
+    user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
     db: Database = Depends(get_db),
 ):
     error = None
@@ -201,7 +202,7 @@ async def main_source_add(
 @router.post("/main-source/upload")
 async def main_source_upload(
     request: Request,
-    user=Depends(require_catalog_admin),
+    user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
     db: Database = Depends(get_db),
     file: UploadFile = File(...),
 ):
@@ -311,7 +312,7 @@ def _reminder_context(
 @router.get("/reminders")
 async def reminders_page(
     request: Request,
-    user=Depends(require_admin_web),
+    user=Depends(require_feature(perm.REMINDERS)),
     db: Database = Depends(get_db),
 ):
     return render(request, "settings_reminders.html", _reminder_context(db, user))
@@ -320,7 +321,7 @@ async def reminders_page(
 @router.post("/reminders")
 async def reminders_save(
     request: Request,
-    user=Depends(require_admin_web),
+    user=Depends(require_feature(perm.REMINDERS)),
     db: Database = Depends(get_db),
 ):
     from services import mandatory_reminders as rem
@@ -354,7 +355,7 @@ async def reminders_save(
 @router.post("/reminders/send-now")
 async def reminders_send_now(
     request: Request,
-    user=Depends(require_admin_web),
+    user=Depends(require_feature(perm.REMINDERS)),
     db: Database = Depends(get_db),
 ):
     from services import mandatory_reminders as rem
@@ -374,3 +375,69 @@ async def reminders_send_now(
         "settings_reminders.html",
         _reminder_context(db, user, message="📨 درخواست ارسال ثبت شد؛ ربات بله حداکثر تا حدود یک دقیقه دیگر یادآور را می‌فرستد."),
     )
+
+
+# ---------------------------------------------------------------- 🔐 دسترسی نقش‌ها
+def _perm_context(user: dict, role: str, *, message: str | None = None, error: str | None = None) -> dict:
+    from config import ROLES
+
+    if role not in perm.EDITABLE_ROLES:
+        role = perm.EDITABLE_ROLES[0]
+    return {
+        "user": user,
+        "roles": [(r, ROLES.get(r, r)) for r in perm.EDITABLE_ROLES],
+        "role": role,
+        "role_fa": ROLES.get(role, role),
+        "rows": perm.matrix_rows(role),
+        "matrix": perm.matrix_text_fa().split("\n"),
+        "message": message,
+        "error": error,
+    }
+
+
+@router.get("/permissions")
+async def permissions_page(
+    request: Request,
+    role: str = "",
+    user=Depends(require_feature(perm.ROLE_PERMISSIONS)),
+):
+    return render(request, "settings_permissions.html", _perm_context(user, role))
+
+
+@router.post("/permissions")
+async def permissions_save(
+    request: Request,
+    user=Depends(require_feature(perm.ROLE_PERMISSIONS)),
+    db: Database = Depends(get_db),
+):
+    form = await request.form()
+    role = str(form.get("role") or "")
+    if role not in perm.EDITABLE_ROLES:
+        return render(request, "settings_permissions.html", _perm_context(
+            user, role, error="دسترسی‌های مالک قابل تغییر نیست." if role == "owner" else "نقش نامعتبر است."
+        ), status_code=400)
+    enabled = {str(v) for v in form.getlist("feature")}
+    changed = 0
+    current = perm.role_features(role)
+    for f in perm.TOGGLABLE_FEATURES:
+        want = f in enabled
+        if want != (f in current):
+            ok, msg = perm.set_permission(db, user, role, f, want)
+            if not ok:
+                return render(request, "settings_permissions.html", _perm_context(user, role, error=msg), status_code=400)
+            changed += 1
+    return render(request, "settings_permissions.html", _perm_context(
+        user, role, message=f"ذخیره شد ({changed} تغییر) — فوراً در ربات و وب اعمال می‌شود."
+    ))
+
+
+@router.post("/permissions/reset")
+async def permissions_reset(
+    request: Request,
+    role: str = Form(...),
+    user=Depends(require_feature(perm.ROLE_PERMISSIONS)),
+    db: Database = Depends(get_db),
+):
+    ok, msg = perm.reset_role(db, user, role)
+    ctx = _perm_context(user, role, message=msg if ok else None, error=None if ok else msg)
+    return render(request, "settings_permissions.html", ctx, status_code=200 if ok else 400)

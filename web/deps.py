@@ -5,9 +5,10 @@ from typing import Annotated, Any, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 
-from auth.rbac import can_configure_catalog, can_request_materials, require_manager, require_owner
+from auth.rbac import can_request_materials, require_manager, require_owner
 from config import ADMIN_ROLES, FULL_DATA_ROLES
 from db.models import Database
+from services import permissions as perm
 
 _db: Database | None = None
 
@@ -26,6 +27,8 @@ def get_db() -> Database:
     global _db
     if _db is None:
         _db = Database()
+    if perm.bound_db() is not _db:
+        perm.bind(_db)
     return _db
 
 
@@ -56,37 +59,51 @@ def current_user(
     return user
 
 
+DENIED_FA = (
+    "دسترسی ندارید؛ این بخش برای نقش شما فعال نیست "
+    "(تنظیم در «⚙️ تنظیمات ← 🔐 دسترسی نقش‌ها» توسط مالک/مدیر)."
+)
+
+
 def deny_technician(user: dict[str, Any] | None) -> bool:
-    """Mirror BotApp._deny_technician: technicians may only use site stock."""
-    return bool(user and user.get("role") == "technician")
+    """«Field» profile (technician / shift supervisor by default): no data features."""
+    return bool(user and perm.is_limited(user))
+
+
+def require_feature(*features: str):
+    """FastAPI dependency: user must have one of ``features`` (services.permissions)."""
+
+    def _dep(user: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, Any]:
+        if not perm.can_any(user, features):
+            raise ForbiddenFa(DENIED_FA)
+        return user
+
+    return _dep
 
 
 def require_non_technician(
     user: Annotated[dict[str, Any], Depends(current_user)],
 ) -> dict[str, Any]:
-    if deny_technician(user):
-        raise ForbiddenFa(
-            "دسترسی ندارید؛ فقط ورود موجودی روزانه سایت برای نقش تکنسین فعال است."
-        )
+    """Any report feature (reports page itself)."""
+    if not perm.can_any(user, perm.REPORT_FEATURES):
+        raise ForbiddenFa(DENIED_FA)
     return user
 
 
 def require_materials_user(
     user: Annotated[dict[str, Any], Depends(current_user)],
 ) -> dict[str, Any]:
-    """Same gate as bot: can_request_materials (owner/manager/responsible_officer)."""
-    if not can_request_materials(user):
-        raise ForbiddenFa("دسترسی درخواست/برگشت مواد ندارید.")
+    if not perm.can_any(user, (perm.MATERIAL_REQUEST, perm.WAREHOUSE_RETURN)):
+        raise ForbiddenFa(DENIED_FA)
     return user
-
 
 
 def require_catalog_admin(
     user: Annotated[dict[str, Any], Depends(current_user)],
 ) -> dict[str, Any]:
-    """Owner/manager/responsible_officer — same as bot can_configure_catalog."""
-    if not can_configure_catalog(user):
-        raise ForbiddenFa("دسترسی تنظیم منبع اصلی / کاتالوگ ندارید.")
+    """منبع اصلی page: file inputs or main-source edit."""
+    if not perm.can_any(user, (perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT)):
+        raise ForbiddenFa(DENIED_FA)
     return user
 
 
@@ -100,7 +117,7 @@ def require_admin_web(
 
 
 def user_can_see_reports(user: dict[str, Any] | None) -> bool:
-    return bool(user and user.get("active") and user.get("role") != "technician")
+    return perm.can_any(user, perm.REPORT_FEATURES)
 
 
 def role_sets_snapshot() -> dict[str, Any]:

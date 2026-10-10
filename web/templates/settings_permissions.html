@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}دسترسی نقش‌ها{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>🔐 دسترسی نقش‌ها</h1>
+  <p class="muted">
+    فقط مالک و مدیر. نقش را انتخاب و دسترسی هر بخش را روشن/خاموش کنید؛ تغییر فوراً در ربات بله و وب
+    اعمال و در «📋 فعالیت کاربران» ثبت می‌شود. دسترسی‌های مالک قفل است و «کاربران» و «دسترسی نقش‌ها»
+    همیشه فقط برای مالک و مدیر است.
+  </p>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  <form method="get" action="/settings/permissions" class="form-grid">
+    <label for="role">نقش</label>
+    <select id="role" name="role" onchange="this.form.submit()">
+      {% for key, label in roles %}
+      <option value="{{ key }}" {% if key == role %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+<div class="card">
+  <h2>دسترسی‌های «{{ role_fa }}»</h2>
+  <form method="post" action="/settings/permissions">
+    <input type="hidden" name="role" value="{{ role }}">
+    <table>
+      <thead><tr><th>بخش</th><th>فعال</th><th>پیش‌فرض</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td><label for="f_{{ loop.index }}">{{ r.label }}</label></td>
+          <td style="text-align:center">
+            <input id="f_{{ loop.index }}" type="checkbox" name="feature" value="{{ r.feature }}" {% if r.allowed %}checked{% endif %}>
+          </td>
+          <td style="text-align:center">{{ "✅" if r.default else "⬜" }}{% if r.allowed != r.default %} •{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p style="margin-top:1rem"><button type="submit">💾 ذخیره</button></p>
+  </form>
+  <form method="post" action="/settings/permissions/reset">
+    <input type="hidden" name="role" value="{{ role }}">
+    <button type="submit" class="linkish">↺ بازگشت به پیش‌فرض این نقش</button>
+  </form>
+</div>
+<div class="card">
+  <h2>نمای کلی (همهٔ نقش‌ها)</h2>
+  <ul>{% for line in matrix %}<li>{{ line[2:] if line.startswith("• ") else line }}</li>{% endfor %}</ul>
+</div>
+{% endblock %}

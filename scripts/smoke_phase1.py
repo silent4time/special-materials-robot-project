@@ -295,64 +295,79 @@ def test_nav(tmp: Path) -> None:
     print("  nav (back one level, home, /reset, cancel, tr settings) OK")
 
 
+DENIED_MARK = "دسترسی ندارید"
+
+
+def walk_role(app, client, catcher, uid: str, role: str, max_depth: int = 4) -> int:
+    """BFS over every keyboard reachable for ``uid``; every visible button must have a
+    handler (no fallback, no logged error, no «دسترسی ندارید» for a shown button) and
+    every sub-keyboard must offer back/home/cancel. Returns number of presses."""
+    from bot import keyboards as kb
+
+    def send(text: str):
+        n = len(client.sent)
+        app.handle_message({"from": {"id": int(uid), "first_name": "x"}, "chat": {"id": int(uid)}, "text": text})
+        new = client.sent[n:]
+        assert new, (role, text, "no reply")
+        return [t for _c, t, _m in new], _btns(new[-1][2])
+
+    def replay(path: tuple[str, ...]):
+        app.handle_message({"from": {"id": int(uid), "first_name": "x"}, "chat": {"id": int(uid)}, "text": "/reset"})
+        out = None
+        for p in path:
+            out = send(p)
+        return out
+
+    nav_bad: set = set()
+    _t, root = send("/start")
+    seen_kb: set[tuple[str, ...]] = set()
+    queue: list[tuple[tuple[str, ...], list[str]]] = [((), root)]
+    pressed = 0
+    while queue:
+        path, btns = queue.pop(0)
+        key = tuple(btns)
+        if key in seen_kb or len(path) > max_depth:
+            continue
+        seen_kb.add(key)
+        for b in btns:
+            if b in (kb.BTN_HOME,) and path:
+                continue
+            replay(path)
+            n_err = len(catcher.records)
+            texts, nb = send(b)
+            pressed += 1
+            assert all(FALLBACK not in t for t in texts), (role, path, b, texts)
+            assert all(DENIED_MARK not in t for t in texts), (role, path, b, "shown but denied", texts)
+            assert len(catcher.records) == n_err, (role, path, b, catcher.records[n_err:])
+            if nb and nb != root:
+                if not (nb[-1] in (kb.BTN_HOME, kb.BTN_CANCEL) or kb.BTN_CANCEL in nb or kb.BTN_BACK in nb):
+                    nav_bad.add((b, tuple(nb[-2:])))
+            if nb and tuple(nb) not in seen_kb:
+                queue.append((path + (b,), nb))
+    assert pressed > 3, (role, pressed)
+    assert not nav_bad, (role, sorted(nav_bad))
+    print(f"  menu walk {role}: {len(seen_kb)} keyboards, {pressed} presses OK")
+    return pressed
+
+
 def test_menu_walk(tmp: Path) -> None:
     from bot import keyboards as kb
     from bot.handlers import BotApp
     from db.models import Database
 
     db = Database(tmp / "walk.db")
-    roles = {"901": "owner", "902": "manager", "903": "responsible_officer", "904": "technician"}
+    roles = {
+        "901": "owner", "902": "manager", "903": "responsible_officer",
+        "904": "technician", "906": "shift_supervisor",
+    }
     for u, r in roles.items():
         db.upsert_user(u, role=r, display_name=r)
     client = FakeClient()
     app = BotApp(client, db)  # type: ignore[arg-type]
     catcher = ErrCatcher()
     logging.getLogger().addHandler(catcher)
-
-    # navigation/flow buttons that legitimately start a typed-input or destructive step
     for uid, role in roles.items():
-        def send(text: str):
-            n = len(client.sent)
-            app.handle_message({"from": {"id": int(uid), "first_name": "x"}, "chat": {"id": int(uid)}, "text": text})
-            new = client.sent[n:]
-            assert new, (role, text, "no reply")
-            return [t for _c, t, _m in new], _btns(new[-1][2])
-
-        def replay(path: tuple[str, ...]):
-            app.handle_message({"from": {"id": int(uid), "first_name": "x"}, "chat": {"id": int(uid)}, "text": "/reset"})
-            out = None
-            for p in path:
-                out = send(p)
-            return out
-
-        nav_bad: set = set()
-        _t, root = send("/start")
-        seen_kb: set[tuple[str, ...]] = set()
-        queue: list[tuple[tuple[str, ...], list[str]]] = [((), root)]
-        pressed = 0
-        while queue:
-            path, btns = queue.pop(0)
-            key = tuple(btns)
-            if key in seen_kb or len(path) > 4:
-                continue
-            seen_kb.add(key)
-            for b in btns:
-                if b in (kb.BTN_HOME,) and path:
-                    continue
-                replay(path)
-                n_err = len(catcher.records)
-                texts, nb = send(b)
-                pressed += 1
-                assert all(FALLBACK not in t for t in texts), (role, path, b, texts)
-                assert len(catcher.records) == n_err, (role, path, b, catcher.records[n_err:])
-                if nb and nb != root:
-                    if not (nb[-1] in (kb.BTN_HOME, kb.BTN_CANCEL) or kb.BTN_CANCEL in nb or kb.BTN_BACK in nb):
-                        nav_bad.add((b, tuple(nb[-2:])))
-                if nb and tuple(nb) not in seen_kb:
-                    queue.append((path + (b,), nb))
-        assert pressed > 5, (role, pressed)
-        assert not nav_bad, (role, sorted(nav_bad))
-        print(f"  menu walk {role}: {len(seen_kb)} keyboards, {pressed} presses OK")
+        walk_role(app, client, catcher, uid, role)
     logging.getLogger().removeHandler(catcher)
 
     # role gates on main menu

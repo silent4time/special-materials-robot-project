@@ -10,7 +10,8 @@ from config import SITE_STOCK_GROUP_KEYS, SITE_STOCK_GROUPS
 from db.models import Database
 from services import site_stock_notify
 from services.site_stock_lists import items_for_group as site_items_for_group
-from web.deps import current_user, get_db
+from services import permissions as perm
+from web.deps import current_user, get_db, require_feature
 from web.templating import render
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/stock", tags=["stock"])
 @router.get("/")
 async def stock_form(
     request: Request,
-    user=Depends(current_user),
+    user=Depends(require_feature(perm.SITE_STOCK)),
     db: Database = Depends(get_db),
     group: str = "slab",
     entry_date: str | None = None,
@@ -55,7 +56,7 @@ async def stock_form(
 @router.post("/save")
 async def stock_save(
     request: Request,
-    user=Depends(current_user),
+    user=Depends(require_feature(perm.SITE_STOCK)),
     db: Database = Depends(get_db),
     group: str = Form(...),
     entry_date: str = Form(...),

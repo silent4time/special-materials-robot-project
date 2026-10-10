@@ -10,7 +10,8 @@ from bot.activity import log_activity
 from analytics.critical_items import RENO_LABEL_FA, RENO_MODES, normalize_reno_mode
 from bot.jalali import PERSIAN_MONTH_NAMES, format_month_year, jalali_today
 from db.models import Database
-from web.deps import get_db, require_admin_web, require_materials_user, require_non_technician
+from services import permissions as perm
+from web.deps import get_db, require_admin_web, require_feature, require_materials_user, require_non_technician
 from services import inbound_report as inbound_svc
 from web.services import reports as report_svc
 from web.services.data import data_completeness
@@ -98,7 +99,7 @@ def _inbound_file(db: Database, report_id: int, kind: str):
 @router.get("/inbound/{report_id}.pdf")
 async def inbound_pdf(
     report_id: int,
-    user=Depends(require_non_technician),
+    user=Depends(require_feature(perm.REPORT_INBOUND)),
     db: Database = Depends(get_db),
 ):
     path, err = _inbound_file(db, report_id, "pdf")
@@ -111,7 +112,7 @@ async def inbound_pdf(
 @router.get("/inbound/{report_id}.xlsx")
 async def inbound_xlsx(
     report_id: int,
-    user=Depends(require_non_technician),
+    user=Depends(require_feature(perm.REPORT_INBOUND)),
     db: Database = Depends(get_db),
 ):
     path, err = _inbound_file(db, report_id, "xlsx")
@@ -129,7 +130,7 @@ async def save_critical_counts(
     count_billet: int = Form(...),
     count_bloom: int = Form(...),
     count_slab: int = Form(...),
-    user=Depends(require_materials_user),
+    user=Depends(require_feature(perm.REPORT_CRITICAL)),
     db: Database = Depends(get_db),
 ):
     try:
@@ -165,7 +166,7 @@ async def save_critical_counts(
 @router.get("/critical-items")
 async def critical_items_pdf(
     request: Request,
-    user=Depends(require_materials_user),
+    user=Depends(require_feature(perm.REPORT_CRITICAL)),
     db: Database = Depends(get_db),
 ):
     """PDF اقلام بحرانی. ``segment=company`` (default, primary) | ``contractor``;
@@ -203,7 +204,7 @@ async def critical_items_pdf(
 @router.get("/critical-items.xlsx")
 async def critical_items_xlsx(
     request: Request,
-    user=Depends(require_materials_user),
+    user=Depends(require_feature(perm.REPORT_CRITICAL)),
     db: Database = Depends(get_db),
 ):
     reno = normalize_reno_mode(request.query_params.get("renovation") or "with")
@@ -220,7 +221,7 @@ async def critical_items_xlsx(
 
 @router.get("/remaining-critical")
 async def remaining_critical(
-    user=Depends(require_non_technician),
+    user=Depends(require_feature(perm.REPORT_SHORT_COVER)),
     db: Database = Depends(get_db),
 ):
     path, _xlsx, err = report_svc.generate_remaining_critical_files(db, user)
@@ -232,7 +233,7 @@ async def remaining_critical(
 
 @router.get("/remaining-critical.xlsx")
 async def remaining_critical_xlsx(
-    user=Depends(require_non_technician),
+    user=Depends(require_feature(perm.REPORT_SHORT_COVER)),
     db: Database = Depends(get_db),
 ):
     _pdf, path, err = report_svc.generate_remaining_critical_files(db, user)
@@ -244,7 +245,7 @@ async def remaining_critical_xlsx(
 
 @router.get("/surplus")
 async def surplus(
-    user=Depends(require_non_technician),
+    user=Depends(require_feature(perm.REPORT_SURPLUS)),
     db: Database = Depends(get_db),
 ):
     path, _xlsx, err = report_svc.generate_surplus_files(db, user)
@@ -256,7 +257,7 @@ async def surplus(
 
 @router.get("/surplus.xlsx")
 async def surplus_xlsx(
-    user=Depends(require_non_technician),
+    user=Depends(require_feature(perm.REPORT_SURPLUS)),
     db: Database = Depends(get_db),
 ):
     _pdf, path, err = report_svc.generate_surplus_files(db, user)
@@ -268,7 +269,7 @@ async def surplus_xlsx(
 
 @router.get("/user-activity")
 async def user_activity(
-    user=Depends(require_admin_web),  # moved to ⚙️ تنظیمات — owner/manager only
+    user=Depends(require_feature(perm.USER_ACTIVITY)),  # moved to ⚙️ تنظیمات — owner/manager only
     db: Database = Depends(get_db),
 ):
     path, _xlsx, err = report_svc.generate_user_activity_files(db, user)
@@ -280,7 +281,7 @@ async def user_activity(
 
 @router.get("/user-activity.xlsx")
 async def user_activity_xlsx(
-    user=Depends(require_admin_web),
+    user=Depends(require_feature(perm.USER_ACTIVITY)),
     db: Database = Depends(get_db),
 ):
     _pdf, path, err = report_svc.generate_user_activity_files(db, user)
@@ -292,7 +293,7 @@ async def user_activity_xlsx(
 
 @router.get("/monthly-summary")
 async def monthly_summary(
-    user=Depends(require_non_technician),
+    user=Depends(require_feature(perm.REPORT_MONTHLY_SUMMARY)),
     db: Database = Depends(get_db),
 ):
     path, _xlsx, err = report_svc.generate_monthly_summary_files(db, user)
@@ -304,7 +305,7 @@ async def monthly_summary(
 
 @router.get("/monthly-summary.xlsx")
 async def monthly_summary_xlsx(
-    user=Depends(require_non_technician),
+    user=Depends(require_feature(perm.REPORT_MONTHLY_SUMMARY)),
     db: Database = Depends(get_db),
 ):
     _pdf, path, err = report_svc.generate_monthly_summary_files(db, user)
@@ -330,7 +331,7 @@ def _n_tundish(request: Request, db: Database, user: dict):
 
 
 @router.get("/n-tundish")
-async def n_tundish_pdf(request: Request, user=Depends(require_non_technician), db: Database = Depends(get_db)):
+async def n_tundish_pdf(request: Request, user=Depends(require_feature(perm.REPORT_N_TUNDISH)), db: Database = Depends(get_db)):
     res, err = _n_tundish(request, db, user)
     if err or not res or not res.pdf:
         return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#n-tundish", status_code=303)
@@ -339,7 +340,7 @@ async def n_tundish_pdf(request: Request, user=Depends(require_non_technician), 
 
 
 @router.get("/n-tundish.xlsx")
-async def n_tundish_xlsx(request: Request, user=Depends(require_non_technician), db: Database = Depends(get_db)):
+async def n_tundish_xlsx(request: Request, user=Depends(require_feature(perm.REPORT_N_TUNDISH)), db: Database = Depends(get_db)):
     res, err = _n_tundish(request, db, user)
     if err or not res or not res.xlsx:
         return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#n-tundish", status_code=303)
@@ -373,7 +374,7 @@ def _period(request: Request, db: Database):
 
 
 @router.get("/period")
-async def period_pdf(request: Request, user=Depends(require_non_technician), db: Database = Depends(get_db)):
+async def period_pdf(request: Request, user=Depends(require_feature(perm.REPORT_PERIOD)), db: Database = Depends(get_db)):
     res, err = _period(request, db)
     if err or not res or not res.pdf:
         return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#period", status_code=303)
@@ -382,7 +383,7 @@ async def period_pdf(request: Request, user=Depends(require_non_technician), db:
 
 
 @router.get("/period.xlsx")
-async def period_xlsx(request: Request, user=Depends(require_non_technician), db: Database = Depends(get_db)):
+async def period_xlsx(request: Request, user=Depends(require_feature(perm.REPORT_PERIOD)), db: Database = Depends(get_db)):
     res, err = _period(request, db)
     if err or not res or not res.xlsx:
         return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#period", status_code=303)

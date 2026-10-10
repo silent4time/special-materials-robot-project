@@ -58,6 +58,8 @@ ACTION_PHRASES: dict[str, str] = {
     "delete_main_source_record": "رکورد منبع اصلی را حذف کرد",
     "tundish_report_saved": "گزارش تاندیش بعد از ریخته‌گری ({group}) را ثبت کرد",
     "tundish_report_settings": "تنظیمات گزارش تاندیش بعد از ریخته‌گری را تغییر داد",
+    "role_permission_changed": "دسترسی «{feature_fa}» را برای نقش «{role_fa}» {state_fa} کرد",
+    "role_permissions_reset": "دسترسی‌های نقش «{role_fa}» را به پیش‌فرض برگرداند",
     "report_full_pdf": "PDF کامل تحلیل را گرفت",
     "report_generate_pdf": "گزارش کلی مواد را گرفت",
     "report_user_activity": "گزارش فعالیت کاربران را گرفت",

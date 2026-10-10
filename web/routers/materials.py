@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, Form, Request
 
 from bot.activity import log_activity
 from db.models import Database
-from web.deps import get_db, require_materials_user
+from services import permissions as perm
+from web.deps import get_db, require_feature, require_materials_user
 from web.templating import render
 
 router = APIRouter(prefix="/materials", tags=["materials"])
@@ -18,7 +19,7 @@ def _catalog_items(db: Database) -> list[dict]:
 @router.get("/request")
 async def request_form(
     request: Request,
-    user=Depends(require_materials_user),
+    user=Depends(require_feature(perm.MATERIAL_REQUEST)),
     db: Database = Depends(get_db),
 ):
     return render(
@@ -38,7 +39,7 @@ async def request_form(
 @router.post("/request")
 async def request_submit(
     request: Request,
-    user=Depends(require_materials_user),
+    user=Depends(require_feature(perm.MATERIAL_REQUEST)),
     db: Database = Depends(get_db),
     coverage_days: float = Form(7),
 ):
@@ -108,7 +109,7 @@ async def request_submit(
 @router.get("/return")
 async def return_form(
     request: Request,
-    user=Depends(require_materials_user),
+    user=Depends(require_feature(perm.WAREHOUSE_RETURN)),
     db: Database = Depends(get_db),
 ):
     return render(
@@ -126,7 +127,7 @@ async def return_form(
 @router.post("/return")
 async def return_submit(
     request: Request,
-    user=Depends(require_materials_user),
+    user=Depends(require_feature(perm.WAREHOUSE_RETURN)),
     db: Database = Depends(get_db),
 ):
     form = await request.form()

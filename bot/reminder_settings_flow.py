@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from auth.rbac import role_label
 from bot import keyboards as kb
+from services import permissions as perm
 from bot.activity import log_activity
 from config import ROLES
 from services import mandatory_reminders as rem
@@ -64,10 +65,10 @@ class ReminderSettingsFlow:
         user = self.app._user_or_deny(message)
         if not user:
             return None
-        if self.app._deny_technician(message, user):
+        if self.app._deny_technician(message, user, perm.REMINDERS):
             return None
         if not rem.can_edit(user):
-            self._reply(message, "فقط مالک یا مدیر به تنظیمات یادآور دسترسی دارد.", kb.main_menu(user))
+            self._reply(message, "دسترسی تنظیمات یادآور برای نقش شما فعال نیست.", kb.main_menu(user))
             return None
         return user
 

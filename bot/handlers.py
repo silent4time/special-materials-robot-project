@@ -38,11 +38,8 @@ from analytics.tundish import (
     surplus_materials,
 )
 from auth.rbac import (
-    can_configure_catalog,
-    can_request_materials,
     can_generate_report,
     ensure_registered,
-    require_manager,
     require_owner,
     role_label,
 )
@@ -107,6 +104,7 @@ class BotApp:
     def __init__(self, client: BaleClient, db: Database) -> None:
         self.client = client
         self.db = db
+        perm.bind(db)  # role-permission overrides come from this DB
         # pending analytics: mode + await month_range|my_*|range (day advanced)
         self._analysis_pending: dict[str, dict[str, Any]] = {}
         # uid -> {"key": menu key, "origin": menu that opened a flow} (uniform «⬅️ بازگشت»)
@@ -367,9 +365,14 @@ class BotApp:
             return None
         return user
 
-    def _deny_technician(self, message: dict, user: dict) -> bool:
-        """Deny non-upload features and restore the technician-only menu."""
-        if user.get("role") != "technician":
+    def _deny_technician(self, message: dict, user: dict, *features: str) -> bool:
+        """Permission gate (name kept for history): deny unless ``user`` has one of
+        ``features`` (services.permissions; DB overrides apply). Without features the
+        old «technician-like» rule is used: deny roles with no data features."""
+        if features:
+            if perm.can_any(user, features):
+                return False
+        elif not perm.is_limited(user):
             return False
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(uid)
@@ -384,7 +387,8 @@ class BotApp:
         self._n_tundish_pending.pop(uid, None)
         self._reply(
             message,
-            "دسترسی ندارید؛ نقش تکنسین فقط «موجودی روزانه سایت» و «گزارش تاندیش» را دارد.",
+            "دسترسی ندارید؛ این بخش برای نقش شما فعال نیست "
+            "(تنظیم در «⚙️ تنظیمات» ← «🔐 دسترسی نقش‌ها» توسط مالک/مدیر).",
             kb.main_menu(user),
         )
         return True
@@ -593,7 +597,7 @@ class BotApp:
         return inventory_with_ledger(self.db, frame)
 
     def _require_files(self, message: dict, user: dict, goal: str) -> tuple[dict, dict, dict] | None:
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, *perm.REPORT_FEATURES):
             return None
         session = self.db.get_or_create_session(user["bale_user_id"])
         completeness = self._effective_completeness(user, session)
@@ -742,8 +746,8 @@ class BotApp:
         if not user:
             self._reply(message, "شما در سیستم ثبت نشده‌اید.")
             return
-        if not require_manager(user):
-            self._reply(message, "فقط مالک یا مدیر می‌تواند گروه گزارش موجودی را تنظیم کند.")
+        if not perm.can(user, perm.STOCK_GROUP):
+            self._reply(message, "دسترسی تنظیم گروه گزارش موجودی برای نقش شما فعال نیست.")
             return
         if not self._is_group_chat(message):
             self._reply(
@@ -810,10 +814,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return None
-        if self._deny_technician(message, user):
-            return None
-        if not require_manager(user):
-            self._reply(message, "فقط مالک یا مدیر به بخش کاربران دسترسی دارد.", kb.main_menu(user))
+        if self._deny_technician(message, user, perm.USERS):
             return None
         return user
 
@@ -1130,14 +1131,12 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user) or not require_manager(user):
-            if not require_manager(user) and user.get("role") != "technician":
-                self._reply(message, "فقط مالک یا مدیر می‌تواند کاربر اضافه کند.")
+        if self._deny_technician(message, user, perm.USERS):
             return
         if len(args) < 2:
             self._reply(
                 message,
-                "فرمت:\n/adduser <bale_id> <owner|manager|responsible_officer|technician> [name...]",
+                "فرمت:\n/adduser <bale_id> <owner|manager|responsible_officer|technician|shift_supervisor> [name...]",
             )
             return
         target_id, role = args[0], args[1]
@@ -1162,12 +1161,10 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user) or not require_manager(user):
-            if not require_manager(user) and user.get("role") != "technician":
-                self._reply(message, "فقط مالک یا مدیر.")
+        if self._deny_technician(message, user, perm.USERS):
             return
         if len(args) < 2 or args[1] not in ROLES:
-            self._reply(message, "فرمت: /setrole <bale_id> <owner|manager|responsible_officer|technician>")
+            self._reply(message, "فرمت: /setrole <bale_id> <owner|manager|responsible_officer|technician|shift_supervisor>")
             return
         if args[1] == "owner" and not require_owner(user):
             self._reply(message, "فقط مالک می‌تواند نقش مالک بدهد.")
@@ -1219,8 +1216,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if user.get("role") == "technician":
-            self._deny_technician(message, user)
+        if self._deny_technician(message, user, perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT):
             return
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(user["bale_user_id"])
@@ -1249,9 +1245,9 @@ class BotApp:
         else:
             dest = self._upload_return_menu.get(uid) or default
         if dest == "main_source":
-            return kb.main_source_file_menu()
+            return kb.main_source_file_menu(user)
         if dest == "upload":
-            return kb.upload_files_menu()
+            return kb.upload_files_menu(user)
         return kb.main_menu(user)
 
     def on_cancel_pending(self, message: dict) -> None:
@@ -1268,7 +1264,7 @@ class BotApp:
         session = self.db.get_or_create_session(user["bale_user_id"])
         if had_main_source:
             self._upload_return_menu.pop(uid, None)
-            menu = kb.main_source_file_menu()
+            menu = kb.main_source_file_menu(user)
         else:
             menu = self._keyboard_for_upload_return(user, default="main")
         self._reply(message, "عملیات لغو شد.\n" + self._status_text(session, user), menu)
@@ -1280,10 +1276,10 @@ class BotApp:
         session = self.db.get_or_create_session(user["bale_user_id"])
         # Technicians keep their limited main menu; others get a file-entry picker
         # so status → choose type works without going through main_menu submenu.
-        if user.get("role") == "technician":
+        if not perm.can_any(user, (perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT)):
             menu = kb.main_menu(user)
         else:
-            menu = kb.file_entry_menu()
+            menu = kb.file_entry_menu(user)
         self._reply(message, self._status_text(session, user), menu)
 
     def on_document(self, message: dict) -> None:
@@ -1295,16 +1291,16 @@ class BotApp:
         # «ورود فایل اکسل منبع اصلی» (main-source submenu) = full-source upload; the
         # «موجودی انبار» / consumables buttons = stock update (t213u: no new codes).
         upload_origin = self._upload_return_menu.get(str(user["bale_user_id"]))
-        if user.get("role") == "technician":
+        if not perm.can_any(user, (perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT)):
             if pending:
                 self.db.set_pending_file_type(user["bale_user_id"], None)
-            self._deny_technician(message, user)
+            self._deny_technician(message, user, perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT)
             return
         if not pending:
             self._reply(
                 message,
                 "ابتدا نوع ورود اطلاعات را از دکمه‌های زیر انتخاب کنید، سپس Excel را بفرستید.",
-                kb.file_entry_menu(),
+                kb.file_entry_menu(user),
             )
             return
 
@@ -1440,7 +1436,7 @@ class BotApp:
             pending == "product_inventory"
             and upload_origin == "main_source"
             and not format_redirect_note
-            and can_configure_catalog(user)
+            and perm.can(user, perm.MAIN_SOURCE_EDIT)
         )
         is_stock_upload = pending == "product_inventory" and not full_source
         uploaded_stock_df: pd.DataFrame | None = None
@@ -1594,6 +1590,8 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
+        if self._deny_technician(message, user, perm.REPORT_COMPREHENSIVE):
+            return
         if not self._require_files(message, user, "full"):
             return
         self._ask_month_year_range(message, user, "comprehensive")
@@ -1653,7 +1651,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.REPORT_N_TUNDISH):
             return
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(uid)
@@ -1752,7 +1750,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.MAIN_SOURCE_EDIT):
             return
         if not perm.can(user, perm.MAIN_SOURCE_EDIT):
             self._reply(message, "جایگزینی کامل منبع اصلی برای نقش شما مجاز نیست.", kb.upload_files_menu(user))
@@ -1775,7 +1773,7 @@ class BotApp:
             return
         uid = str(user["bale_user_id"])
         if uid not in self._full_replace_confirm:
-            self._reply(message, f"ابتدا «{kb.BTN_FULL_REPLACE}» را بزنید.", kb.main_source_file_menu())
+            self._reply(message, f"ابتدا «{kb.BTN_FULL_REPLACE}» را بزنید.", kb.main_source_file_menu(user))
             return
         self._full_replace_confirm.discard(uid)
         self.on_pick_file_type(message, "product_inventory", return_menu="main_source")
@@ -1812,25 +1810,70 @@ class BotApp:
         )
 
     def on_role_permissions(self, message: dict) -> None:
+        """«🔐 دسترسی نقش‌ها»: pick a role, then toggle features with inline checkboxes."""
         user = self._user_or_deny(message)
         if not user:
             return
-        if not perm.can(user, perm.SETTINGS):
-            self._reply(message, "این بخش فقط برای مالک یا مدیر است.", kb.main_menu(user))
+        if self._deny_technician(message, user, perm.ROLE_PERMISSIONS):
             return
         self._reply(
             message,
-            perm.matrix_text_fa()
-            + "\n\n(ویرایش دسترسی‌ها در فاز بعد اضافه می‌شود؛ فعلاً فقط نمایش.)",
-            kb.bot_settings_menu(user),
+            "🔐 دسترسی نقش‌ها\n"
+            "نقشی را که می‌خواهید تنظیم کنید انتخاب کنید. دسترسی‌های مالک قفل است؛ "
+            "«کاربران» و «دسترسی نقش‌ها» همیشه فقط برای مالک و مدیر است.\n"
+            "تغییرها فوراً در ربات و وب اعمال و در «📋 فعالیت کاربران» ثبت می‌شوند.\n\n"
+            "وضعیت فعلی:\n" + perm.matrix_text_fa(),
+            kb.role_perms_role_menu(),
         )
+
+    def _role_perm_text(self, role: str) -> str:
+        return (
+            f"دسترسی‌های «{role_label(role)}» — روی هر مورد بزنید تا روشن/خاموش شود.\n"
+            "✅ فعال | ⬜ غیرفعال | • = متفاوت با پیش‌فرض"
+        )
+
+    def on_role_perm_pick(self, message: dict, role: str) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user, perm.ROLE_PERMISSIONS):
+            return
+        self._reply(message, f"نقش «{role_label(role)}» انتخاب شد.", kb.role_perms_role_menu())
+        self.client.send_message(
+            self._chat_id(message),
+            self._role_perm_text(role),
+            reply_markup=kb.role_perms_inline(role, perm.matrix_rows(role)),
+        )
+
+    def _on_role_perm_callback(self, data: str, message: dict, user: dict, answer) -> None:
+        parts = data[len(kb.CB_ROLE_PERM_PREFIX):].split("|", 1)
+        if len(parts) != 2:
+            answer()
+            return
+        role, feature = parts
+        if feature == kb.RP_RESET:
+            ok, msg = perm.reset_role(self.db, user, role)
+        else:
+            ok, msg = perm.toggle(self.db, user, role, feature)
+        answer(msg, alert=not ok)
+        if not ok:
+            return
+        chat = (message.get("chat") or {}).get("id")
+        mid = message.get("message_id")
+        if chat is not None and mid is not None:
+            try:
+                self.client.edit_message_reply_markup(
+                    chat, int(mid), kb.role_perms_inline(role, perm.matrix_rows(role))
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("role perm keyboard refresh failed: %s", exc)
 
     # ---------- آپلود فایل / فایل منبع اصلی ----------
     def on_upload_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT):
             return
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(user["bale_user_id"])
@@ -1853,7 +1896,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT):
             return
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(user["bale_user_id"])
@@ -1867,14 +1910,14 @@ class BotApp:
         self._reply(
             message,
             f"{kb.BTN_MAIN_SOURCE_FILE}\n" + hint,
-            kb.main_source_file_menu(),
+            kb.main_source_file_menu(user),
         )
 
     def on_add_category_prompt(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.MAIN_SOURCE_EDIT):
             return
         self._await_category_code.add(str(user["bale_user_id"]))
         self._clear_analysis_pending(user["bale_user_id"])
@@ -1903,7 +1946,7 @@ class BotApp:
                     self._reply(
                         message,
                         "اضافه کردن کد دسته بندی لغو شد.",
-                        kb.main_source_file_menu(),
+                        kb.main_source_file_menu(user),
                     )
                 return True
             # help / back / reset → let later keyboard handlers run
@@ -1912,7 +1955,7 @@ class BotApp:
         if not user:
             self._await_category_code.discard(uid)
             return True
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.MAIN_SOURCE_EDIT):
             return True
         try:
             row = self.db.add_category_code(
@@ -1927,7 +1970,7 @@ class BotApp:
             f"✅ کد دسته بندی «{row['code']}» ذخیره شد"
             + (f" ({row.get('label')})" if row.get("label") else "")
             + f".\nتعداد کدهای فعال: {len(self.db.list_category_codes(active_only=True))}",
-            kb.inventory_menu(),
+            kb.inventory_menu(user),
         )
         return True
 
@@ -1935,14 +1978,14 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT):
             return
         active_codes = self.db.list_category_codes(active_only=True)
         if not active_codes:
             self._reply(
                 message,
                 "هنوز هیچ کد دسته‌بندی فعالی ثبت نشده است.",
-                kb.inventory_menu(),
+                kb.inventory_menu(user),
             )
             return
 
@@ -1964,7 +2007,7 @@ class BotApp:
             self._reply(
                 message,
                 "📋 لیست کد دسته‌بندی و موجودی\n" + notice + "\n\nلیست خالی است.",
-                kb.inventory_menu(),
+                kb.inventory_menu(user),
             )
             return
         cols = ["کد دسته", "شرح کالا", "موجودی"]
@@ -1978,7 +2021,7 @@ class BotApp:
             output_name="لیست_کد_دسته‌بندی_و_موجودی.pdf",
             caption=f"📋 لیست کد دسته‌بندی و موجودی — {len(rows)} ردیف",
             reply_ok=f"📋 جدول در PDF ارسال شد.\n{notice}",
-            reply_markup=kb.inventory_menu(),
+            reply_markup=kb.inventory_menu(user),
             log_user=user,
             log_action="list_categories_pdf",
         )
@@ -1986,13 +2029,13 @@ class BotApp:
 
     def _deny_main_source_edit(self, message: dict, user: dict) -> bool:
         """Only catalog-admin roles may edit/add/upload منبع اصلی via settings."""
-        if can_configure_catalog(user):
+        if perm.can(user, perm.MAIN_SOURCE_EDIT):
             return False
         self._main_source_pending.pop(str(user["bale_user_id"]), None)
         self._reply(
             message,
-            "دسترسی ویرایش منبع اصلی ندارید (فقط مالک، مدیر یا کاردان مسئول).",
-            kb.inventory_menu(),
+            "دسترسی ویرایش منبع اصلی برای نقش شما فعال نیست.",
+            kb.inventory_menu(user),
         )
         return True
 
@@ -2004,9 +2047,9 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT):
             return
-        menu = kb.main_source_file_menu()
+        menu = kb.main_source_file_menu(user)
         try:
             frame = load_primary_inventory(self.db, user)
         except Exception as exc:  # noqa: BLE001
@@ -2050,7 +2093,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user) or self._deny_main_source_edit(message, user):
+        if self._deny_technician(message, user, perm.MAIN_SOURCE_EDIT) or self._deny_main_source_edit(message, user):
             return
         uid = str(user["bale_user_id"])
         frame = main_source_svc.load_primary_frame(self.db, bale_user_id=uid)
@@ -2058,7 +2101,7 @@ class BotApp:
             self._reply(
                 message,
                 "منبع اصلی خالی است. ابتدا فایل را آپلود یا رکورد جدید اضافه کنید.",
-                kb.inventory_edit_menu(),
+                kb.inventory_edit_menu(user),
             )
             return
         preview = main_source_svc.list_ids_preview(frame, limit=25)
@@ -2075,7 +2118,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user) or self._deny_main_source_edit(message, user):
+        if self._deny_technician(message, user, perm.MAIN_SOURCE_EDIT) or self._deny_main_source_edit(message, user):
             return
         uid = str(user["bale_user_id"])
         fields = [c for c in main_source_svc.INVENTORY_COLUMNS]
@@ -2108,7 +2151,7 @@ class BotApp:
         if not user:
             self._clear_main_source_pending(uid)
             return True
-        if self._deny_technician(message, user) or self._deny_main_source_edit(message, user):
+        if self._deny_technician(message, user, perm.MAIN_SOURCE_EDIT) or self._deny_main_source_edit(message, user):
             return True
         raw_nav = kb.normalize_pending_text(text)
         if kb.is_pending_reserved_text(raw_nav):
@@ -2120,7 +2163,7 @@ class BotApp:
                     msg = "اضافه کردن رکورد لغو شد."
                 else:
                     msg = "ویرایش منبع اصلی لغو شد."
-                self._reply(message, msg, kb.inventory_edit_menu())
+                self._reply(message, msg, kb.inventory_edit_menu(user))
                 return True
             # help / back / reset → let later keyboard handlers run
             return False
@@ -2205,7 +2248,7 @@ class BotApp:
                     f"✅ رکورد «{result.get('id')}» به‌روز شد.\n"
                     + main_source_svc.format_row_fa(result.get("row") or {})
                 ),
-                kb.inventory_edit_menu(),
+                kb.inventory_edit_menu(user),
             )
             return True
 
@@ -2213,7 +2256,7 @@ class BotApp:
             ans = text.strip().casefold()
             if ans not in {"بله", "بلی", "yes", "y", "آره", "اره"}:
                 self._clear_main_source_pending(uid)
-                self._reply(message, "افزودن رکورد لغو شد (شناسه تکراری).", kb.inventory_edit_menu())
+                self._reply(message, "افزودن رکورد لغو شد (شناسه تکراری).", kb.inventory_edit_menu(user))
                 return True
             draft = dict(pending.get("draft") or {})
             try:
@@ -2222,14 +2265,14 @@ class BotApp:
                 )
             except (KeyError, ValueError) as exc:
                 self._clear_main_source_pending(uid)
-                self._reply(message, str(exc), kb.inventory_edit_menu())
+                self._reply(message, str(exc), kb.inventory_edit_menu(user))
                 return True
             self._clear_main_source_pending(uid)
             log_activity(self.db, user, "add_main_source_record_overwrite")
             self._reply(
                 message,
                 "✅ رکورد جایگزین شد.\n" + main_source_svc.format_row_fa(result.get("row") or {}),
-                kb.inventory_edit_menu(),
+                kb.inventory_edit_menu(user),
             )
             return True
 
@@ -2239,7 +2282,7 @@ class BotApp:
             draft = dict(pending.get("draft") or {})
             if idx >= len(fields):
                 self._clear_main_source_pending(uid)
-                self._reply(message, "وضعیت نامعتبر؛ دوباره شروع کنید.", kb.inventory_edit_menu())
+                self._reply(message, "وضعیت نامعتبر؛ دوباره شروع کنید.", kb.inventory_edit_menu(user))
                 return True
             field = fields[idx]
             raw = text.strip()
@@ -2300,7 +2343,7 @@ class BotApp:
                         f"✅ رکورد {action} شد.\n"
                         + main_source_svc.format_row_fa(result.get("row") or {})
                     ),
-                    kb.inventory_edit_menu(),
+                    kb.inventory_edit_menu(user),
                 )
                 return True
             pending["draft"] = draft
@@ -2370,7 +2413,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, *perm.REPORT_FEATURES):
             return
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(uid)
@@ -2414,7 +2457,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.REPORT_CRITICAL):
             return
         uid = str(user["bale_user_id"])
         self._clear_critical_pending(uid)
@@ -2456,7 +2499,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.REPORT_CRITICAL):
             return
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(uid)
@@ -2475,7 +2518,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.REPORT_CRITICAL):
             return
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(uid)
@@ -2506,7 +2549,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return True
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.REPORT_CRITICAL):
             self._clear_critical_pending(uid)
             return True
 
@@ -2704,7 +2747,7 @@ class BotApp:
         if not pending or pending.get("await") != "reno_mode":
             answer("این انتخاب منقضی شده؛ دوباره «تولید گزارش اقلام بحرانی» را بزنید.", alert=True)
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.REPORT_CRITICAL):
             self._clear_critical_pending(uid)
             answer()
             return
@@ -2831,7 +2874,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.REPORT_INBOUND):
             return
         history = inbound_svc.list_reports(self.db, limit=11)
         if report_id is not None:
@@ -2843,7 +2886,7 @@ class BotApp:
                 message,
                 "هنوز گزارش اقلام ورودی ثبت نشده است.\n"
                 f"پس از هر آپلود «{kb.BTN_WAREHOUSE_STOCK}» گزارش به‌طور خودکار ساخته و ذخیره می‌شود.",
-                kb.analytics_menu(),
+                kb.analytics_menu(user),
             )
             return
         others = [h for h in history if int(h["id"]) != int(report["id"])][:10]
@@ -2935,7 +2978,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.USER_ACTIVITY):
             return
         if not perm.can(user, perm.USER_ACTIVITY):
             self._reply(message, "فعالیت کاربران فقط برای مالک یا مدیر است.", kb.main_menu(user))
@@ -2997,7 +3040,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, perm.REPORT_MONTHLY_SUMMARY):
             return
         source, _source_label = self._resolve_monthly_source(user)
         if source is None:
@@ -3005,7 +3048,7 @@ class BotApp:
                 message,
                 "فایل مصرف ماهیانه مواد یافت نشد.\n"
                 "ابتدا از منوی اصلی «مصرف ماهیانه مواد» را آپلود کنید.",
-                kb.analytics_menu(),
+                kb.analytics_menu(user),
             )
             return
         self._ask_month_year_range(message, user, "monthly_summary")
@@ -3044,7 +3087,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return True
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, *perm.REPORT_FEATURES):
             return True
         uid = user["bale_user_id"]
         pending = self._analysis_pending.get(uid) or pending
@@ -3174,7 +3217,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return True
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, *perm.REPORT_FEATURES):
             return True
         uid = user["bale_user_id"]
         pending = self._analysis_pending.get(uid)
@@ -3263,7 +3306,7 @@ class BotApp:
         same title/columns/rows (shared ``excel.simple_report``). Empty data →
         text-only (no empty PDF and no empty Excel).
         """
-        markup = reply_markup if reply_markup is not None else kb.analytics_menu()
+        markup = reply_markup if reply_markup is not None else kb.analytics_menu(log_user or self.db.get_user(self._uid(message)))
         if not self._report_has_rows(sections=sections, rows=rows):
             self._empty_range_reply(
                 message,
@@ -3346,7 +3389,7 @@ class BotApp:
             msg = f"در این بازه ({range_label}) داده‌ای برای این گزارش نیست."
         else:
             msg = "در این بازه داده‌ای برای این گزارش نیست."
-        self._reply(message, msg, kb.analytics_menu())
+        self._reply(message, msg, kb.analytics_menu(self.db.get_user(self._uid(message))))
 
 
     def _run_month_ranged_report(
@@ -3587,7 +3630,7 @@ class BotApp:
         if section is None:
             self._ask_section_step(message, user, mode, start=start, end=end)
             return
-        if self._deny_technician(message, user):
+        if self._deny_technician(message, user, *perm.REPORT_FEATURES):
             return
         try:
             res = pc.generate_files(
@@ -3715,7 +3758,7 @@ class BotApp:
                 message,
                 "فایل مصرف ماهیانه مواد یافت نشد.\n"
                 "ابتدا از منوی اصلی «مصرف ماهیانه مواد» را آپلود کنید.",
-                kb.analytics_menu(),
+                kb.analytics_menu(user),
             )
             return
         self._reply(message, f"در حال ساخت خلاصه مصرف ماهیانه ({range_label})…")
@@ -3766,7 +3809,7 @@ class BotApp:
                     f"ردیف‌های تجمیعی: {len(data.items)} | "
                     f"جمع ماه‌ها: {month_sum:g} | جمع کل: {data.grand_kg:g} کیلوگرم"
                 ),
-                kb.analytics_menu(),
+                kb.analytics_menu(user),
             )
             log_activity(self.db, user, "report_monthly_summary")
         except ValueError as exc:
@@ -3781,7 +3824,7 @@ class BotApp:
             self._reply(
                 message,
                 f"خطا در تولید خلاصه مصرف ماهیانه: {exc}",
-                kb.analytics_menu(),
+                kb.analytics_menu(user),
             )
 
 
@@ -4314,6 +4357,14 @@ class BotApp:
             except BaleAPIError as exc:
                 logger.warning("answerCallbackQuery failed: %s", exc)
 
+        if data.startswith(kb.CB_ROLE_PERM_PREFIX):
+            user = ensure_registered(self.db, uid, self._display_name(message))
+            if not user:
+                answer("شما در سیستم ثبت نشده‌اید.", alert=True)
+                return
+            self._on_role_perm_callback(data, message, user, answer)
+            return
+
         if data.startswith(kb.CB_CRITICAL_RENO_PREFIX):
             user = ensure_registered(self.db, uid, self._display_name(message))
             if not user:
@@ -4404,14 +4455,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return None
-        if self._deny_technician(message, user):
-            return None
-        if not require_manager(user):
-            self._reply(
-                message,
-                "فقط مالک یا مدیر به «⚙️ تنظیمات» دسترسی دارد.",
-                kb.main_menu(user),
-            )
+        if self._deny_technician(message, user, *perm.SETTINGS_FEATURES):
             return None
         return user
 
@@ -4718,7 +4762,7 @@ class BotApp:
         elif which == "stock_group":
             self._preview_stock_group(message, user)
         else:
-            self._reply(message, "ابتدا یک بخش تنظیمات را انتخاب کنید.", kb.bot_settings_menu())
+            self._reply(message, "ابتدا یک بخش تنظیمات را انتخاب کنید.", kb.bot_settings_menu(user))
 
     def on_bot_settings_edit_text_start(self, message: dict) -> None:
         user = self._require_bot_settings_user(message)
@@ -4728,7 +4772,7 @@ class BotApp:
         pending = self._bot_settings_pending.get(uid) or {}
         which = pending.get("which")
         if which not in {"invite", "welcome"}:
-            self._reply(message, "این بخش متن قابل ویرایش ندارد.", kb.bot_settings_menu())
+            self._reply(message, "این بخش متن قابل ویرایش ندارد.", kb.bot_settings_menu(user))
             return
         self._bot_settings_pending[uid] = {"mode": "await_text", "which": which}
         if which == "invite":
@@ -4752,7 +4796,7 @@ class BotApp:
         pending = self._bot_settings_pending.get(uid) or {}
         which = pending.get("which")
         if which not in {"invite", "welcome", "logo"}:
-            self._reply(message, "ابتدا یک بخش تنظیمات را انتخاب کنید.", kb.bot_settings_menu())
+            self._reply(message, "ابتدا یک بخش تنظیمات را انتخاب کنید.", kb.bot_settings_menu(user))
             return
         self._bot_settings_pending[uid] = {"mode": "await_image", "which": which}
         self._reply(
@@ -4776,7 +4820,7 @@ class BotApp:
         }
         key = key_map.get(which or "")
         if not key:
-            self._reply(message, "ابتدا یک بخش تنظیمات را انتخاب کنید.", kb.bot_settings_menu())
+            self._reply(message, "ابتدا یک بخش تنظیمات را انتخاب کنید.", kb.bot_settings_menu(user))
             return
         old = self.db.get_setting(key)
         self.db.clear_setting(key, updated_by=uid)
@@ -4969,14 +5013,7 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return None
-        if self._deny_technician(message, user):
-            return None
-        if not can_request_materials(user):
-            self._reply(
-                message,
-                "دسترسی ندارید؛ درخواست مواد فقط برای مالک، مدیر و کاردان مسئول است.",
-                kb.main_menu(user),
-            )
+        if self._deny_technician(message, user, perm.MATERIAL_REQUEST, perm.WAREHOUSE_RETURN):
             return None
         return user
 
@@ -5960,6 +5997,20 @@ class BotApp:
             if user:
                 self._clear_all_pending(str(user["bale_user_id"]))
                 self._reply(message, kb.REMOVED_HINTS[raw_text], kb.main_menu(user))
+            return
+
+        # central permission gate (services.permissions; DB overrides) for every
+        # feature button, before any flow sees the text
+        need = kb.BUTTON_FEATURE.get(text)
+        if need:
+            gate_user = self._user_or_deny(message)
+            if not gate_user:
+                return
+            if self._deny_technician(message, gate_user, *need):
+                return
+        rp_role = kb.role_perm_button_to_role(text)
+        if rp_role:
+            self.on_role_perm_pick(message, rp_role)
             return
 
         # یادآورها — settings (owner/manager)

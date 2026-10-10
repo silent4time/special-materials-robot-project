@@ -30,7 +30,7 @@ def ensure_registered(db: Database, bale_user_id: str | int, display_name: str |
 
 
 def require_manager(user: dict | None) -> bool:
-    """True for owner or manager (admin menu / user management)."""
+    """True for owner or manager (users + role-permission pages are locked to these)."""
     return bool(user and user.get("active") and user.get("role") in ADMIN_ROLES)
 
 
@@ -40,13 +40,23 @@ def require_owner(user: dict | None) -> bool:
 
 
 def can_configure_catalog(user: dict | None) -> bool:
-    """Owner / manager / responsible_officer may assign catalog items to groups."""
-    return bool(user and user.get("active") and user.get("role") in CATALOG_ADMIN_ROLES)
+    """منبع اصلی edit (services.permissions MAIN_SOURCE_EDIT; DB overrides apply)."""
+    from services import permissions as perm
+
+    return perm.can(user, perm.MAIN_SOURCE_EDIT)
 
 
 def can_request_materials(user: dict | None) -> bool:
-    """Owner / manager / responsible_officer may run the material-request workflow."""
-    return bool(user and user.get("active") and user.get("role") in CATALOG_ADMIN_ROLES)
+    """Material request (services.permissions MATERIAL_REQUEST; DB overrides apply)."""
+    from services import permissions as perm
+
+    return perm.can(user, perm.MATERIAL_REQUEST)
+
+
+def can_return_materials(user: dict | None) -> bool:
+    from services import permissions as perm
+
+    return perm.can(user, perm.WAREHOUSE_RETURN)
 
 
 def role_label(role: str) -> str:
@@ -69,6 +79,11 @@ def filter_dataframe_for_user(df: pd.DataFrame, user: dict[str, Any]) -> pd.Data
     role = user.get("role")
     if role in FULL_DATA_ROLES:
         return df.copy()
+    # A role granted any report (🔐 دسترسی نقش‌ها) reads plant-wide data like staff.
+    from services import permissions as perm
+
+    if perm.can_any(user, perm.REPORT_FEATURES):
+        return df.copy()
 
     work = df.copy()
     cols = {c.lower(): c for c in work.columns}
@@ -79,7 +94,7 @@ def filter_dataframe_for_user(df: pd.DataFrame, user: dict[str, Any]) -> pd.Data
     if not has_domain and not has_assignee:
         return work
 
-    if role == "technician":
+    if role in ("technician", "shift_supervisor"):
         uid = str(user.get("bale_user_id", "")).strip()
         name = str(user.get("display_name") or "").strip().lower()
         id_col = cols.get("assignee_id")
