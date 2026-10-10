@@ -2241,7 +2241,11 @@ class BotApp:
                 self._reply(message, str(exc), kb.cancel_pending_menu())
                 return True
             self._clear_main_source_pending(uid)
-            log_activity(self.db, user, "edit_main_source_record")
+            log_activity(
+                self.db, user, "edit_main_source_record",
+                item_id=str(result.get("id") or item_id),
+                changes_fa=main_source_svc.changes_fa(result.get("changes") or []),
+            )
             self._reply(
                 message,
                 (
@@ -2268,7 +2272,7 @@ class BotApp:
                 self._reply(message, str(exc), kb.inventory_edit_menu(user))
                 return True
             self._clear_main_source_pending(uid)
-            log_activity(self.db, user, "add_main_source_record_overwrite")
+            log_activity(self.db, user, "add_main_source_record_overwrite", item_id=str(result.get("id") or ""))
             self._reply(
                 message,
                 "✅ رکورد جایگزین شد.\n" + main_source_svc.format_row_fa(result.get("row") or {}),
@@ -2335,7 +2339,10 @@ class BotApp:
                     }
                     return True
                 self._clear_main_source_pending(uid)
-                log_activity(self.db, user, "add_main_source_record")
+                log_activity(
+                    self.db, user, "add_main_source_record", item_id=str(result.get("id") or ""),
+                    action_fa="به‌روزرسانی" if result.get("action") == "updated" else "رکورد جدید",
+                )
                 action = "به‌روز" if result.get("action") == "updated" else "اضافه"
                 self._reply(
                     message,

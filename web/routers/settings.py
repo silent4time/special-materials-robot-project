@@ -151,7 +151,11 @@ async def main_source_edit(
         result = main_source_svc.upsert_row(
             db, item_id, updates, bale_user_id=user["bale_user_id"]
         )
-        log_activity(db, user, "web_edit_main_source_record")
+        log_activity(
+            db, user, "web_edit_main_source_record",
+            item_id=str(result.get("id") or item_id),
+            changes_fa=main_source_svc.changes_fa(result.get("changes") or []),
+        )
         message = f"✅ رکورد «{result.get('id')}» به‌روز شد."
     except (KeyError, ValueError) as exc:
         error = str(exc)
@@ -186,7 +190,10 @@ async def main_source_add(
             bale_user_id=user["bale_user_id"],
             allow_update=overwrite,
         )
-        log_activity(db, user, "web_add_main_source_record")
+        log_activity(
+            db, user, "web_add_main_source_record", item_id=str(result.get("id") or ""),
+            action_fa="به‌روزرسانی" if result.get("action") == "updated" else "رکورد جدید",
+        )
         action = "به‌روز" if result.get("action") == "updated" else "اضافه"
         message = f"✅ رکورد {action} شد («{result.get('id')}»)."
     except (KeyError, ValueError) as exc:

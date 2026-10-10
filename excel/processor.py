@@ -1197,7 +1197,9 @@ def process_file(path: Path | str, file_type: str, user: dict[str, Any]) -> tupl
         raise ExcelValidationError(f"نوع فایل ناشناخته: {file_type}")
     # Inventory clean files have no tundish_type — skip strict tundish check
     strict = file_type != "product_inventory"
-    df = load_excel(path, strict_tundish=strict)
+    from services.frame_cache import cached_frame
+
+    df = cached_frame(path, f"load_excel:{strict}", lambda: load_excel(path, strict_tundish=strict))
     missing = validate_required_columns(df, file_type)
     if file_type in RBAC_SCOPED_FILE_TYPES:
         critical_missing = [c for c in CRITICAL_COLUMNS if c not in df.columns]

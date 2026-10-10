@@ -58,9 +58,61 @@ def test_housekeeping() -> None:
     print("  19e housekeeping OK (backups keep 5/30d, reports 60d, rotating log, transient timeouts)")
 
 
+def test_cache_and_audit() -> None:
+    import sqlite3
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import smoke_phase2 as p2
+    import services.main_source as ms
+    from bot.activity import log_activity
+    from db.models import Database
+    from services import frame_cache
+
+    ms.UPLOAD_DIR = TMP / "uploads_ms"
+    db = Database(TMP / "audit.db")
+    db.upsert_user("31", role="owner", display_name="A")
+    db.upsert_user("32", role="responsible_officer", display_name="B")
+    p1 = ms.persist_primary_frame(db, p2._inv_frame(5.0), bale_user_id="31")
+    n_rows = lambda: sqlite3.connect(db.path).execute("SELECT COUNT(*) FROM extracted_datasets").fetchone()[0]
+    assert n_rows() == 1
+    frame_cache.clear()
+    ms.load_primary_frame(db); ms.load_primary_frame(db)
+    assert frame_cache.stats == {"hits": 1, "misses": 1}, frame_cache.stats
+    item = p2._inv_frame().iloc[0]["id"]
+    # same user edits 3× → same clean_path → extract row updated, not inserted
+    for q in (6, 7, 8):
+        res = ms.upsert_row(db, item, {"quantity": q, "unit": "کیلو"}, bale_user_id="31")
+    assert n_rows() == 1, n_rows()
+    df = ms.load_primary_frame(db)  # cache key changed with mtime → fresh value
+    assert float(df.loc[df["id"] == item, "quantity"].iloc[0]) == 8
+    assert res["changes"] == [{"field": "quantity", "before": "7", "after": "8"}], res["changes"]
+    first = ms.upsert_row(db, item, {"quantity": 9, "unit": "عدد"}, bale_user_id="31")["changes"]
+    assert {c["field"] for c in first} == {"quantity", "unit"}
+    txt = ms.changes_fa(first)
+    assert "→" in txt and "8" in txt and "9" in txt, txt
+    log_activity(db, db.get_user("31"), "edit_main_source_record", item_id=item, changes_fa=txt)
+    msg = sqlite3.connect(db.path).execute("SELECT message_fa FROM user_activity ORDER BY id DESC").fetchone()[0]
+    assert item in msg and "8 → 9" in msg, msg
+    # another user's edit → own file → new extract row (and becomes factory-wide latest)
+    ms.upsert_row(db, item, {"quantity": 1}, bale_user_id="32")
+    assert n_rows() == 2
+    # timestamped snapshots, newest N kept
+    for q in range(15):
+        ms.upsert_row(db, item, {"quantity": 100 + q}, bale_user_id="32")
+    snaps = list((Path(ms.load_primary_frame.__globals__["resolve_primary_inventory_path"](db)).parent / "snapshots").glob("edit_snapshot_*.xlsx"))
+    assert len(snaps) == ms.SNAPSHOT_KEEP, len(snaps)
+    assert n_rows() == 2
+    # add_row activity phrase is Persian (was raw key before)
+    from bot.activity import format_action_phrase
+
+    assert "افزود" in format_action_phrase("add_main_source_record", item_id="X", action_fa="رکورد جدید")
+    print("  19a/19b OK (frame cache hits, extract row updated in place, edit audit before→after, snapshots keep 10)")
+
+
 def main() -> int:
     print("smoke phase3…")
     test_housekeeping()
+    test_cache_and_audit()
     print("SMOKE_PHASE3_OK")
     return 0
 

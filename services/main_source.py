@@ -275,8 +275,10 @@ def load_primary_frame(
     path = resolve_primary_inventory_path(db, bale_user_id=bale_user_id)
     if not path:
         return None
+    from services.frame_cache import cached_frame
+
     try:
-        df = pd.read_excel(path, engine="openpyxl")
+        df = cached_frame(path, "primary_raw", lambda: pd.read_excel(path, engine="openpyxl"))
     except Exception as exc:  # noqa: BLE001
         logger.warning("load primary inventory failed (%s): %s", path, exc)
         return None
@@ -284,6 +286,34 @@ def load_primary_frame(
         return ensure_inventory_columns(pd.DataFrame())
     # English keys or Persian headers (re-export / old 7-col files).
     return ensure_inventory_columns(_normalize_columns(df))
+
+
+SNAPSHOT_KEEP = 10
+
+
+def snapshot_primary(path: Path, *, keep: int = SNAPSHOT_KEEP) -> Path | None:
+    """Copy ``path`` to <dir>/snapshots/edit_snapshot_<UTC ts>.xlsx; prune to ``keep``.
+
+    (Separate prefix: ``product_inventory_<extract id>.xlsx`` files there are inbound
+    baselines and must never be pruned.)
+    """
+    from datetime import datetime, timezone
+
+    try:
+        snap_dir = path.parent / "snapshots"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        snap = snap_dir / f"edit_snapshot_{ts}.xlsx"
+        shutil.copy2(path, snap)
+        snaps = sorted(snap_dir.glob("edit_snapshot_*.xlsx"))
+        for old in snaps[:-keep]:
+            old.unlink(missing_ok=True)
+        # legacy single-slot snapshot from before phase 3
+        (snap_dir / "product_inventory_before_edit.xlsx").unlink(missing_ok=True)
+        return snap
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not snapshot inventory before edit: %s", exc)
+        return None
 
 
 def persist_primary_frame(
@@ -307,29 +337,34 @@ def persist_primary_frame(
     dest_dir.mkdir(parents=True, exist_ok=True)
     clean_path = dest_dir / f"{PRIMARY_INVENTORY_TYPE}.xlsx"
 
-    # Preserve previous file as snapshot when overwriting in-place sibling
+    # Phase 3 item 19b: timestamped snapshot of the current factory-wide file before
+    # every rewrite (in place or not); keep the newest SNAPSHOT_KEEP per folder.
     existing = resolve_primary_inventory_path(db, bale_user_id=uid)
-    if existing and Path(existing).is_file() and Path(existing).resolve() != clean_path.resolve():
-        try:
-            snap_dir = Path(existing).parent / "snapshots"
-            snap_dir.mkdir(parents=True, exist_ok=True)
-            snap = snap_dir / f"product_inventory_before_edit.xlsx"
-            shutil.copy2(existing, snap)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("could not snapshot inventory before edit: %s", exc)
+    if existing and Path(existing).is_file():
+        snapshot_primary(Path(existing))
 
     write_clean_excel(clean, clean_path, PRIMARY_INVENTORY_TYPE)
 
     raw = str(raw_path) if raw_path else str(clean_path)
-    db.save_extracted(
-        bale_user_id=uid,
-        session_id=sid,
-        file_type=PRIMARY_INVENTORY_TYPE,
-        raw_path=raw,
-        clean_path=str(clean_path),
-        row_count=int(len(clean)),
-        columns=list(INVENTORY_COLUMNS),
-    )
+    latest = db.get_latest_extracted_any(PRIMARY_INVENTORY_TYPE)
+    if (
+        raw_path is None
+        and latest
+        and str(latest.get("clean_path") or "") == str(clean_path)
+    ):
+        # record edit (upsert/add/delete) rewrote the same file → update the
+        # existing extract row instead of piling up identical rows
+        db.update_extracted(int(latest["id"]), row_count=int(len(clean)), columns=list(INVENTORY_COLUMNS))
+    else:
+        db.save_extracted(
+            bale_user_id=uid,
+            session_id=sid,
+            file_type=PRIMARY_INVENTORY_TYPE,
+            raw_path=raw,
+            clean_path=str(clean_path),
+            row_count=int(len(clean)),
+            columns=list(INVENTORY_COLUMNS),
+        )
     db.store_file_slot(uid, PRIMARY_INVENTORY_TYPE, str(clean_path))
     # every منبع اصلی change keeps the material-request catalog current (bot + web)
     from services.catalog_sync import sync_after_change
@@ -393,7 +428,32 @@ def upsert_row(
             df.at[idx, key] = _cell_str(value)
     path = persist_primary_frame(db, df, bale_user_id=bale_user_id)
     _, updated = find_row_by_id(df, item_id)
-    return {"path": str(path), "row": updated or {}, "id": _norm_id(item_id)}
+    changes = [
+        {"field": k, "before": _audit_val(current.get(k)), "after": _audit_val((updated or {}).get(k))}
+        for k in allowed
+        if _audit_val(current.get(k)) != _audit_val((updated or {}).get(k))
+    ]
+    return {"path": str(path), "row": updated or {}, "id": _norm_id(item_id), "changes": changes}
+
+
+def _audit_val(value: object) -> str:
+    text = _cell_str(value)
+    if text.casefold() in {"nan", "none"}:
+        return ""
+    if text.endswith(".0") and text[:-2].lstrip("-").isdigit():
+        text = text[:-2]
+    return text
+
+
+def changes_fa(changes: list[dict[str, Any]], *, limit: int = 8) -> str:
+    """«موجودی: 5 → 42؛ واحد: — → عدد» for the activity log (19b edit audit)."""
+    parts = []
+    for c in changes[:limit]:
+        label = FIELD_LABELS_FA.get(c["field"], c["field"])
+        parts.append(f"{label}: {c['before'] or '—'} → {c['after'] or '—'}")
+    if len(changes) > limit:
+        parts.append(f"و {len(changes) - limit} فیلد دیگر")
+    return "؛ ".join(parts) or "بدون تغییر"
 
 
 def add_row(

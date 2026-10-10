@@ -1196,6 +1196,14 @@ class Database:
             )
             return int(cur.lastrowid)
 
+    def update_extracted(self, extract_id: int, *, row_count: int, columns: list[str] | None = None) -> None:
+        """Refresh an existing extract row after an in-place record edit (19b)."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE extracted_datasets SET row_count = ?, columns_json = ? WHERE id = ?",
+                (int(row_count), json.dumps(columns or [], ensure_ascii=False), int(extract_id)),
+            )
+
     def get_latest_extracted(
         self, bale_user_id: str | int, file_type: str
     ) -> Optional[dict[str, Any]]:
