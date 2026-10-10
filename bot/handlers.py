@@ -18,6 +18,7 @@ from analytics.frames import (
     data_completeness,
     inventory_with_ledger,
     load_primary_inventory,
+    resolve_extract_path,
     resolve_primary_inventory_path,
     resolve_remaining as shared_resolve_remaining,
     resolve_warehouse_remaining,
@@ -427,10 +428,8 @@ class BotApp:
     def _resolved_file_paths(self, user: dict, session: dict) -> dict[str, str | None]:
         """Resolve on-disk paths for analytics.
 
-        Canonical rule: ``product_inventory`` (منبع اصلی) always prefers the
-        newest cleaned extract (own user, then plant-wide) over a possibly
-        stale session slot. Other types keep session-first with extract fallback
-        so empty sessions still work after reset.
+        Phase 2 item 16: every type resolves to the factory-wide newest extract
+        (any user); session slot / own upload are only on-disk fallbacks.
         """
         uid = str(user["bale_user_id"])
         type_to_col = {
@@ -449,22 +448,10 @@ class BotApp:
                 )
                 resolved[file_type] = primary
                 continue
-            path = session.get(col)
-            if path and Path(str(path)).exists():
-                resolved[file_type] = str(path)
-                continue
-            latest = self.db.get_latest_extracted(uid, file_type)
-            clean = latest.get("clean_path") if latest else None
-            if clean and Path(str(clean)).exists():
-                resolved[file_type] = str(clean)
-            else:
-                # Plant-wide fallback (same as web load_frames)
-                any_row = self.db.get_latest_extracted_any(file_type)
-                any_clean = any_row.get("clean_path") if any_row else None
-                if any_clean and Path(str(any_clean)).exists():
-                    resolved[file_type] = str(any_clean)
-                else:
-                    resolved[file_type] = None
+            # factory-wide latest first (same as web load_frames), then session / own
+            resolved[file_type] = resolve_extract_path(
+                self.db, file_type, bale_user_id=uid, session_path=session.get(col)
+            )
         return resolved
 
     def _effective_completeness(self, user: dict, session: dict) -> dict[str, bool]:
@@ -1397,9 +1384,7 @@ class BotApp:
         old_df = None
         prev_kept = 0
         if pending == "product_inventory":
-            latest_inv = self.db.get_latest_extracted(
-                user["bale_user_id"], "product_inventory"
-            )
+            latest_inv = self.db.get_latest_extracted_any("product_inventory")
             if latest_inv and latest_inv.get("clean_path"):
                 latest_path = Path(latest_inv["clean_path"])
                 if latest_path.exists():
@@ -3692,7 +3677,9 @@ class BotApp:
         """Prefer raw monthly upload (plant detail); else cleaned session/latest."""
         uid = str(user["bale_user_id"])
         session = self.db.get_or_create_session(uid)
-        latest = self.db.get_latest_extracted(uid, "monthly_consumption")
+        latest = self.db.get_latest_extracted_any("monthly_consumption") or self.db.get_latest_extracted(
+            uid, "monthly_consumption"
+        )
         candidates: list[tuple[Path, str]] = []
         if latest:
             raw = latest.get("raw_path")

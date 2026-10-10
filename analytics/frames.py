@@ -41,13 +41,16 @@ def latest_extract_row(
     file_type: str,
     user: dict[str, Any] | None = None,
 ) -> Optional[dict[str, Any]]:
-    """Prefer caller's newest extract, else plant-wide newest."""
+    """Factory-wide newest extract (phase 2 item 16: one shared منبع اصلی / data set).
+
+    ``user`` is kept for call-site compatibility; the caller's own older upload is
+    only a fallback when no plant-wide row exists (cannot happen in practice).
+    """
+    row = db.get_latest_extracted_any(file_type)
+    if row:
+        return row
     uid = (user or {}).get("bale_user_id")
-    if uid:
-        own = db.get_latest_extracted(uid, file_type)
-        if own:
-            return own
-    return db.get_latest_extracted_any(file_type)
+    return db.get_latest_extracted(uid, file_type) if uid else None
 
 
 def load_extract_frame(
@@ -55,16 +58,16 @@ def load_extract_frame(
     file_type: str,
     user: dict[str, Any],
 ) -> Optional[pd.DataFrame]:
-    """Load a cleaned extract frame (own latest → plant-wide latest)."""
+    """Load a cleaned extract frame: factory-wide latest (own latest = disk fallback)."""
     uid = user.get("bale_user_id")
     candidates: list[dict] = []
+    any_row = db.get_latest_extracted_any(file_type)
+    if any_row:
+        candidates.append(any_row)
     if uid:
         own = db.get_latest_extracted(uid, file_type)
-        if own:
+        if own and (not candidates or own.get("id") != candidates[0].get("id")):
             candidates.append(own)
-    any_row = db.get_latest_extracted_any(file_type)
-    if any_row and (not candidates or any_row.get("id") != candidates[0].get("id")):
-        candidates.append(any_row)
     for row in candidates:
         for key in ("clean_path", "raw_path"):
             path = row.get(key)
@@ -146,7 +149,7 @@ def resolve_extract_path(
 ) -> str | None:
     """Newest on-disk cleaned path for any extract type.
 
-    Order for non-inventory: session (if on disk) → user latest → plant-wide.
+    Order for non-inventory: plant-wide latest → session (if on disk) → user latest.
     For ``product_inventory`` prefer canonical latest extract over a stale session
     slot (same rule as ``resolve_primary_inventory_path``).
     """
@@ -158,7 +161,10 @@ def resolve_extract_path(
         )
 
     candidates: list[str] = []
-    if session_path:
+    any_row = db.get_latest_extracted_any(file_type)
+    if any_row and any_row.get("clean_path"):
+        candidates.append(str(any_row["clean_path"]))
+    if session_path and str(session_path) not in candidates:
         candidates.append(str(session_path))
     if bale_user_id is not None:
         own = db.get_latest_extracted(bale_user_id, file_type)
@@ -166,11 +172,6 @@ def resolve_extract_path(
             path = str(own["clean_path"])
             if path not in candidates:
                 candidates.append(path)
-    any_row = db.get_latest_extracted_any(file_type)
-    if any_row and any_row.get("clean_path"):
-        path = str(any_row["clean_path"])
-        if path not in candidates:
-            candidates.append(path)
     for path in candidates:
         if Path(path).is_file():
             return path
@@ -187,7 +188,7 @@ def data_completeness(
 
     Keys:
       - product_inventory / monthly_consumption / tank_consumption: on-disk
-        cleaned Excel extract (own → plant-wide) or session path.
+        cleaned Excel extract (factory-wide latest; session / own = fallback).
       - site_stock: interactive ``site_stock_entries`` rows present.
 
     Excel upload remains an optional refresh path. Interactive site stock does
@@ -259,18 +260,20 @@ def resolve_primary_inventory_path(
 ) -> str | None:
     """Path to the newest on-disk cleaned منبع اصلی.
 
-    Order: user's latest extract → plant-wide latest → session slot (last resort).
+    Phase 2 item 16: ONE factory-wide منبع اصلی — always the newest extract of any
+    user (an edit by owner/manager/responsible_officer applies to everyone at once).
+    Order: plant-wide latest → user's latest (disk fallback) → session slot.
     """
     candidates: list[str] = []
+    any_row = db.get_latest_extracted_any(PRIMARY_INVENTORY_TYPE)
+    if any_row and any_row.get("clean_path"):
+        candidates.append(str(any_row["clean_path"]))
     if bale_user_id is not None:
         own = db.get_latest_extracted(bale_user_id, PRIMARY_INVENTORY_TYPE)
         if own and own.get("clean_path"):
-            candidates.append(str(own["clean_path"]))
-    any_row = db.get_latest_extracted_any(PRIMARY_INVENTORY_TYPE)
-    if any_row and any_row.get("clean_path"):
-        path = str(any_row["clean_path"])
-        if path not in candidates:
-            candidates.append(path)
+            path = str(own["clean_path"])
+            if path not in candidates:
+                candidates.append(path)
     if session_inventory_path:
         path = str(session_inventory_path)
         if path not in candidates:

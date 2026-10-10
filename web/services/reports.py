@@ -269,9 +269,9 @@ def generate_monthly_summary_files(
         summary_sections_for_pdf,
     )
 
-    extract = db.get_latest_extracted(user["bale_user_id"], "monthly_consumption")
+    extract = db.get_latest_extracted_any("monthly_consumption")
     if not extract:
-        extract = db.get_latest_extracted_any("monthly_consumption")
+        extract = db.get_latest_extracted(user["bale_user_id"], "monthly_consumption")
     if not extract:
         return None, None, "فایل مصرف ماهیانه مواد یافت نشد."
     source = None
