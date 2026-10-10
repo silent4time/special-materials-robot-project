@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import time as _time
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -60,7 +61,7 @@ from bot.jalali import (
 from bot.bale_api import BaleAPIError, BaleClient, public_markup
 from services import permissions as perm
 from services import user_errors
-from services.units import unit_fa
+from services.units import fmt_qty, round_qty, unit_fa
 from bot.background import BackgroundRunner, heavy
 from services import comprehensive_report as comprehensive_svc
 from bot.settings_text import (
@@ -212,6 +213,25 @@ class BotApp:
     def _reply(self, message: dict, text: str, markup: dict | None = None) -> None:
         markup = self._track_nav(message, markup)
         self.client.send_message(self._chat_id(message), text, reply_markup=markup)
+
+    def _reply_chunked(self, message: dict, text: str, markup: dict | None = None, *, limit: int = 3800) -> None:
+        """Long lists: split on line breaks into several messages (keyboard on the last)."""
+        chunks: list[str] = []
+        cur = ""
+        for line in (text or "").split("\n"):
+            while len(line) > limit:  # pathological single line
+                chunks.append(line[:limit])
+                line = line[limit:]
+            if cur and len(cur) + 1 + len(line) > limit:
+                chunks.append(cur)
+                cur = line
+            else:
+                cur = f"{cur}\n{line}" if cur else line
+        if cur or not chunks:
+            chunks.append(cur)
+        for part in chunks[:-1]:
+            self.client.send_message(self._chat_id(message), part)
+        self._reply(message, chunks[-1], markup)
 
     # ---------- uniform navigation ----------
     def _track_nav(self, message: dict, markup: dict | None) -> dict | None:
@@ -1449,7 +1469,7 @@ class BotApp:
         self.db.set_pending_file_type(user["bale_user_id"], None)
         self._await_category_code.discard(uid)
         self._main_source_pending.pop(uid, None)
-        session = self.db.get_or_create_session(user["bale_user_id"])
+        # short message + the menu the flow started from (no full status dump)
         if had_main_source:
             self._upload_return_menu.pop(uid, None)
             menu = kb.main_source_file_menu(user)
@@ -5227,10 +5247,9 @@ class BotApp:
         return (
             f"🛒 پیشنهاد درخواست مواد برای پوشش {days_label} روز — {len(lines)} قلم:\n"
             + "\n".join(
-                f"{i}) {ln.get('item_name') or ln.get('item_id')}: {float(ln.get('quantity') or 0):g} {unit_fa(ln.get('unit'))}".strip()
-                for i, ln in enumerate(lines[:40], 1)
+                f"{i}) {ln.get('item_name') or ln.get('item_id')}: {fmt_qty(ln.get('quantity'), ln.get('unit'))} {unit_fa(ln.get('unit'))}".strip()
+                for i, ln in enumerate(lines, 1)
             )
-            + ("\n…" if len(lines) > 40 else "")
             + "\n\nتأیید همه / اصلاح / انصراف را انتخاب کنید."
         )
 
@@ -5252,9 +5271,9 @@ class BotApp:
                     "شناسه": ln.get("item_id") or "—",
                     "شرح": ln.get("item_name") or "—",
                     "گروه": g_label,
-                    "موجودی": f"{float(ln.get('remaining_qty') or 0):.2f}",
-                    "مصرف روز": f"{float(ln.get('avg_daily') or 0):.2f}",
-                    "پیشنهاد": f"{float(ln.get('quantity') or 0):.2f}",
+                    "موجودی": fmt_qty(ln.get("remaining_qty"), None),
+                    "مصرف روز": fmt_qty(ln.get("avg_daily"), None),
+                    "پیشنهاد": fmt_qty(ln.get("quantity"), ln.get("unit")),
                     "واحد": unit,
                 }
             )
@@ -5276,7 +5295,7 @@ class BotApp:
             body = f"{prefix}\n\n{body}"
         if lines:
             body += f"\n\nبرای فایل پیش‌نویس (بدون ثبت) «{kb.BTN_MR_DRAFT}» را بزنید."
-        self._reply(message, body[:3900], kb.material_request_review_menu())
+        self._reply_chunked(message, body, kb.material_request_review_menu())
 
     def on_material_request_draft(self, message: dict) -> None:
         """«📄 پیش‌نویس PDF/اکسل»: files of the CURRENT review list — no DB write/ledger."""
@@ -5414,7 +5433,8 @@ class BotApp:
                     "unit": row.get("unit"),
                     "avg_daily": float(row.get("avg_daily") or 0),
                     "remaining_qty": float(row.get("remaining_qty") or 0),
-                    "quantity": float(row.get("suggest_qty") or 0),
+                    # whole numbers (ceil) for عدد/ست/…; ≤2 decimals for weights
+                    "quantity": round_qty(row.get("suggest_qty"), row.get("unit")),
                     "tundish_group": g,
                 }
             )
@@ -5480,7 +5500,11 @@ class BotApp:
         if not user:
             self._clear_material_req_pending(uid)
             return True
+        t0 = _time.monotonic()
         lines, err = self._build_mr_lines(user, days)
+        took = _time.monotonic() - t0
+        if took > 3:
+            logger.warning("material request proposal build slow: %.1fs (%d lines)", took, len(lines))
         if err:
             self._clear_material_req_pending(uid)
             self._reply(message, err, kb.main_menu(user))
@@ -5595,11 +5619,11 @@ class BotApp:
             iid = ln.get("item_id") or "—"
             out.append(
                 f"• {ln.get('item_name')} (شناسه: {iid}): "
-                f"{float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
+                f"{fmt_qty(ln.get('quantity'), ln.get('unit'))} {unit}".rstrip()
             )
         out.append("")
         out.append("منبع اصلی با ledger کسر شد و در گزارش‌های بعدی منعکس می‌شود.")
-        self._reply(message, "\n".join(out), kb.main_menu(user))
+        self._reply_chunked(message, "\n".join(out), kb.main_menu(user))
 
     def on_material_request_edit_start(self, message: dict) -> None:
         user = self._require_material_request_access(message)
@@ -5617,11 +5641,11 @@ class BotApp:
         for i, ln in enumerate(lines, 1):
             unit = unit_fa(ln.get("unit"))
             body.append(
-                f"{i}) {ln.get('item_name')}: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
+                f"{i}) {ln.get('item_name')}: {fmt_qty(ln.get('quantity'), ln.get('unit'))} {unit}".rstrip()
             )
         body.append("")
         body.append("سپس مقدار جدید را بفرستید. برای حذف، مقدار ۰ بفرستید.")
-        self._reply(message, "\n".join(body), kb.material_request_edit_menu())
+        self._reply_chunked(message, "\n".join(body), kb.material_request_edit_menu())
 
     def on_material_request_cancel(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -5702,7 +5726,7 @@ class BotApp:
             self._reply(
                 message,
                 f"مقدار جدید برای «{ln.get('item_name')}» را بفرستید "
-                f"(فعلی: {float(ln.get('quantity') or 0):.2f} {unit}).\n"
+                f"(فعلی: {fmt_qty(ln.get('quantity'), ln.get('unit'))} {unit}).\n"
                 "۰ = حذف از لیست.",
                 kb.material_request_edit_menu(),
             )
@@ -5732,8 +5756,12 @@ class BotApp:
             removed = lines.pop(idx)
             msg = f"«{removed.get('item_name')}» حذف شد."
         else:
-            lines[idx]["quantity"] = qty
-            msg = f"مقدار «{lines[idx].get('item_name')}» به {qty:.2f} به‌روز شد."
+            unit_raw = lines[idx].get("unit")
+            lines[idx]["quantity"] = round_qty(qty, unit_raw)
+            msg = (
+                f"مقدار «{lines[idx].get('item_name')}» به "
+                f"{fmt_qty(qty, unit_raw)} {unit_fa(unit_raw)} به‌روز شد.".replace("  ", " ")
+            )
         pending["lines"] = lines
         pending["await"] = "review"
         pending.pop("edit_index", None)
@@ -6066,7 +6094,7 @@ class BotApp:
             self._reply(
                 message,
                 f"مقدار برگشت برای «{ln.get('item_name')}» را بفرستید "
-                f"(فعلی: {float(ln.get('quantity') or 0):.2f} {unit}).\n"
+                f"(فعلی: {float(ln.get('quantity') or 0):g} {unit}).\n"
                 "۰ = حذف از لیست.",
                 kb.warehouse_return_edit_menu(),
             )
@@ -6094,8 +6122,12 @@ class BotApp:
             removed = lines.pop(idx)
             msg = f"«{removed.get('item_name')}» حذف شد."
         else:
+            unit_raw = lines[idx].get("unit")
             lines[idx]["quantity"] = qty
-            msg = f"مقدار «{lines[idx].get('item_name')}» به {qty:.2f} به‌روز شد."
+            msg = (
+                f"مقدار «{lines[idx].get('item_name')}» به "
+                f"{qty:g} {unit_fa(unit_raw)} به‌روز شد.".replace("  ", " ")
+            )
         pending["lines"] = lines
         pending["await"] = "review"
         pending.pop("edit_index", None)
