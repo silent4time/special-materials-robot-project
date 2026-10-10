@@ -506,6 +506,11 @@ class MainGoalReportFlow:
         dest_dir.mkdir(parents=True, exist_ok=True)
         p["seq"] = int(p.get("seq") or 0) + 1
         dest = dest_dir / f"production_{p['seq']:03d}.png"
+        return self.app._heavy(
+            message, "OCR عکس آمار تولید", True, lambda: self._bulk_photo_ocr(message, user, p, file_id, dest)
+        )
+
+    def _bulk_photo_ocr(self, message: dict, user: dict, p: dict, file_id: str, dest: Path) -> bool:
         try:
             self.app.client.download_file(file_id, dest)
             ocr_res = mgocr.ocr_production_image(dest)
@@ -716,6 +721,13 @@ class MainGoalReportFlow:
 
     # ------------------------------------------------------------ export
     def _deliver(self, message: dict, user: dict, model, result, *, stem_prefix: str) -> bool:
+        # 19c: PDF/XLSX building runs in the background pool
+        return self.app._heavy(
+            message, "گزارش هدف اصلی", True,
+            lambda: self._deliver_now(message, user, model, result, stem_prefix=stem_prefix),
+        )
+
+    def _deliver_now(self, message: dict, user: dict, model, result, *, stem_prefix: str) -> bool:
         if not result.ok:
             self._reply(message, result.error_fa or "خطا", kb.main_goal_menu())
             return True
@@ -846,6 +858,12 @@ class MainGoalReportFlow:
             self._reply(message, user_errors.error_fa("دانلود عکس ناموفق", exc), kb.main_goal_upload_menu())
             return True
         self._reply(message, "⏳ در حال OCR عکس تولید…", kb.main_goal_upload_menu())
+        # 19c: OCR runs in the background pool (this user's next messages wait in order)
+        return self.app._heavy(
+            message, "OCR عکس تولید", False, lambda: self._ocr_production_photo(message, user, uid, p, dest)
+        )
+
+    def _ocr_production_photo(self, message: dict, user: dict, uid: str, p: dict, dest: Path) -> bool:
         try:
             ocr_res = mgocr.ocr_production_image(dest)
             out = mgp.store_production_from_ocr(

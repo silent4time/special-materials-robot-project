@@ -75,6 +75,7 @@ def main() -> int:
 
     client = BaleClient()
     app = BotApp(client, db)
+    app.bg.enable(workers=2)  # 19c: heavy reports / OCR off the polling thread
     try:
         me = client.get_me()
         uname = (me.get("username") or "").strip().lstrip("@")

@@ -379,6 +379,97 @@ def test_shared_core() -> None:
     print("  19f OK (bot frames = load_frames; bot+web comprehensive share core: same sheets/title; web route gated)")
 
 
+def test_background() -> None:
+    import threading
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import smoke_phase1 as p1
+    from bot import keyboards as kb
+    from bot.handlers import BotApp
+    from services import comprehensive_report as cr
+
+    tmp = TMP / "bg"
+    tmp.mkdir()
+    db = p1._db_copy(tmp)
+    owner = next(u for u in db.list_users() if u.get("role") == "owner" and u.get("active"))
+    uid = str(owner["bale_user_id"])
+    db.upsert_user("555", role="manager", display_name="M")
+
+    class TSClient(p1.FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.log: list[tuple[str, str, str]] = []  # (thread, chat, text/doc)
+            self._l = threading.Lock()
+
+        def send_message(self, chat_id, text, reply_markup=None, **k):
+            with self._l:
+                self.log.append((threading.current_thread().name, str(chat_id), text))
+                return super().send_message(chat_id, text, reply_markup, **k)
+
+        def send_document(self, chat_id, path, caption=None, **k):
+            with self._l:
+                self.log.append((threading.current_thread().name, str(chat_id), "DOC " + str(path)))
+                return super().send_document(chat_id, path, caption, **k)
+
+    client = TSClient()
+    app = BotApp(client, db)  # type: ignore[arg-type]
+    app.bg.enable(workers=2)
+    gate = threading.Event()
+    real = cr.generate_files
+
+    def slow(*a, **k):
+        gate.wait(10)
+        return real(*a, **k)
+
+    cr.generate_files = slow
+    upd = iter(range(1000, 2000))
+
+    def send(who, text):
+        app.handle_update({"update_id": next(upd), "message": {"from": {"id": int(who), "first_name": "x"}, "chat": {"id": int(who)}, "text": text}})
+
+    try:
+        send(uid, kb.BTN_ANALYTICS); send(uid, kb.BTN_COMPREHENSIVE)
+        t0 = time.monotonic()
+        send(uid, kb.BTN_MY_CURRENT)
+        if not app.bg.busy(uid):  # section step first
+            send(uid, next(iter(kb.SECTION_STEP_BUTTONS)))
+        assert time.monotonic() - t0 < 2 and app.bg.busy(uid), "polling thread must not block"
+        n_owner = len([x for x in client.log if x[1] == uid])
+        send(uid, kb.BTN_HOME)  # queued while the job runs
+        time.sleep(0.2)
+        assert len([x for x in client.log if x[1] == uid]) == n_owner + 1 or any("در حال ساخت" in x[2] for x in client.log[-3:]), client.log[-3:]
+        before_other = len(client.log)
+        send("555", "/start")  # another user is served immediately
+        assert any(x[1] == "555" for x in client.log[before_other:]), "other user blocked"
+        gate.set()
+        for _ in range(300):
+            if not app.bg.busy(uid):
+                break
+            time.sleep(0.1)
+        assert not app.bg.busy(uid)
+        mine = [x for x in client.log if x[1] == uid]
+        docs = [i for i, x in enumerate(mine) if x[2].startswith("DOC ")]
+        home = [i for i, x in enumerate(mine) if "منوی اصلی" in x[2] or "خانه" in x[2]]
+        assert docs and any("در حال ساخت" in x[2] for x in mine), mine[-6:]
+        assert all(x[0].startswith("heavy") for x in mine if x[2].startswith("DOC ")), "docs not from worker"
+        assert home and max(home) > max(docs), ("queued HOME must run after the job", mine[-5:])
+        # background failure → tracking code to the user, app keeps working
+        cr.generate_files = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("bg secret"))
+        send(uid, kb.BTN_ANALYTICS); send(uid, kb.BTN_COMPREHENSIVE); send(uid, kb.BTN_MY_CURRENT)
+        if not app.bg.busy(uid):
+            send(uid, next(iter(kb.SECTION_STEP_BUTTONS)))
+        for _ in range(100):
+            if not app.bg.busy(uid):
+                break
+            time.sleep(0.05)
+        last = [x[2] for x in client.log if x[1] == uid][-3:]
+        assert any("کد پیگیری" in t for t in last) and not any("bg secret" in t for t in last), last
+    finally:
+        cr.generate_files = real
+        app.bg.shutdown()
+    print("  19c OK (heavy report in worker thread, polling not blocked, per-user queue in order, other users served, errors → tracking code)")
+
+
 def main() -> int:
     print("smoke phase3…")
     test_housekeeping()
@@ -386,6 +477,7 @@ def main() -> int:
     test_errors_and_expiry()
     test_styling()
     test_shared_core()
+    test_background()
     print("SMOKE_PHASE3_OK")
     return 0
 

@@ -60,6 +60,7 @@ from bot.jalali import (
 from bot.bale_api import BaleAPIError, BaleClient, public_markup
 from services import permissions as perm
 from services import user_errors
+from bot.background import BackgroundRunner, heavy
 from services import comprehensive_report as comprehensive_svc
 from bot.settings_text import (
     DEFAULT_INVITE_TEXT,
@@ -114,6 +115,7 @@ class BotApp:
         self.db = db
         perm.bind(db)  # role-permission overrides come from this DB
         self._boot_iso = _utc_iso()
+        self.bg = BackgroundRunner()  # 19c: enabled by main.py (tests stay synchronous)
         self._flow_marked: set[str] = set()
         self._flow_seen: set[str] = set()
         self._stale_once: set[str] = set()
@@ -1774,6 +1776,7 @@ class BotApp:
             )
         return True
 
+    @heavy("گزارش نیاز N تاندیش", notice=False)
     def _run_n_tundish(self, message: dict, section: str, n: int, mode: str) -> None:
         from services import n_tundish_report as nt
 
@@ -2799,6 +2802,7 @@ class BotApp:
                 pass
         self._run_critical_items_report(message, user, reno_mode=reno)
 
+    @heavy("گزارش اقلام بحرانی")
     def _run_critical_items_report(
         self, message: dict, user: dict, *, reno_mode: str = "with"
     ) -> None:
@@ -3645,6 +3649,11 @@ class BotApp:
             log_action="report_surplus",
         )
 
+    @heavy(
+        "گزارش مصرف بازه‌ای",
+        when=lambda self, message, user, mode, start, end, **k: mode == "period" and k.get("section") is not None
+        and perm.can_any(user, *perm.REPORT_FEATURES),
+    )
     def _run_ranged_analysis(
         self,
         message: dict,
@@ -3689,6 +3698,7 @@ class BotApp:
         self._reply(message, res.bot_text(), kb.analytics_menu(user))
         log_activity(self.db, user, "report_period")
 
+    @heavy("گزارش جامع", notice=False)
     def _run_comprehensive(
         self,
         message: dict,
@@ -3761,6 +3771,7 @@ class BotApp:
                 return path_obj, label
         return None, None
 
+    @heavy("خلاصه مصرف ماهیانه", notice=False)
     def _run_monthly_summary(
         self,
         message: dict,
@@ -6249,7 +6260,45 @@ class BotApp:
         else:
             self.on_material_request_back_review(message)
 
+    @staticmethod
+    def _update_uid(update: dict) -> str:
+        src = update.get("message") or update.get("callback_query") or {}
+        return str((src.get("from") or {}).get("id") or "")
+
+    def _heavy(self, message: dict, label: str, notice: bool, job) -> bool:
+        """Run ``job`` in the background pool (19c) or inline when disabled."""
+        uid = ""
+        try:
+            uid = self._uid(message)
+        except (KeyError, TypeError):
+            pass
+
+        def on_error(exc: BaseException) -> None:
+            text = user_errors.error_fa(f"ساخت {label} انجام نشد", exc, log=logger)
+            try:
+                self.client.send_message(self._chat_id(message), text)
+            except Exception:  # noqa: BLE001
+                logger.warning("could not send background error notice")
+
+        if self.bg.executor is not None and not self.bg.in_worker and uid:
+            # same report type for two users never runs concurrently: several outputs
+            # use fixed / per-second file names under reports/
+            lock = self.bg.label_lock(label)
+
+            def locked_job() -> None:
+                with lock:
+                    job()
+
+            if notice:
+                self._reply(message, f"⏳ در حال ساخت {label}… نتیجه همین‌جا ارسال می‌شود.")
+            if self.bg.submit(uid, locked_job, self.handle_update, on_error):
+                return True
+        job()
+        return True
+
     def handle_update(self, update: dict) -> None:
+        if self.bg.try_queue(self._update_uid(update), update):
+            return  # this user's heavy job is running; processed in order right after
         try:
             if "callback_query" in update:
                 self.handle_callback_query(update["callback_query"])
