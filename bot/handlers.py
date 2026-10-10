@@ -615,7 +615,7 @@ class BotApp:
 
         present = set(work.get("category_code", pd.Series(dtype=str)).dropna().astype(str))
         missing = [
-            {"category_code": code, "product_name": "—", "quantity": None}
+            {"category_code": code, "product_name": "—", "quantity": None, "_placeholder": True}
             for code in active_codes
             if code not in present
         ]
@@ -2076,6 +2076,18 @@ class BotApp:
                 "را آپلود کنید."
             )
         rows = inventory_table_rows(table)
+        # active codes with no item in منبع اصلی get one «—» placeholder row each, so the
+        # PDF row count = items + empty codes (bug 7: 150 = 149 items + code 0922)
+        empty_codes = (
+            [str(c) for c in table.loc[table["_placeholder"].fillna(False).astype(bool), "category_code"]]
+            if "_placeholder" in table.columns else []
+        )
+        n_items = len(rows) - len(empty_codes)
+        if empty_codes:
+            notice += (
+                f"\n{n_items} قلم منبع اصلی + {len(empty_codes)} کد دستهٔ فعال بدون قلم "
+                f"({'، '.join(empty_codes)}) با «—»."
+            )
         if not rows:
             self._reply(
                 message,
@@ -2092,7 +2104,10 @@ class BotApp:
             rows=rows,
             filename_stem="category_inventory",
             output_name="لیست_کد_دسته‌بندی_و_موجودی.pdf",
-            caption=f"📋 لیست کد دسته‌بندی و موجودی — {len(rows)} ردیف",
+            caption=(
+                f"📋 لیست کد دسته‌بندی و موجودی — {n_items} قلم"
+                + (f" + {len(empty_codes)} کد دسته بدون قلم" if empty_codes else "")
+            ),
             reply_ok=f"📋 جدول در PDF ارسال شد.\n{notice}",
             reply_markup=kb.inventory_menu(user),
             log_user=user,
@@ -2153,7 +2168,7 @@ class BotApp:
             )
             self._reply(
                 message,
-                f"✅ فایل منبع اصلی ارسال شد ({len(frame)} ردیف).",
+                f"✅ فایل منبع اصلی ارسال شد ({len(frame)} قلم/ردیف داده، بدون احتساب سطر عنوان).",
                 menu,
             )
             log_activity(self.db, user, "download_primary_inventory")
