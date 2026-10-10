@@ -12,9 +12,10 @@ Row eligibility (never modifies منبع اصلی):
     surplus section);
   * section by «محل استفاده» (contains بیلت / بلوم / اسلب; «بلوم / بیلت» → both); a
     row with no section word falls back to its section rate columns (> 0);
-  * «سطح ریخته گری …» (casting floor, e.g. شرود 1581) is NOT a tundish item: it goes
-    to the separate groups «موجودی سطح ریخته‌گری اسلب/بلوم/بیلت» (cast_*), never
-    to the slab/bloom/billet lists (user, 1405-07-18);
+  * شرود (shroud: code 1581, or keyword / شرح کالا containing «شرود» / shroud) is never
+    in any daily-stock list — it needs no request here (user, 1405-07-18). Other
+    «سطح ریخته گری …» rows stay in their section list (بتن 80 گان → بیلت, بتن پلی 60 →
+    اسلب + بلوم); there is no separate casting-floor list;
   * the shared شرکت / پیمانکار rule of :mod:`analytics.section_rules` for codes with
     BOTH sides: billet = company rows, bloom = contractor rows, slab = contractor rows
     + company rows whose محل استفاده has «اسلب».
@@ -49,10 +50,11 @@ SITE_LINE_PREFIX = "SS:"
 SITE_LINE_ASSIGNED_BY = "system:main_source_keyword"
 SIG_SETTING_KEY = "site_stock_lists_signature"
 TUNDISH_SECTIONS = ("slab", "bloom", "billet")
-# Tundish sections first, then the سطح ریخته‌گری (casting floor) groups.
-SECTION_ORDER = (*TUNDISH_SECTIONS, "cast_slab", "cast_bloom", "cast_billet")
+SECTION_ORDER = TUNDISH_SECTIONS
 SECTION_TOKENS = {"slab": "اسلب", "bloom": "بلوم", "billet": "بیلت"}
-CASTING_FLOOR_TOKEN = "سطح ریخته گری"  # «محل استفاده» phrase (ZWNJ → space)
+# شرود: excluded from every daily-stock list (code + name needles).
+SHROUD_CODES = frozenset({"1581"})
+SHROUD_NEEDLES = ("شرود", "shroud")
 SECTION_RATE_COLS = {
     "billet": ("billet_renovation", "billet_patching"),
     "bloom": ("bloom_renovation", "bloom_patching"),
@@ -99,6 +101,7 @@ def line_id(section: str, code: str, keyword: str) -> str:
 class SiteStockLists:
     lines: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     fallbacks: list[dict[str, Any]] = field(default_factory=list)   # keyword empty → شرح کالا
+    shroud_excluded: list[dict[str, Any]] = field(default_factory=list)  # شرود, never listed
     duplicates: list[dict[str, Any]] = field(default_factory=list)  # same keyword, ≠ codes
     unplaced: list[dict[str, Any]] = field(default_factory=list)    # no section found
     rate_fallback: list[dict[str, Any]] = field(default_factory=list)  # section from rates
@@ -135,13 +138,8 @@ def _keyword_series(df: pd.DataFrame) -> pd.Series:
 
 
 def location_groups(location: object) -> list[str]:
-    """Daily-stock groups for one «محل استفاده» value.
-
-    Parts are split on «،» / «,» / «+». A part with «سطح ریخته گری» is a casting-floor
-    part → ``cast_<section>`` for every section word in it («سطح ریخته گری اسلب/بلوم»
-    → cast_slab + cast_bloom); it NEVER feeds the tundish list (شرود 1581 is a
-    casting-floor item, not a slab-tundish item). Other parts → tundish sections
-    by word («بلوم / بیلت» → bloom + billet, «بلوم/اسلب» → bloom + slab).
+    """Daily-stock sections for one «محل استفاده» value, by section word
+    («بلوم / بیلت» → bloom + billet, «سطح ریخته گری اسلب/بلوم» → slab + bloom).
     """
     text = _txt(location).replace("\u200c", " ")
     text = " ".join(text.split())
@@ -150,12 +148,7 @@ def location_groups(location: object) -> list[str]:
         part = part.strip()
         if not part:
             continue
-        secs = [g for g in TUNDISH_SECTIONS if SECTION_TOKENS[g] in part]
-        if CASTING_FLOOR_TOKEN in part:
-            groups = [f"cast_{g}" for g in (secs or ["slab"])]
-        else:
-            groups = secs
-        for g in groups:
+        for g in (g for g in TUNDISH_SECTIONS if SECTION_TOKENS[g] in part):
             if g not in out:
                 out.append(g)
     return sorted(out, key=SECTION_ORDER.index)
@@ -187,6 +180,10 @@ def build_site_stock_lists(df: pd.DataFrame | None) -> SiteStockLists:
         iid = _txt(work.at[i, "id"])
         code = work.at[i, "_code"]
         kw = work.at[i, "_kw"]
+        hay = f"{kw} {names.at[i]}".casefold()
+        if code in SHROUD_CODES or any(nd in hay for nd in SHROUD_NEEDLES):
+            res.shroud_excluded.append({"id": iid, "category_code": code, "keyword": kw or names.at[i]})
+            continue
         if not kw:
             kw = names.at[i] or iid
             res.fallbacks.append({"id": iid, "category_code": code, "name": kw})

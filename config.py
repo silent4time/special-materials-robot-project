@@ -111,17 +111,17 @@ SITE_STOCK_GROUPS = {
     "slab": "موجودی مواد اسلب",
     "bloom": "موجودی مواد بلوم",
     "billet": "موجودی مواد بیلت",
-    # سطح ریخته‌گری (casting floor) items — NOT tundish-section items (user, 1405-07-18):
-    # «محل استفاده» = «سطح ریخته گری اسلب/بلوم/بیلت» (e.g. شرود 1581).
-    "cast_slab": "موجودی سطح ریخته گری اسلب",
-    "cast_bloom": "موجودی سطح ریخته گری بلوم",
-    "cast_billet": "موجودی سطح ریخته گری بیلت",
 }
 SITE_STOCK_GROUP_KEYS = frozenset(SITE_STOCK_GROUPS.keys())
-SITE_STOCK_TUNDISH_GROUP_KEYS = frozenset({"slab", "bloom", "billet"})
-SITE_STOCK_CASTING_GROUP_KEYS = frozenset({"cast_slab", "cast_bloom", "cast_billet"})
+SITE_STOCK_TUNDISH_GROUP_KEYS = SITE_STOCK_GROUP_KEYS
+# Legacy keys of the short-lived separate «سطح ریخته گری» groups (1b934b5, removed by
+# user decision 1405-07-18). Not offered in bot/web; the DB CHECK still accepts them
+# so the earlier schema upgrade stays harmless and any old rows remain readable.
+SITE_STOCK_LEGACY_GROUP_KEYS = ("cast_slab", "cast_bloom", "cast_billet")
 # SQL list for CHECK(tundish_group IN (...)) on site-stock tables (order stable).
-SITE_STOCK_GROUP_SQL = ",".join(f"'{k}'" for k in SITE_STOCK_GROUPS)
+SITE_STOCK_GROUP_SQL = ",".join(
+    f"'{k}'" for k in (*SITE_STOCK_GROUPS, *SITE_STOCK_LEGACY_GROUP_KEYS)
+)
 # Roles that may configure catalog / group assignments (not technicians)
 CATALOG_ADMIN_ROLES = frozenset({"owner", "manager", "responsible_officer"})
 

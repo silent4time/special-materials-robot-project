@@ -2,7 +2,8 @@
 """Smoke: daily site-stock input lists generated from منبع اصلی (name = «کلید واژه»).
 
 Self-contained temp DB + synthetic منبع اصلی; never touches data/bot.db.
-Covers: سطح ریخته گری rows (e.g. شرود 1581) only in the separate cast_* groups, section rule (usage + شرکت/پیمانکار for codes with both sides), priority 0
+Covers: شرود (1581 / any shroud) in NO list, other سطح ریخته گری rows stay in their section
+list (no separate casting list, no cast_* buttons/tabs), section rule (usage + شرکت/پیمانکار for codes with both sides), priority 0
 and 1800 excluded, nozzle codes one line per code in bloom + billet, merged-cell
 keyword forward-fill, empty-keyword fallback to شرح کالا, duplicate keyword → code
 suffix, bot + web show identical lists, saving works, lists follow source changes,
@@ -64,9 +65,11 @@ def source_frame() -> pd.DataFrame:
         _row("1275", CO + "30433T", "آجر کف دیگر", "آجر کف", "بیلت"),
         # no section word → section from rates
         _row("1590", CO + "59001A", "ماده بی‌محل", "ماده بی‌محل", "", slab_renovation=3),
-        # سطح ریخته گری (casting floor) → separate cast_* groups, never tundish lists
+        # شرود → never in any daily-stock list (code 1581 or shroud name on another code)
         _row("1581", CO + "07741J", "LADLE SHROUD SOLAR", "شرود", "سطح ریخته گری اسلب"),
         _row("1581", CO + "07742I", "LADLE SHROUD OCL", "شرود", "سطح ریخته‌گری اسلب", prio=2),
+        _row("1585", CO + "07999Z", "LADLE SHROUD BLOOM X", "شرود بلوم", "بلوم"),
+        # other سطح ریخته گری rows stay in their section list
         _row("1658", CT + "70021E", "جرم ریختنی 60", "بتن پلی 60", "سطح ریخته گری اسلب/بلوم"),
         _row("1451", CO + "34102X", "RAYA GUN 80", "بتن 80 گان", "سطح ریخته گری بیلت"),
     ])
@@ -92,11 +95,13 @@ def main() -> int:
         ssl.items_for_group(db, "slab")  # sync writes catalog rows only
         assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == src_hash  # منبع اصلی untouched
         names = {g: [ln["name_desc"] for ln in res.lines[g]] for g in ssl.SECTION_ORDER}
-        assert names["bloom"] == ["سنگ دیواره بلوم", "اسپینل کف 66*66", "نازل 16.5", "نازل 17"], names["bloom"]
-        assert names["billet"] == ["بتن 85bt", "آجر کف (کد 1274)", "آجر کف (کد 1275)", "سنگ دیواره بلومی",
-                                   "نازل 16.5", "نازل 17"], names["billet"]
+        assert names["bloom"] == ["سنگ دیواره بلوم", "اسپینل کف 66*66", "بتن پلی 60", "نازل 16.5",
+                                  "نازل 17"], names["bloom"]
+        assert names["billet"] == ["بتن 85bt", "آجر کف (کد 1274)", "آجر کف (کد 1275)", "بتن 80 گان",
+                                   "سنگ دیواره بلومی", "نازل 16.5", "نازل 17"], names["billet"]
         assert names["slab"] == ["بتن اسلب شرکتی", "بتن پلی 85", "ماده بی‌محل", "اسپینل کف 66*66",
-                                 "SOL/FP/S-10 , SOLAR"], names["slab"]
+                                 "بتن پلی 60", "SOL/FP/S-10 , SOLAR"], names["slab"]
+        assert set(ssl.SECTION_ORDER) == {"slab", "bloom", "billet"}
         spinel = next(ln for ln in res.lines["bloom"] if ln["category_code"] == "1643")
         assert len(spinel["member_ids"]) == 3  # ffilled keyword merges the 3rd id
         noz17 = next(ln for ln in res.lines["billet"] if ln["category_code"] == "1712")
@@ -106,15 +111,12 @@ def main() -> int:
         assert [r["id"] for r in res.rate_fallback] == [CO + "59001A"] and not res.unplaced
         all_codes = {ln["category_code"] for g in res.lines.values() for ln in g}
         assert "1800" not in all_codes and "1605" not in all_codes
-        tundish_codes = {ln["category_code"] for g in ssl.TUNDISH_SECTIONS for ln in res.lines[g]}
-        assert not tundish_codes & {"1581", "1658", "1451"}, tundish_codes  # casting floor ≠ tundish
-        assert names["cast_slab"] == ["شرود", "بتن پلی 60"], names["cast_slab"]
-        assert names["cast_bloom"] == ["بتن پلی 60"] and names["cast_billet"] == ["بتن 80 گان"], names
-        shroud = res.lines["cast_slab"][0]
-        assert shroud["member_ids"] == [CO + "07741J", CO + "07742I"]  # ZWNJ variant too
-        assert ssl.location_groups("سطح ریخته گری اسلب/بلوم") == ["cast_slab", "cast_bloom"]
+        assert not {"1581", "1585"} & all_codes, all_codes  # شرود in no list
+        assert not any("شرود" in n for g in names.values() for n in g)
+        assert {r["id"] for r in res.shroud_excluded} == {CO + "07741J", CO + "07742I", CO + "07999Z"}
+        assert ssl.location_groups("سطح ریخته گری اسلب/بلوم") == ["slab", "bloom"]
         assert ssl.location_groups("بلوم / بیلت") == ["bloom", "billet"]
-        assert ssl.location_groups("اسلب، سطح ریخته گری اسلب") == ["slab", "cast_slab"]
+        assert ssl.location_groups("سطح ریخته‌گری بیلت") == ["billet"]
         print("build OK", res.counts())
 
         # --- bot: «موجودی مواد بلوم» shows the generated list
@@ -142,14 +144,13 @@ def main() -> int:
 
         ik = kb.site_stock_inline_keyboard(pend["items"], {}, group_key="bloom")
         assert "نازل 16.5" in str(ik) and "SS:" not in str(ik)
-        # «موجودی سطح ریخته‌گری اسلب» button → cast_slab list (shroud there, not in slab)
-        assert kb.SITE_GROUP_BUTTONS[kb.BTN_SITE_CAST_SLAB] == "cast_slab"
+        # no separate casting-floor buttons: only the three section groups
+        assert set(kb.SITE_GROUP_BUTTONS.values()) == {"slab", "bloom", "billet"}
         menu_txt = {b["text"] for row in kb.site_stock_menu()["keyboard"] for b in row}
-        assert kb.BTN_SITE_CAST_SLAB in menu_txt and kb.BTN_SITE_CAST_BILLET in menu_txt
-        app.on_site_stock_group(msg, kb.SITE_GROUP_BUTTONS[kb.BTN_SITE_CAST_SLAB])
-        assert [it["name_desc"] for it in app._site_stock_pending["702"]["items"]] == ["شرود", "بتن پلی 60"]
+        assert not any("سطح ریخته" in t for t in menu_txt), menu_txt
         app.on_site_stock_group(msg, "slab")
-        assert "شرود" not in [it["name_desc"] for it in app._site_stock_pending["702"]["items"]]
+        slab_bot = [it["name_desc"] for it in app._site_stock_pending["702"]["items"]]
+        assert slab_bot == names["slab"] and "شرود" not in slab_bot
 
         # --- web: identical list + save
         from fastapi.testclient import TestClient
@@ -176,14 +177,13 @@ def main() -> int:
         assert ent and ent[0]["item_name_snapshot"] == "نازل 16.5" and float(ent[0]["quantity"]) == 12
         rows = db.site_stock_as_remaining_rows("2026-10-10")
         assert rows[0]["product_name"] == "نازل 16.5"
-        # web: casting-floor tab + save (CHECK accepts cast_* groups)
-        r = c.get("/stock", params={"group": "cast_slab"})
-        assert r.status_code == 200 and "شرود" in r.text and "موجودی سطح ریخته گری اسلب" in r.text
-        sh_id = next(it["id"] for it in ssl.items_for_group(db, "cast_slab") if it["name_desc"] == "شرود")
-        r = c.post("/stock/save", data={"group": "cast_slab", "entry_date": "2026-10-10", f"qty_{sh_id}": "7"})
-        assert r.status_code == 200 and "✅ 1 قلم" in r.text, r.text[-800:]
-        ent = db.list_site_stock_entries(entry_date="2026-10-10", tundish_group="cast_slab")
-        assert ent and ent[0]["item_name_snapshot"] == "شرود" and float(ent[0]["quantity"]) == 7
+        # web: no casting-floor tab, shroud absent, concretes in their section tabs
+        r = c.get("/stock", params={"group": "slab"})
+        assert r.status_code == 200 and "سطح ریخته" not in r.text and "شرود" not in r.text
+        assert "بتن پلی 60" in r.text
+        r = c.get("/stock", params={"group": "cast_slab"})  # unknown group → falls back to slab
+        assert r.status_code == 200 and "شرود" not in r.text
+        assert ssl.items_for_group(db, "cast_slab") == []
 
         # synthetic lines stay out of warehouse catalog listings
         assert not any(ssl.is_site_line_id(it["id"]) for it in db.list_catalog_items())
@@ -223,13 +223,20 @@ def main() -> int:
         con.close()
         odb = Database(old)
         odb.upsert_catalog_item("B1", "b")
-        odb.assign_item_to_group("B1", "cast_billet")
         assert odb.get_item_assignment("A1")["tundish_group"] == "slab"
+        try:  # app layer only offers slab/bloom/billet …
+            odb.assign_item_to_group("B1", "cast_billet")
+            raise AssertionError("cast_billet must be rejected by the app")
+        except ValueError:
+            pass
+        with odb.connect() as cc:  # … but the DB CHECK still accepts legacy cast_* rows
+            cc.execute("INSERT INTO catalog_group_assignments VALUES ('B1','cast_billet','x','t')")
         assert odb.get_item_assignment("B1")["tundish_group"] == "cast_billet"
         with odb.connect() as cc:
             assert cc.execute("SELECT 1 FROM sqlite_master WHERE name='idx_catalog_assign_group'").fetchone()
         Database(old)  # idempotent
-        print("bot + web lists identical, casting-floor groups, save, sync-follow, catalog isolation, migration OK")
+        print("bot + web lists identical, shroud excluded, casting concretes in sections, save, "
+              "sync-follow, catalog isolation, legacy-schema migration OK")
         print("SMOKE_SITE_STOCK_LISTS_OK")
         return 0
     finally:
