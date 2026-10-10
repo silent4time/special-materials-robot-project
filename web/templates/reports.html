@@ -66,6 +66,7 @@
 <div class="card" id="period">
   <h2>📅 گزارش مصرف بازه‌ای</h2>
   <p class="muted">منبع: (الف) اختلاف ثبت‌های موجودی روزانهٔ سایت (کاهش = مصرف) و (ب) جداول مصرف تاندیش ماهانهٔ هدف اصلی برای ماه‌های کامل داخل بازه.</p>
+  {% if period_availability %}<p class="muted" style="white-space: pre-line">{{ period_availability }}</p>{% endif %}
   <form method="get" action="/reports/period" class="form-grid">
     <label>از سال<input type="number" name="from_year" value="{{ critical_year }}"></label>
     <label>از ماه<select name="from_month">{% for n, name in month_names %}<option value="{{ n }}" {% if n == critical_month %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>

@@ -842,9 +842,9 @@ def missing_files_for_goal(goal: str, completeness: dict[str, bool]) -> list[str
         if not has_rates:
             missing.append(f"{label('tank_consumption')} یا {label('monthly_consumption')}")
     elif goal == "period":
-        # Dated period series needs tank Excel; monthly/site snapshot insufficient.
-        if not has_tank_excel:
-            missing.append(f"{label('tank_consumption')} (Excel تاریخی مصرف)")
+        # «📅 گزارش مصرف بازه‌ای» was rebuilt on DB data (site-stock diffs + main-goal
+        # monthly tables, services.period_consumption) — no file is required here.
+        pass
     elif goal == "forecast":
         if not has_rates:
             missing.append(f"{label('tank_consumption')} یا {label('monthly_consumption')}")

@@ -82,6 +82,12 @@ async def reports_page(
     # t221u: «گزارش اقلام ورودی به انبار» — same stored reports as the bot
     ctx["inbound_latest"] = inbound_svc.latest_report(db)
     ctx["inbound_history"] = inbound_svc.list_reports(db, limit=20)
+    try:
+        from services import period_consumption as _pc
+
+        ctx["period_availability"] = _pc.availability_text_fa(_pc.data_availability(db))
+    except Exception:  # noqa: BLE001
+        ctx["period_availability"] = ""
     return render(request, "reports.html", ctx)
 
 

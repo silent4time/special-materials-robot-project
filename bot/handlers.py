@@ -3009,7 +3009,20 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
-        if not self._require_files(message, user, "period"):
+        # rebuilt report: site-stock diffs (DB) + main-goal monthly tundish tables —
+        # no technician / historical-consumption Excel is required (bug 1)
+        if self._deny_technician(message, user, *perm.REPORT_FEATURES):
+            return
+        from services import period_consumption as pc
+
+        av = pc.data_availability(self.db)
+        if not pc.has_any_data(av):
+            self._reply(
+                message,
+                "📅 گزارش مصرف بازه‌ای هنوز دادهٔ کافی ندارد.\n" + pc.availability_text_fa(av)
+                + f"\n\nموجودی روزانه را از «{kb.BTN_SITE_STOCK}» ثبت کنید یا جدول مصرف تاندیش ماهانه را در «هدف اصلی» وارد کنید.",
+                kb.analytics_menu(user),
+            )
             return
         self._ask_month_year_range(message, user, "period")
 
@@ -3652,7 +3665,7 @@ class BotApp:
     @heavy(
         "گزارش مصرف بازه‌ای",
         when=lambda self, message, user, mode, start, end, **k: mode == "period" and k.get("section") is not None
-        and perm.can_any(user, *perm.REPORT_FEATURES),
+        and perm.can_any(user, perm.REPORT_FEATURES),
     )
     def _run_ranged_analysis(
         self,

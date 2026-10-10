@@ -145,6 +145,12 @@ class PeriodConsumptionResult:
             lines.append(f"ب) جداول تاندیش ماهانه: {len(self.mg_rows)} ردیف")
             for r in self.mg_rows[:top]:
                 lines.append(f"• {r['بخش']} | {r['ماده']}: {r['مصرف']} {r['واحد']}")
+        if self.mg_counts:
+            lines.append("تعداد تاندیش ماه‌های کامل:")
+            for r in self.mg_counts[: top * 2]:
+                lines.append(f"• {r['بخش']} | {r['ماه']}: {r['تعداد تاندیش']} تاندیش")
+        lines.append("")
+        lines.append("جزئیات کامل در فایل PDF و اکسل.")
         return "\n".join(lines)
 
 
@@ -246,6 +252,63 @@ def _mg_rows(db: Any, months: list[tuple[int, int]], section: str | None) -> tup
     return rows, counts, sorted(used_months)
 
 
+def data_availability(db: Any, section: str | None = None) -> dict[str, Any]:
+    """What the two sources actually hold (for clear «insufficient data» messages)."""
+    entries = [
+        e for e in db.list_site_stock_entries()
+        if not section or str(e.get("tundish_group") or "").removeprefix("cast_") == section
+    ]
+    dates = sorted({d for d in (_to_date(e.get("entry_date")) for e in entries) if d})
+    per_item: dict[tuple[str, str], int] = {}
+    for e in entries:
+        k = (str(e.get("tundish_group")), str(e.get("item_id")))
+        per_item[k] = per_item.get(k, 0) + 1
+    with db.connect() as conn:
+        q = "SELECT DISTINCT year, month FROM main_goal_consumption"
+        args: tuple = ()
+        if section:
+            q += " WHERE section = ?"
+            args = (section,)
+        months = sorted({(int(r[0] or 0), int(r[1] or 0)) for r in conn.execute(q, args).fetchall()} - {(0, 0)})
+    return {
+        "site_dates": dates,
+        "site_entries": len(entries),
+        "site_items_with_diff": sum(1 for n in per_item.values() if n >= 2),
+        "mg_months": months,
+    }
+
+
+def availability_text_fa(av: dict[str, Any]) -> str:
+    from bot.jalali import PERSIAN_MONTH_NAMES, format_date
+
+    dates = av.get("site_dates") or []
+    if not dates:
+        site = "• موجودی روزانهٔ سایت: هیچ ثبتی وجود ندارد."
+    elif len(dates) == 1:
+        site = (
+            f"• موجودی روزانهٔ سایت: فقط ثبت تاریخ {format_date(dates[0])} موجود است "
+            f"({av.get('site_entries', 0)} قلم)؛ برای محاسبهٔ مصرف حداقل دو ثبت در دو تاریخ "
+            "برای همان قلم لازم است."
+        )
+    else:
+        site = (
+            f"• موجودی روزانهٔ سایت: ثبت‌ها از {format_date(dates[0])} تا {format_date(dates[-1])} "
+            f"({len(dates)} تاریخ، {av.get('site_items_with_diff', 0)} قلم با حداقل دو ثبت)."
+        )
+    months = av.get("mg_months") or []
+    if months:
+        mg = "• مصرف تاندیش ماهانهٔ هدف اصلی: " + "، ".join(
+            f"{PERSIAN_MONTH_NAMES.get(m, m)} {y}" for y, m in months
+        ) + " (فقط ماه‌هایی که کامل داخل بازه باشند استفاده می‌شوند)."
+    else:
+        mg = "• مصرف تاندیش ماهانهٔ هدف اصلی: هیچ ماهی ثبت نشده است."
+    return "دادهٔ موجود:\n" + site + "\n" + mg
+
+
+def has_any_data(av: dict[str, Any]) -> bool:
+    return bool(av.get("site_items_with_diff") or av.get("mg_months"))
+
+
 def build(db: Any, start: date, end: date, *, range_label: str, section: str | None = None) -> PeriodConsumptionResult:
     if section not in (None, "", "slab", "bloom", "billet"):
         section = None
@@ -253,10 +316,16 @@ def build(db: Any, start: date, end: date, *, range_label: str, section: str | N
     res.site_rows, res.site_entry_count = _site_rows(db, start, end, res.section)
     res.mg_rows, res.mg_counts, res.mg_months = _mg_rows(db, full_months_in_range(start, end), res.section)
     if not res.site_rows and not res.mg_rows and not res.mg_counts:
+        from bot.jalali import format_date
+
         res.error = (
-            f"در بازهٔ «{range_label}» ({res.section_label}) دادهٔ مصرفی یافت نشد:\n"
-            "• موجودی روزانهٔ سایت حداقل دو ثبت (یکی قبل یا داخل بازه) برای محاسبهٔ اختلاف لازم دارد؛\n"
-            "• جدول مصرف تاندیش ماهانه (هدف اصلی) فقط برای ماه‌هایی که کامل داخل بازه‌اند استفاده می‌شود."
+            f"⚠️ برای بازهٔ «{range_label}» ("
+            + ("" if format_date(start) in range_label else f"{format_date(start)} تا {format_date(end)} — ")
+            + f"{res.section_label}) "
+            "دادهٔ کافی برای گزارش مصرف نیست.\n"
+            "لازم است: دو ثبت «موجودی روزانه سایت» برای یک قلم (یکی قبل یا داخل بازه و یکی داخل بازه)، "
+            "یا جدول مصرف تاندیش ماهانهٔ «هدف اصلی» برای ماهی که کامل داخل بازه باشد.\n\n"
+            + availability_text_fa(data_availability(db, res.section))
         )
     return res
 
@@ -279,9 +348,15 @@ def generate_files(
     if res.error:
         return res
     ensure_dirs()
-    out = Path(output_dir) if output_dir else REPORT_DIR
+    from bot.jalali import format_date
+
+    out = (Path(output_dir) if output_dir else REPORT_DIR) / f"period_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
     out.mkdir(parents=True, exist_ok=True)
-    stem = f"period_consumption_{res.section or 'all'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    sec_fa = res.section_label.replace(" ", "_")
+    stem = (
+        f"گزارش_مصرف_بازه‌ای_{sec_fa}_"
+        f"{format_date(res.start).replace('/', '-')}_تا_{format_date(res.end).replace('/', '-')}"
+    )
     res.pdf = generate_simple_report_pdf(
         res.title, subtitle=res.subtitle, sections=res.sections(),
         output_path=out / f"{stem}.pdf", filename_stem="period_consumption", letterhead_path=letterhead_path,
