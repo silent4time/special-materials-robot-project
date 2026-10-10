@@ -54,6 +54,9 @@ def test_housekeeping() -> None:
 
     assert bot_main._is_transient(BaleAPIError("getUpdates", "The read operation timed out"))
     assert not bot_main._is_transient(BaleAPIError("getUpdates", "Unauthorized"))
+    for seen in ("Server disconnected without sending a response.",
+                 "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1029)"):
+        assert bot_main._is_transient(BaleAPIError("getUpdates", seen)), seen  # from the old data/bot.log
     logging.getLogger().handlers.clear()
     print("  19e housekeeping OK (backups keep 5/30d, reports 60d, rotating log, transient timeouts)")
 

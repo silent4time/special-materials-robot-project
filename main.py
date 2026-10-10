@@ -27,7 +27,10 @@ install_log_redaction()  # httpx/httpcore → WARNING; token never reaches the l
 logger = logging.getLogger("bale-materials-bot")
 
 
-_TRANSIENT_MARKS = ("timed out", "timeout", "temporarily", "connection reset", "502", "503", "504", "remote protocol")
+_TRANSIENT_MARKS = (
+    "timed out", "timeout", "temporarily", "connection reset", "502", "503", "504",
+    "remote protocol", "server disconnected", "unexpected_eof", "eof occurred", "connection refused",
+)
 
 
 def _is_transient(exc: BaleAPIError) -> bool:
