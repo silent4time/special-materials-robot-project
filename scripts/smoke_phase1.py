@@ -506,6 +506,82 @@ def test_qa_fixes(tmp: Path) -> None:
     print("  QA fixes (period/stock prompt/env text/labels/nav/inbound/0 تن/perm queue) OK")
 
 
+def test_qa2_fixes(tmp: Path) -> None:
+    """Live-QA pass 2: forecast skips untonned months, settings nav, one-step back,
+    Persian file names, unit display, reports header, stock-group wording."""
+    from bot import keyboards as kb
+    from bot.handlers import BotApp
+    from services import main_goal_history as mgh
+    from services.file_names import fa_stem
+    from services.units import unit_fa
+
+    db = _db_copy(tmp)
+    mgr = next(
+        (u for u in db.list_users() if u.get("role") in ("manager", "owner") and u.get("active")), None
+    )
+    assert mgr
+    uid = str(mgr["bale_user_id"])
+    client = FakeClient()
+    app = BotApp(client, db)  # type: ignore[arg-type]
+
+    def send(text: str):
+        n = len(client.sent)
+        app.handle_message({"from": {"id": int(uid), "first_name": "x"}, "chat": {"id": int(uid)}, "text": text})
+        new = client.sent[n:]
+        return "\n".join(t for _c, t, _m in new), _btns(new[-1][2]) if new else []
+
+    # BUG 1: scenario 2 averages only months that have tonnage and says which were used
+    model = mgh.build_history_model(mgh.load_history(db), None)
+    if model.tonnage_months:
+        res = mgh.scenario_forecast(model, 3)
+        assert res.ok and "ماه‌های استفاده‌شده برای تناژ" in res.summary, res.summary
+        tot = sum(float(r["تناژ_پیش‌بینی_کل"]) for r in res.sections[0]["rows"][:-1])
+        assert tot > 0, res.summary
+        if model.skipped_tonnage_months:
+            assert "کنار گذاشته (تناژ ثبت نشده)" in res.summary
+        assert mgh.file_stem_fa(res).startswith("هدف_اصلی_سناریو_۲_پیش‌بینی_۳_ماه")
+    # BUG 2: user activity report keeps the ⚙️ تنظیمات keyboard
+    send("/reset")
+    send(kb.BTN_BOT_SETTINGS)
+    send(kb.BTN_USER_ACTIVITY)
+    _txt, btns = send(kb.BTN_MY_CURRENT)
+    assert kb.BTN_USER_ACTIVITY in btns and kb.BTN_DAILY not in btns, btns
+    # (a) one-step back: section step → range prompt; N-tundish count → section
+    send("/reset")
+    send(kb.BTN_ANALYTICS)
+    send(kb.BTN_COMPREHENSIVE)
+    send(kb.BTN_MY_3)
+    _txt, btns = send(kb.BTN_BACK)
+    assert kb.BTN_MY_3 in btns, btns
+    send("/reset")
+    send(kb.BTN_MAIN_GOAL)
+    send(kb.BTN_MG_SCN_TARGET)
+    send(kb.BTN_MG_P3)
+    _txt, btns = send(kb.BTN_BACK)
+    assert kb.BTN_MG_P3 in btns and kb.BTN_MG_SEC_BILLET not in btns, btns
+    # (b) upload prompts carry back/home + help
+    send("/reset")
+    send(kb.BTN_UPLOAD_MENU)
+    for b in (kb.BTN_WAREHOUSE_STOCK, kb.BTN_MONTHLY):
+        _txt, btns = send(b)
+        assert {kb.BTN_BACK, kb.BTN_HOME, kb.BTN_HELP, kb.BTN_CANCEL} <= set(btns), btns
+        _txt, btns = send(kb.BTN_BACK)
+        assert kb.BTN_WAREHOUSE_STOCK in btns, btns
+    # (c) Persian names, (d) units
+    assert fa_stem("گزارش جامع", "مهر 1405").startswith("گزارش_جامع_مهر_1405_")
+    assert unit_fa("NO") == "عدد" and unit_fa("kg") == "کیلوگرم" and unit_fa("عدد") == "عدد"
+    # (e) reports header fits the reports menu
+    send("/reset")
+    txt, _ = send(kb.BTN_ANALYTICS)
+    assert "نوع ورود اطلاعات" not in txt and "استفاده کنید" not in txt, txt
+    # (f) stock-group wording
+    send("/reset")
+    send(kb.BTN_BOT_SETTINGS)
+    txt, _ = send(kb.BTN_SET_STOCK_GROUP)
+    assert "شناسه منفی" not in txt, txt
+    print("  QA-2 fixes (forecast basis/settings nav/step back/upload nav/names/units/header) OK")
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="smoke_p1_"))
     import config
@@ -517,6 +593,7 @@ def main() -> int:
         test_bot_reports(tmp)
         test_web(tmp)
         test_qa_fixes(tmp)
+        test_qa2_fixes(tmp)
         test_aliases_and_removed(tmp)
         test_nav(tmp)
         test_menu_walk(tmp)
