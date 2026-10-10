@@ -6338,7 +6338,12 @@ class BotApp:
         return True
 
     def handle_update(self, update: dict) -> None:
-        if self.bg.try_queue(self._update_uid(update), update):
+        cq_data = str((update.get("callback_query") or {}).get("data") or "")
+        # «🔐 دسترسی نقش‌ها» toggles are tiny, order-independent DB writes: never park them
+        # behind the same user's running heavy report (a queued toggle waited for the whole report)
+        if cq_data.startswith(kb.CB_ROLE_PERM_PREFIX):
+            pass
+        elif self.bg.try_queue(self._update_uid(update), update):
             return  # this user's heavy job is running; processed in order right after
         try:
             if "callback_query" in update:

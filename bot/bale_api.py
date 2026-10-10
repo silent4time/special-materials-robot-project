@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -18,6 +19,8 @@ from config import BALE_API_BASE, BALE_BOT_TOKEN, POLL_TIMEOUT
 from log_redact import redact
 
 logger = logging.getLogger(__name__)
+
+SLOW_CALL_SECONDS = 3.0
 
 
 def public_markup(markup: dict | None) -> dict | None:
@@ -52,6 +55,7 @@ class BaleClient:
 
     def _call(self, method: str, data: dict | None = None, files: dict | None = None) -> Any:
         url = f"{self.base}/{method}"
+        started = time.monotonic()
         try:
             if files:
                 resp = self._client.post(url, data=data or {}, files=files)
@@ -61,6 +65,11 @@ class BaleClient:
             body = resp.json()
         except httpx.HTTPError as exc:
             raise BaleAPIError(method, str(exc)) from exc
+        finally:
+            took = time.monotonic() - started
+            if method != "getUpdates" and took > SLOW_CALL_SECONDS:
+                # method name + duration only (never the URL: it contains the token)
+                logger.warning("slow Bale API call %s: %.1fs", method, took)
         if not body.get("ok"):
             raise BaleAPIError(method, body.get("description", "unknown"), body)
         return body.get("result")
