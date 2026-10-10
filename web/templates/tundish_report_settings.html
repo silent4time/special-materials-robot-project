@@ -33,13 +33,11 @@
         </td>
         <td><textarea form="{{ fid }}" name="options" rows="3">{{ it.options | join('\n') }}</textarea></td>
         <td><input form="{{ fid }}" type="checkbox" name="required" value="1" {% if it.required %}checked{% endif %}></td>
-        <td><button form="{{ fid }}" type="submit">ذخیره</button></td>
-      </tr>
-      <tr>
-        <td colspan="6" style="text-align:left">
-          <form method="post" action="/tundish-report/settings/item/{{ it.id }}/delete" onsubmit="return confirm('این قلم حذف شود؟')" style="display:inline">
+        <td class="actions">
+          <button form="{{ fid }}" type="submit">ذخیره</button>
+          <form method="post" action="/tundish-report/settings/item/{{ it.id }}/delete" onsubmit="return confirm('قلم «{{ it.label }}» حذف شود؟')">
             <input type="hidden" name="section" value="{{ section }}">
-            <button type="submit" class="linkish">🗑 حذف «{{ it.label }}»</button>
+            <button type="submit" class="linkish" title="حذف «{{ it.label }}»">🗑 حذف</button>
           </form>
         </td>
       </tr>
@@ -50,7 +48,7 @@
   </table>
 
   <h2>➕ افزودن قلم</h2>
-  <form method="post" action="/tundish-report/settings/item/add">
+  <form method="post" action="/tundish-report/settings/item/add" class="form-grid">
     <input type="hidden" name="section" value="{{ section }}">
     <label>برچسب <input name="label" maxlength="60" required></label>
     <label>نوع
@@ -58,7 +56,7 @@
     </label>
     <label>گزینه‌ها (برای انتخابی؛ هر سطر یا با «،»)<textarea name="options" rows="3"></textarea></label>
     <label><input type="checkbox" name="required" value="1" checked> اجباری</label>
-    <p><button type="submit">افزودن</button></p>
+    <div class="report-actions"><button type="submit">افزودن</button></div>
   </form>
 
   <h2>🏭 خطوط / ماشین‌های {{ section_fa }}</h2>
