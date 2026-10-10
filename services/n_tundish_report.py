@@ -33,6 +33,7 @@ from analytics.critical_items import (
     normalize_reno_mode,
     prepare_code_rates,
 )
+from services.units import unit_fa
 
 SECTIONS: dict[str, str] = {"slab": "اسلب", "bloom": "بلوم", "billet": "بیلت"}
 SECTION_BY_FA: dict[str, str] = {v: k for k, v in SECTIONS.items()}
@@ -150,7 +151,7 @@ class NTundishResult:
                 continue
             lines.append(
                 f"• {r[COL_CODE]} {r[COL_KEYWORD]} ({r[COL_SUPPLIER]}): نیاز {r[COL_NEED]} | "
-                f"موجودی {r[COL_STOCK]} | کسری {r[COL_SHORT]} {r[COL_UNIT]}"
+                f"موجودی {r[COL_STOCK]} | کسری {r[COL_SHORT]} {unit_fa(r[COL_UNIT])}"
             )
             shown += 1
             if shown >= top:

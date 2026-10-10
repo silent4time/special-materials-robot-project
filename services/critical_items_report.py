@@ -52,6 +52,7 @@ from analytics.critical_items import (
 from bot.jalali import PERSIAN_MONTH_NAMES
 from config import REPORT_DIR, ensure_dirs
 from db.models import Database
+from services.units import unit_fa
 
 SEGMENT_HEADER_BG = {SEGMENT_COMPANY: "#b71c1c", SEGMENT_CONTRACTOR: "#e65100"}
 SEGMENT_FILE_SUFFIX = {SEGMENT_COMPANY: "شرکت", SEGMENT_CONTRACTOR: "پیمانکار"}
@@ -316,7 +317,7 @@ def critical_items_bot_lines(res: CriticalItemsResult, top: int = BOT_TOP_ROWS) 
             lines.append(
                 f"  {r.get('کد چهاررقمی', '')} {r.get('کد و شرح کالا', '')} — "
                 f"{r.get(COL_ORIGIN, '')}، افق {r.get(COL_HORIZON, '')} ماه | "
-                f"موجودی {r.get('موجودی', '')} {r.get('واحد', '')} | "
+                f"موجودی {r.get('موجودی', '')} {unit_fa(r.get('واحد', ''))} | "
                 f"{COL_MONTHLY}: {r.get(COL_MONTHLY, '')} | "
                 f"{COL_FORECAST}: {r.get(COL_FORECAST, '')} | "
                 f"{COL_NEED}: {r.get(COL_NEED, '')} | {COL_DAYS}: {r.get(COL_DAYS, '')}"
