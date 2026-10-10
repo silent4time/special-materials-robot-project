@@ -902,7 +902,6 @@ def site_stock_inline_keyboard(
     group = (group_key or "").strip().lower()
     rows: list[list[dict[str, str]]] = []
     for idx, it in enumerate(items):
-        name = _truncate_btn(item_display_name(it))
         iid = it.get("id")
         qty = values.get(iid) if iid is not None else None
         if qty is None:
