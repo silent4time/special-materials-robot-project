@@ -893,10 +893,10 @@ def site_stock_inline_keyboard(
     *,
     group_key: str,
 ) -> dict:
-    """Two-column inline keyboard: شرح کالا | تعداد, plus confirm/cancel.
+    """One full-width button per item: «نام قلم — مقدار» (tap = enter/edit qty),
+    plus confirm/cancel. Full width so names/quantities are not cut on phones.
 
-    ``callback_data`` is compact: ``ss|{group}|{idx}|q`` / ``ss|{group}|{idx}|n`` /
-    ``ss|ok`` / ``ss|x``.
+    ``callback_data`` is compact: ``ss|{group}|{idx}|q`` / ``ss|ok`` / ``ss|x``.
     """
     values = values or {}
     group = (group_key or "").strip().lower()
@@ -906,19 +906,15 @@ def site_stock_inline_keyboard(
         iid = it.get("id")
         qty = values.get(iid) if iid is not None else None
         if qty is None:
-            qty_label = _QTY_PLACEHOLDER
+            qty_label = "وارد نشده"
         else:
             try:
-                qty_label = f"{float(qty):g}"
+                qty_label = f"{float(qty):,.2f}".rstrip("0").rstrip(".")
             except (TypeError, ValueError):
                 qty_label = str(qty)
-            qty_label = _truncate_btn(qty_label, 16)
-        rows.append(
-            [
-                {"text": name, "callback_data": f"ss|{group}|{idx}|n"},
-                {"text": qty_label, "callback_data": f"ss|{group}|{idx}|q"},
-            ]
-        )
+            qty_label = "✅ " + _truncate_btn(qty_label, 16)
+        name = _truncate_btn(item_display_name(it), _BTN_TEXT_LIMIT - len(qty_label) - 6)
+        rows.append([{"text": f"{idx + 1}. {name} — {qty_label}", "callback_data": f"ss|{group}|{idx}|q"}])
     rows.append([{"text": f"✅ {BTN_SITE_CONFIRM}", "callback_data": "ss|ok"}])
     rows.append([{"text": BTN_SITE_CANCEL, "callback_data": "ss|x"}])
     return BaleClient.inline_keyboard(rows)

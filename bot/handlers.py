@@ -4033,16 +4033,25 @@ class BotApp:
             rem_source = f"موجودی روزانه سایت — {format_date(day)}"
         return rem, rem_source
 
-    def _clear_site_stock_pending(self, uid: str) -> None:
-        """Drop pending entry and strip inline markup so the user is unlocked."""
+    def _clear_site_stock_pending(self, uid: str, note: str = "لغو شد؛ چیزی ذخیره نشد.") -> None:
+        """Drop pending entry; replace the inline list with a short note (never leave
+        the bare «اقلام (N) — ورود هدایت‌شده:» header behind)."""
         pending = self._site_stock_pending.pop(str(uid), None)
         if pending and pending.get("chat_id") is not None and pending.get("message_id") is not None:
+            label = SITE_STOCK_GROUPS.get(pending.get("group"), pending.get("group") or "")
             try:
-                self.client.edit_message_reply_markup(
-                    pending["chat_id"], int(pending["message_id"]), {"inline_keyboard": []}
+                self.client.edit_message_text(
+                    pending["chat_id"], int(pending["message_id"]),
+                    f"📋 {label}: {note}" if label else note,
+                    reply_markup={"inline_keyboard": []},
                 )
             except BaleAPIError:
-                pass
+                try:
+                    self.client.edit_message_reply_markup(
+                        pending["chat_id"], int(pending["message_id"]), {"inline_keyboard": []}
+                    )
+                except BaleAPIError:
+                    pass
 
     def _actor_full_name(self, user: dict | None = None, *, actor_display_name: str | None = None) -> str:
         """Display name only (no Bale id) for registrar stamps."""
@@ -4389,7 +4398,7 @@ class BotApp:
             return
         uid = str(user["bale_user_id"])
         self._clear_site_stock_pending(uid)
-        self._reply(message, "ورود موجودی لغو شد.", kb.site_stock_menu())
+        self._reply(message, "ورود موجودی لغو شد؛ چیزی ذخیره نشد.", kb.site_stock_menu())
 
     def _finish_site_stock_entry(self, message: dict, user: dict) -> None:
         """Persist filled quantities and show summary + registrar stamp."""
