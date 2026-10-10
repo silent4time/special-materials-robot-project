@@ -744,11 +744,12 @@ def material_request_days_menu() -> dict:
 
 
 def material_request_review_menu(*, draft: bool = True) -> dict:
+    """Proposal review (درخواست مواد / برگشت به انبار) + standard «⬅️ بازگشت / 🏠 منوی اصلی»."""
     rows = [[BTN_MR_CONFIRM_ALL, BTN_MR_EDIT]]
     if draft:
         rows.append([BTN_MR_DRAFT])
     rows.append([BTN_CANCEL])
-    return _kb(rows, "flow", nav=False)
+    return _kb(rows, "flow", nav=True)
 
 
 def material_request_edit_menu() -> dict:
