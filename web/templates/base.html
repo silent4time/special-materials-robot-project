@@ -20,14 +20,16 @@
       <a href="/materials/return">برگشت انبار</a>
       {% endif %}
       {% if user_can_see_reports(user) %}
-      <a href="/reports">گزارش‌ها</a>
+      <a href="/reports">📊 گزارش‌ها</a>
+      <a href="/reports/main-goal">🎯 هدف اصلی</a>
       {% endif %}
       {% if can_configure_catalog(user) %}
-      <a href="/settings/main-source">منبع اصلی</a>
+      <a href="/settings/main-source">📤 ورود فایل‌ها / منبع اصلی</a>
       {% endif %}
       {% if require_manager(user) %}
-      <a href="/settings/web-login">تنظیم ورود وب</a>
-      <a href="/settings/reminders">یادآورها</a>
+      <a href="/settings/web-login">⚙️ تنظیم ورود وب</a>
+      <a href="/settings/reminders">🔔 یادآورها</a>
+      <a href="/reports/user-activity">📋 فعالیت کاربران</a>
       {% endif %}
       <form action="/logout" method="post" style="display:inline">
         <button type="submit" class="linkish">خروج</button>

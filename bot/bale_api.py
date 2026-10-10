@@ -20,6 +20,13 @@ from log_redact import redact
 logger = logging.getLogger(__name__)
 
 
+def public_markup(markup: dict | None) -> dict | None:
+    """Drop private keys (e.g. ``_menu`` nav marker from bot.keyboards) before sending."""
+    if not isinstance(markup, dict):
+        return markup
+    return {k: v for k, v in markup.items() if not str(k).startswith("_")}
+
+
 class BaleAPIError(RuntimeError):
     def __init__(self, method: str, description: str, payload: Any = None) -> None:
         # httpx errors embed the request URL (= token); never surface it to logs/users.
@@ -84,7 +91,7 @@ class BaleClient:
     ) -> dict:
         data: dict[str, Any] = {"chat_id": chat_id, "text": text}
         if reply_markup:
-            data["reply_markup"] = reply_markup
+            data["reply_markup"] = public_markup(reply_markup)
         if reply_to_message_id is not None:
             data["reply_to_message_id"] = reply_to_message_id
         return self._call("sendMessage", data)
@@ -125,7 +132,7 @@ class BaleClient:
         if caption:
             data["caption"] = caption
         if reply_markup is not None:
-            data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+            data["reply_markup"] = json.dumps(public_markup(reply_markup), ensure_ascii=False)
         suffix = path.suffix.lower()
         mime = "image/png" if suffix == ".png" else "image/webp" if suffix == ".webp" else "image/jpeg"
         with path.open("rb") as fh:

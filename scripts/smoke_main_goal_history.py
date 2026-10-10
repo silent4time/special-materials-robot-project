@@ -270,27 +270,39 @@ def test_bot_flow(tmp: Path) -> None:
     txt, _ = send("701", kb.BTN_MG_SCN_FORECAST)
     assert "هیچ ماهی" in txt
 
-    # sequential: one month
-    files = write_month(tmp / "b4", "تیر", 1.0)
-    send("701", kb.BTN_MG_START)
-    for k in ("production", "billet_consumption", "bloom_consumption", "slab_consumption"):
-        txt, btns = doc("701", files[k])
-    assert "ذخیره شد" in txt and "ماه" in txt, txt
+    # removed «📤 آپلود ۴ فایل یک ماه» → hint only
+    txt, _ = send("701", "📤 آپلود ۴ فایل یک ماه")
+    assert "حذف شد" in txt and kb.BTN_MG_INPUTS in txt, txt
+    assert not hasattr(kb, "BTN_MG_START")
 
-    # bulk: two months, shuffled order + one unknown file
+    # bulk lives in «📥 ثبت ورودی ماه»; per-file storage + remaining parts
+    txt, btns = send("701", kb.BTN_MG_INPUTS)
+    assert kb.BTN_MG_BULK in btns and kb.BTN_FILE_GUIDE in btns, btns
+    f4 = write_month(tmp / "b4", "تیر", 1.0)
     f5 = write_month(tmp / "b5", "مرداد", 1.1)
     f6 = write_month(tmp / "b6", "شهریور", 1.2)
-    send("701", kb.BTN_MG_BULK)
-    order = [f6["slab_consumption"], f5["production"], f6["production"], f5["billet_consumption"],
-             f6["billet_consumption"], f5["bloom_consumption"], f5["slab_consumption"]]
+    txt, btns = send("701", kb.BTN_MG_BULK)
+    assert "ریخته‌گری" in txt and "سکوئنس" in txt and "خودکار" in txt, txt
+    assert {kb.BTN_MG_BULK_DONE, kb.BTN_MG_BULK_STOP, kb.BTN_BACK} <= set(btns), btns
+    order = [f6["slab_consumption"], f5["production"], f4["production"], f6["production"],
+             f5["billet_consumption"], f4["billet_consumption"], f6["billet_consumption"],
+             f5["bloom_consumption"], f4["bloom_consumption"], f4["slab_consumption"],
+             f5["slab_consumption"]]
     for pth in order:
         txt, _ = doc("701", pth)
-    assert "مرداد 1405" in txt and "ذخیره شد" in txt, txt
+        assert ("باقی‌ماندهٔ" in txt or "کامل است" in txt), txt
+    assert "مرداد 1405" in txt and "کامل است" in txt, txt
     txt, _ = doc("701", f6["bloom_consumption"])
-    assert "شهریور 1405" in txt and "ماه" in txt, txt
-    txt, _ = send("701", kb.BTN_MG_BULK_DONE)
-    assert "پایان" in txt
-    assert len(db.list_main_goal_months()) == 3
+    assert "شهریور 1405" in txt and "کامل است" in txt, txt
+    txt, btns = send("701", kb.BTN_MG_BULK_DONE)
+    assert "پایان" in txt and kb.BTN_MG_BULK in btns
+    from services import main_goal_history as _mgh
+
+    assert len(_mgh.load_history(db)) == 3, [m.label for m in _mgh.load_history(db)]
+    # stop keeps stored months
+    send("701", kb.BTN_MG_BULK)
+    txt, _ = send("701", kb.BTN_MG_BULK_STOP)
+    assert "می‌مانند" in txt and len(_mgh.load_history(db)) == 3
 
     # scenario 1 via buttons
     send("701", kb.BTN_MG_SCN_TARGET)
@@ -316,7 +328,7 @@ def test_bot_flow(tmp: Path) -> None:
     assert kb.BTN_MG_DELETE in btns and "شهریور 1405" in txt
     send("701", kb.BTN_MG_DELETE)
     txt, _ = send("701", "1")
-    assert "حذف شد" in txt and len(db.list_main_goal_months()) == 2
+    assert "حذف شد" in txt and len(_mgh.load_history(db)) == 2, txt
 
     # technician denied
     txt, _ = send("702", kb.BTN_MAIN_GOAL)

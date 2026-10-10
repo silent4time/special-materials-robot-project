@@ -242,8 +242,8 @@ def build_reminder_text(status: ReminderStatus, *, forced: bool = False) -> str:
         lines.append("ماه‌های ثبت‌نشده:")
         lines.extend(f"• {label}" for label in status.missing_labels)
         lines.append("")
-        lines.append(f"هر ماه = ۴ فایل Excel: {FILES_FA}.")
-        lines.append("مسیر ربات: 📊 گزارش‌ها / تحلیل تاندیش → 🎯 گزارش هدف اصلی → 📤 آپلود")
+        lines.append(f"ورودی‌های هر ماه: {FILES_FA}.")
+        lines.append("مسیر ربات: 🎯 هدف اصلی → 📥 ثبت ورودی ماه (تکی یا 📦 آپلود گروهی)")
         lines.append("یا پنل وب: /reports/main-goal")
     else:
         lines.append("نیازی به اقدام نیست.")

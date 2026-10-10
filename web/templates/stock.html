@@ -19,6 +19,7 @@
     <div>
       <label for="entry_date">تاریخ</label>
       <input id="entry_date" name="entry_date" type="date" value="{{ entry_date }}" onchange="this.form.submit()">
+      <span class="muted">تاریخ شمسی: {{ shamsi(entry_date) }}</span>
     </div>
   </form>
 
@@ -26,7 +27,7 @@
     <input type="hidden" name="group" value="{{ group }}">
     <input type="hidden" name="entry_date" value="{{ entry_date }}">
     {% if not items %}
-    <p class="muted">برای این گروه کالایی در کاتالوگ تخصیص نشده است.</p>
+    <p class="muted">برای این گروه هنوز قلمی در منبع اصلی نیست (فهرست گروه‌ها خودکار از منبع اصلی ساخته می‌شود).</p>
     {% else %}
     <table>
       <thead>

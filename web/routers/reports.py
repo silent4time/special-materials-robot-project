@@ -10,7 +10,7 @@ from bot.activity import log_activity
 from analytics.critical_items import RENO_LABEL_FA, RENO_MODES, normalize_reno_mode
 from bot.jalali import PERSIAN_MONTH_NAMES, format_month_year, jalali_today
 from db.models import Database
-from web.deps import get_db, require_materials_user, require_non_technician
+from web.deps import get_db, require_admin_web, require_materials_user, require_non_technician
 from services import inbound_report as inbound_svc
 from web.services import reports as report_svc
 from web.services.data import data_completeness
@@ -268,7 +268,7 @@ async def surplus_xlsx(
 
 @router.get("/user-activity")
 async def user_activity(
-    user=Depends(require_non_technician),
+    user=Depends(require_admin_web),  # moved to ⚙️ تنظیمات — owner/manager only
     db: Database = Depends(get_db),
 ):
     path, _xlsx, err = report_svc.generate_user_activity_files(db, user)
@@ -280,7 +280,7 @@ async def user_activity(
 
 @router.get("/user-activity.xlsx")
 async def user_activity_xlsx(
-    user=Depends(require_non_technician),
+    user=Depends(require_admin_web),
     db: Database = Depends(get_db),
 ):
     _pdf, path, err = report_svc.generate_user_activity_files(db, user)
@@ -312,3 +312,79 @@ async def monthly_summary_xlsx(
         return RedirectResponse(f"/reports?err={quote(err or 'خطا')}", status_code=303)
     log_activity(db, user, "report_monthly_summary_xlsx")
     return FileResponse(path, media_type=_XLSX, filename=path.name)
+
+
+# ---------------------------------------------------------------- 🧮 نیاز مواد برای N تاندیش
+def _n_tundish(request: Request, db: Database, user: dict):
+    from services import n_tundish_report as nt
+    from web.services.reports import letterhead_path
+
+    q = request.query_params
+    section = (q.get("section") or "").strip().lower()
+    n = nt.parse_count(q.get("n"))
+    if section not in nt.SECTIONS or n is None:
+        return None, "بخش (اسلب/بلوم/بیلت) و تعداد تاندیش (عدد صحیح مثبت) را وارد کنید."
+    reno = normalize_reno_mode(q.get("renovation") or "with")
+    res = nt.generate_files(db, user, section, n, reno, letterhead_path=letterhead_path(db))
+    return res, res.error
+
+
+@router.get("/n-tundish")
+async def n_tundish_pdf(request: Request, user=Depends(require_non_technician), db: Database = Depends(get_db)):
+    res, err = _n_tundish(request, db, user)
+    if err or not res or not res.pdf:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#n-tundish", status_code=303)
+    log_activity(db, user, "report_n_tundish", section=res.section, n=res.n, renovation=res.reno_mode)
+    return FileResponse(res.pdf, media_type="application/pdf", filename=res.pdf.name)
+
+
+@router.get("/n-tundish.xlsx")
+async def n_tundish_xlsx(request: Request, user=Depends(require_non_technician), db: Database = Depends(get_db)):
+    res, err = _n_tundish(request, db, user)
+    if err or not res or not res.xlsx:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#n-tundish", status_code=303)
+    log_activity(db, user, "report_n_tundish_xlsx", section=res.section, n=res.n, renovation=res.reno_mode)
+    return FileResponse(res.xlsx, media_type=_XLSX, filename=res.xlsx.name)
+
+
+# ---------------------------------------------------------------- 📅 گزارش مصرف بازه‌ای
+def _period(request: Request, db: Database):
+    from bot.jalali import format_month_year_range, month_year_to_gregorian_bounds
+    from services import period_consumption as pc
+    from web.services.reports import letterhead_path
+
+    q = request.query_params
+    today = jalali_today()
+    try:
+        fy, fm = int(q.get("from_year") or today.year), int(q.get("from_month") or today.month)
+        ty, tm = int(q.get("to_year") or today.year), int(q.get("to_month") or today.month)
+    except ValueError:
+        return None, "بازهٔ ماه نامعتبر است."
+    start_ym, end_ym = (fy, fm), (ty, tm)
+    if ty * 12 + tm < fy * 12 + fm:
+        start_ym, end_ym = end_ym, start_ym
+    start, end = month_year_to_gregorian_bounds(start_ym, end_ym)
+    section = (q.get("section") or "").strip().lower() or None
+    res = pc.generate_files(
+        db, start, end, range_label=format_month_year_range(start_ym, end_ym),
+        section=section, letterhead_path=letterhead_path(db),
+    )
+    return res, res.error
+
+
+@router.get("/period")
+async def period_pdf(request: Request, user=Depends(require_non_technician), db: Database = Depends(get_db)):
+    res, err = _period(request, db)
+    if err or not res or not res.pdf:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#period", status_code=303)
+    log_activity(db, user, "report_period")
+    return FileResponse(res.pdf, media_type="application/pdf", filename=res.pdf.name)
+
+
+@router.get("/period.xlsx")
+async def period_xlsx(request: Request, user=Depends(require_non_technician), db: Database = Depends(get_db)):
+    res, err = _period(request, db)
+    if err or not res or not res.xlsx:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#period", status_code=303)
+    log_activity(db, user, "report_period_xlsx")
+    return FileResponse(res.xlsx, media_type=_XLSX, filename=res.xlsx.name)

@@ -331,6 +331,10 @@ def persist_primary_frame(
         columns=list(INVENTORY_COLUMNS),
     )
     db.store_file_slot(uid, PRIMARY_INVENTORY_TYPE, str(clean_path))
+    # every منبع اصلی change keeps the material-request catalog current (bot + web)
+    from services.catalog_sync import sync_after_change
+
+    sync_after_change(db, clean_path)
     return clean_path
 
 

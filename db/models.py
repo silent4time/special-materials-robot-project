@@ -1054,17 +1054,6 @@ class Database:
     def all_files_ready(self, session: dict[str, Any]) -> bool:
         return all(self.session_completeness(session).values())
 
-    def mark_session_done(self, session_id: int) -> None:
-        with self.connect() as conn:
-            conn.execute(
-                """
-                UPDATE upload_sessions
-                SET status = 'done', pending_file_type = NULL, updated_at = ?
-                WHERE id = ?
-                """,
-                (_utcnow(), session_id),
-            )
-
     def reset_session(self, bale_user_id: str | int) -> dict[str, Any]:
         uid = str(bale_user_id)
         with self.connect() as conn:
@@ -3271,6 +3260,12 @@ class Database:
                 "DELETE FROM main_goal_consumption WHERE id = ?", (int(cons_id),)
             )
             return cur.rowcount > 0
+
+    def delete_main_goal_period(self, period_key: str) -> None:
+        """Delete one month from هدف اصلی history by period_key (legacy + normalized)."""
+        with self.connect() as conn:
+            conn.execute("DELETE FROM main_goal_months WHERE period_key = ?", (str(period_key),))
+        self.delete_main_goal_inputs_by_key(str(period_key))
 
     def delete_main_goal_inputs_by_key(self, period_key: str) -> None:
         """Delete normalized production + consumptions + sequences for a period."""

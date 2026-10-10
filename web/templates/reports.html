@@ -16,22 +16,52 @@
     ماهیانه: {% if completeness.monthly_consumption %}✅{% else %}⏳{% endif %}
   </p>
   <div class="report-actions">
-    <a class="btn" href="/reports/remaining-critical">موجودی و مواد بحرانی (PDF)</a>
-    <a class="btn" href="/reports/remaining-critical.xlsx">موجودی و مواد بحرانی (اکسل)</a>
-    <a class="btn" href="/reports/surplus">مواد مازاد (PDF)</a>
-    <a class="btn" href="/reports/surplus.xlsx">مواد مازاد (اکسل)</a>
-    <a class="btn" href="/reports/main-goal">🎯 گزارش هدف اصلی</a>
-    <a class="btn" href="/reports/monthly-summary">خلاصه مصرف ماهیانه (PDF)</a>
-    <a class="btn" href="/reports/monthly-summary.xlsx">خلاصه مصرف ماهیانه (اکسل)</a>
-    <a class="btn" href="/reports/user-activity">فعالیت کاربران (PDF)</a>
-    <a class="btn" href="/reports/user-activity.xlsx">فعالیت کاربران (اکسل)</a>
+    <a class="btn" href="/reports/remaining-critical">⚠️ پوشش کوتاه‌مدت موجودی سایت (PDF)</a>
+    <a class="btn" href="/reports/remaining-critical.xlsx">⚠️ پوشش کوتاه‌مدت موجودی سایت (اکسل)</a>
+    <a class="btn" href="/reports/surplus">📦 مواد مازاد (PDF)</a>
+    <a class="btn" href="/reports/surplus.xlsx">📦 مواد مازاد (اکسل)</a>
+    <a class="btn" href="/reports/monthly-summary">📄 خلاصه مصرف ماهیانه (PDF)</a>
+    <a class="btn" href="/reports/monthly-summary.xlsx">📄 خلاصه مصرف ماهیانه (اکسل)</a>
   </div>
+  <p class="muted">«⚠️ پوشش کوتاه‌مدت»: روزهای پوشش = موجودی فعلی ÷ میانگین مصرف روزانهٔ ۳۰ روز اخیر.
+    «🎯 هدف اصلی» از نوار بالا؛ «📋 فعالیت کاربران» در تنظیمات (مالک/مدیر).</p>
+</div>
+
+<div class="card" id="n-tundish">
+  <h2>🧮 نیاز مواد برای N تاندیش</h2>
+  <p class="muted">همان نرخ‌ها و قواعد «اقلام بحرانی» از منبع اصلی: نوسازی+پچینگ («با نوسازی») یا فقط پچینگ، + سطح ریخته‌گری × N؛
+    کد ۱۸۰۰ و اولویت ۰ حذف؛ گروه نازل‌ها با نیاز مشترک. فقط‌خواندنی؛ اقلام با کسری قرمز.</p>
+  <form method="get" action="/reports/n-tundish" class="form-grid">
+    <label>بخش<select name="section"><option value="slab">اسلب</option><option value="bloom">بلوم</option><option value="billet">بیلت</option></select></label>
+    <label>تعداد تاندیش (N)<input type="number" name="n" min="1" max="500" value="1" required></label>
+    <label>حالت<select name="renovation"><option value="with">با نوسازی</option><option value="without">بدون نوسازی</option></select></label>
+    <div class="report-actions">
+      <button type="submit" class="btn">PDF</button>
+      <button type="submit" class="btn" formaction="/reports/n-tundish.xlsx">اکسل</button>
+    </div>
+  </form>
+</div>
+
+<div class="card" id="period">
+  <h2>📅 گزارش مصرف بازه‌ای</h2>
+  <p class="muted">منبع: (الف) اختلاف ثبت‌های موجودی روزانهٔ سایت (کاهش = مصرف) و (ب) جداول مصرف تاندیش ماهانهٔ هدف اصلی برای ماه‌های کامل داخل بازه.</p>
+  <form method="get" action="/reports/period" class="form-grid">
+    <label>از سال<input type="number" name="from_year" value="{{ critical_year }}"></label>
+    <label>از ماه<select name="from_month">{% for n, name in month_names %}<option value="{{ n }}" {% if n == critical_month %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+    <label>تا سال<input type="number" name="to_year" value="{{ critical_year }}"></label>
+    <label>تا ماه<select name="to_month">{% for n, name in month_names %}<option value="{{ n }}" {% if n == critical_month %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+    <label>بخش<select name="section"><option value="">همه بخش‌ها</option><option value="slab">اسلب</option><option value="bloom">بلوم</option><option value="billet">بیلت</option></select></label>
+    <div class="report-actions">
+      <button type="submit" class="btn">PDF</button>
+      <button type="submit" class="btn" formaction="/reports/period.xlsx">اکسل</button>
+    </div>
+  </form>
 </div>
 
 <div class="card" id="inbound">
-  <h2>📥 گزارش اقلام ورودی به انبار</h2>
+  <h2>📄 گزارش اقلام ورودی به انبار</h2>
   <p class="muted">
-    پس از هر آپلود «📥 موجودی انبار» (ربات) خودکار ساخته و ذخیره می‌شود. پایه مقایسه = آپلود موجودی انبار قبلی
+    پس از هر آپلود «📥 به‌روزرسانی موجودی انبار» (ربات) خودکار ساخته و ذخیره می‌شود. پایه مقایسه = آپلود موجودی انبار قبلی
     (آپلود کامل منبع اصلی و ویرایش/افزودن/حذف رکورد پایه را تغییر نمی‌دهند).
     ورودی = افزایش موجودی شناسه‌های موجود در پایه + شناسه جدید با کد ۴ رقمی موجود در منبع اصلی و موجودی بیشتر از صفر.
     کد 1800 لحاظ نمی‌شود؛ ردیف‌های رد شده (⛔) جدا آمده و ورودی حساب نمی‌شوند.
@@ -70,7 +100,7 @@
 </div>
 
 <div class="card" id="critical-items">
-  <h2>🚨 اقلام بحرانی نسوز تاندیش</h2>
+  <h2>🚨 اقلام بحرانی (نیاز ۳/۶ ماه)</h2>
   <p class="muted">
     همان منطق ربات: «میانگین مصرف ماهانه بر اساس ۳ ماه گذشته» = میانگین تعداد تاندیش ۳ ماه کامل قبل از امروز
     (لاگ توالی تاندیش؛ ماهی که لاگ ندارد از ثبت دستی زیر) ×

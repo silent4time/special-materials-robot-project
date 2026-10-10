@@ -75,10 +75,10 @@ def generate_remaining_critical_files(
     rem_cols = ["material_name", "remaining_qty", "unit", "location"]
     crit_cols = ["material_name", "remaining_qty", "avg_daily", "days_of_cover", "unit"]
     range_label = f"{days} روز اخیر"
-    title = f"موجودی و مواد بحرانی — {range_label}"
+    title = f"پوشش کوتاه‌مدت موجودی سایت — {range_label}"
     subtitle = (
-        f"منبع موجودی: {rem_source} | نرخ مصرف بر اساس {range_label} | "
-        f"آستانه بحرانی: پوشش < {CRITICAL_DAYS} روز"
+        f"مبنا: روزهای پوشش = موجودی فعلی ÷ میانگین مصرف روزانهٔ {range_label}؛ "
+        f"اقلام با پوشش کمتر از {CRITICAL_DAYS} روز بحرانی‌اند | منبع موجودی: {rem_source}"
     )
     sections = [
         {

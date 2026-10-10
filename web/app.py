@@ -112,6 +112,8 @@ def create_app() -> FastAPI:
             "require_manager": require_manager,
             "deny_technician": deny_technician,
             "user_can_see_reports": user_can_see_reports,
+            "file_guide": __import__("services.file_guides", fromlist=["guide_html"]).guide_html,
+            "shamsi": __import__("bot.jalali", fromlist=["format_date"]).format_date,
         }
     )
     get_db()  # schema + WAL on startup

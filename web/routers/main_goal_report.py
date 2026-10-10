@@ -440,6 +440,26 @@ async def upload_bulk(
     )
 
 
+@router.post("/months/delete")
+async def delete_month_by_key(
+    period_key: str = Form(...),
+    user=Depends(require_main_goal),
+    db: Database = Depends(get_db),
+):
+    """Delete by period_key (shared with bot) — ids differ between legacy/normalized rows."""
+    if not mgh.can_delete_month(user):
+        raise ForbiddenFa("حذف ماه از سابقه فقط برای مالک یا مدیر مجاز است.")
+    months = {m.period_key: m for m in mgh.load_history(db)}
+    m = months.get(period_key)
+    if not m:
+        raise ForbiddenFa("ماه یافت نشد.")
+    db.delete_main_goal_period(period_key)
+    log_activity(db, user, "main_goal_delete_month")
+    from urllib.parse import quote
+
+    return RedirectResponse(f"/reports/main-goal?msg={quote(f'ماه «{m.label}» حذف شد.')}", status_code=303)
+
+
 @router.post("/months/{month_id}/delete")
 async def delete_month(
     month_id: int,

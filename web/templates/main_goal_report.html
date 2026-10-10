@@ -4,7 +4,7 @@
 <div class="card">
   <h1>🎯 {{ title_fa }}</h1>
   <p class="muted">{{ subtitle_fa }} — {{ ccm_note }}</p>
-  <p class="muted">الف) ثبت ورودی در DB (عکس تب «ریخته گری» آمار تولید / اکسل سکوئنس تاندیش) ← ب) درخواست گزارش از سابقه با بازه ۳/۶/۱۲ ماهه یا سفارشی. سناریوها همچنان فعال‌اند.</p>
+  <p class="muted">الف) ثبت ورودی ماه (عکس تب «ریخته‌گری» آمار تولید / اکسل مصرف یا سکوئنس تاندیش؛ پس از هر ورودی بخش‌های باقی‌ماندهٔ همان ماه نمایش داده می‌شود) ← ب) درخواست گزارش از سابقه با بازه ۳/۶/۱۲ ماهه یا سفارشی. سناریوها همچنان فعال‌اند.</p>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err" style="white-space:pre-wrap">{{ error }}</div>{% endif %}
   {% if summary %}<pre class="muted" style="white-space:pre-wrap">{{ summary }}</pre>{% endif %}
@@ -52,7 +52,8 @@
         <td>{{ m.jalali_date }} — {{ m.actor }}</td>
         {% if can_delete %}
         <td>
-          <form method="post" action="/reports/main-goal/months/{{ m.id }}/delete" onsubmit="return confirm('حذف؟')">
+          <form method="post" action="/reports/main-goal/months/delete" onsubmit="return confirm('حذف؟')">
+            <input type="hidden" name="period_key" value="{{ m.period_key }}">
             <button type="submit" class="linkish">حذف</button>
           </form>
         </td>
@@ -74,6 +75,7 @@
     </label>
     <div class="report-actions"><button type="submit" class="btn">OCR و ذخیره در DB</button></div>
   </form>
+  {{ file_guide("mg_production_photo")|safe }}
   <h3>✏️ اصلاح / ورود دستی تولید</h3>
   <form method="post" action="/reports/main-goal/inputs/production-manual" class="form-grid">
     <label>ماه جلالی<input name="period_text" placeholder="شهریور ۱۴۰۵" required></label>
@@ -95,6 +97,7 @@
     <label>فایل .xlsx<input type="file" name="file" accept=".xlsx" required></label>
     <div class="report-actions"><button type="submit" class="btn">استخراج و ذخیره</button></div>
   </form>
+  {{ file_guide("mg_consumption")|safe }}
 </div>
 
 <div class="card">

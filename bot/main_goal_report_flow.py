@@ -1,13 +1,12 @@
-"""Bale UX for «گزارش هدف اصلی» — سابقهٔ چندماهه + دو سناریو.
+"""Bale UX for «🎯 هدف اصلی» — سابقهٔ چندماهه + دو سناریو.
 
-Menu: گزارش‌ها / تحلیل تاندیش → 🎯 گزارش هدف اصلی
+Menu: منوی اصلی → 🎯 هدف اصلی
 Roles: owner / manager / responsible_officer (حذف ماه: owner / manager)
 
 Flow:
-  1) 📤 آپلود ۴ فایل یک ماه  — ترتیبی؛ بازهٔ ۴ فایل باید یکسان باشد (وگرنه خطا)
-     📦 آپلود گروهی چند ماه   — فایل‌ها به هر ترتیب؛ نوع + ماه خودکار تشخیص؛
-                                  هر ماهی که ۴ فایلش کامل شد ذخیره می‌شود
-  2) 🗂 ماه‌های ذخیره‌شده (حداقل ۳ ماه توصیه می‌شود)
+  1) 📥 ثبت ورودی ماه — عکس/اکسل آمار تولید، اکسل مصرف تاندیش هر بخش، یا
+     📦 آپلود گروهی — هر فایل جداگانه (نوع + ماه خودکار) ذخیره و باقی‌ماندهٔ ماه اعلام می‌شود
+  2) 🗂 ماه‌های ذخیره‌شده (فقط در منوی هدف اصلی؛ حذف برای مالک/مدیر)
   3) 🎯 سناریو ۱: تناژ هدف (بازه + بخش) → تاندیش و مواد لازم → PDF + اکسل
      🔮 سناریو ۲: پیش‌بینی N ماه آینده با روند فعلی → PDF + اکسل
 
@@ -37,9 +36,6 @@ logger = logging.getLogger(__name__)
 
 _MENU_BTNS = {
     kb.BTN_MG_MENU,
-    kb.BTN_MG_BACK,
-    kb.BTN_MG_START,
-    kb.BTN_MG_START_LEGACY,
     kb.BTN_MG_BULK,
     kb.BTN_MG_HISTORY,
     kb.BTN_MG_DELETE,
@@ -57,9 +53,9 @@ _MENU_BTNS = {
 }
 # Buttons that only make sense inside a pending step
 _STEP_BTNS = {
-    kb.BTN_MG_CANCEL,
     kb.BTN_MG_SKIP_TARGET,
     kb.BTN_MG_BULK_DONE,
+    kb.BTN_MG_BULK_STOP,
     kb.BTN_MG_ADD_SECTION,
     kb.BTN_MG_COMPUTE,
     kb.BTN_MG_P1,
@@ -124,8 +120,8 @@ class MainGoalReportFlow:
         if not mg.can_run(user):
             self._reply(
                 message,
-                "دسترسی گزارش هدف اصلی ندارید (مالک / مدیر / کاردان مسئول).",
-                kb.analytics_menu(),
+                "دسترسی «هدف اصلی» ندارید (مالک / مدیر / کاردان مسئول).",
+                kb.main_menu(user),
             )
             return None
         return user
@@ -142,11 +138,8 @@ class MainGoalReportFlow:
         uid = self.app._uid(message)
         text = (text or "").strip()
 
-        if text in (kb.BTN_MG_MENU, kb.BTN_MG_BACK):
+        if text == kb.BTN_MG_MENU:
             self.open_menu(message)
-            return True
-        if text in (kb.BTN_MG_START, kb.BTN_MG_START_LEGACY):
-            self.start_upload(message)
             return True
         if text == kb.BTN_MG_BULK:
             self.start_bulk(message)
@@ -194,36 +187,19 @@ class MainGoalReportFlow:
                 return True
             return False
 
-        if text == kb.BTN_MG_CANCEL:
-            self.clear(uid)
-            user = self.app._user_or_deny(message)
-            if user:
-                extra = ""
-                if p.get("await") == "bulk":
-                    extra = "\n" + self._bulk_status_text(p, final=True)
-                self._reply(message, "گزارش هدف اصلی لغو شد." + extra, kb.main_goal_menu())
-            return True
-
         if text in self._reserved and text not in _STEP_BTNS:
             # global navigation abandons the draft
             self.clear(uid)
             return False
 
         mode = p.get("await")
-        if mode == "file":
-            self._reply(
-                message,
-                f"در انتظار فایل Excel «{mg.FILE_KINDS[p['expect']]}» به‌صورت Document (.xlsx) هستید.\n"
-                "یا «✖️ انصراف از گزارش هدف اصلی» را بزنید.",
-                kb.main_goal_upload_menu(),
-            )
-            return True
         if mode == "bulk":
-            if text == kb.BTN_MG_BULK_DONE:
-                return self._bulk_done(message, p)
+            if text in (kb.BTN_MG_BULK_DONE, kb.BTN_MG_BULK_STOP):
+                return self._bulk_done(message, p, stopped=text == kb.BTN_MG_BULK_STOP)
             self._reply(
                 message,
-                "فایل‌های Excel را به‌صورت Document بفرستید یا «✅ پایان آپلود گروهی» را بزنید.",
+                "فایل‌ها (Excel به‌صورت Document یا عکس آمار تولید) را بفرستید یا "
+                f"«{kb.BTN_MG_BULK_DONE}» را بزنید.",
                 kb.main_goal_bulk_menu(),
             )
             return True
@@ -267,6 +243,28 @@ class MainGoalReportFlow:
             return self._on_range_confirm(message, p, text)
         return True
 
+    def cancel(self, message: dict) -> None:
+        """«✖️ انصراف» while a هدف اصلی step is pending (routed by BotApp.on_cancel)."""
+        uid = self.app._uid(message)
+        p = self.pending.get(uid) or {}
+        self.clear(uid)
+        user = self.app._user_or_deny(message)
+        if not user:
+            return
+        if p.get("await") == "bulk":
+            self._reply(
+                message,
+                "📦 آپلود گروهی متوقف شد؛ ماه‌های ذخیره‌شده می‌مانند.\n" + self._bulk_status_text(p),
+                kb.main_goal_inputs_menu(),
+            )
+            return
+        back_inputs = p.get("await") in {"prod_photo", "prod_xlsx", "cons_xlsx", "prod_correct"}
+        self._reply(
+            message,
+            "لغو شد؛ چیزی ذخیره نشد.",
+            kb.main_goal_inputs_menu() if back_inputs else kb.main_goal_menu(),
+        )
+
     # ------------------------------------------------------------ menu / history
     def open_menu(self, message: dict) -> None:
         user = self._user(message)
@@ -278,9 +276,9 @@ class MainGoalReportFlow:
         self._reply(
             message,
             f"🎯 {mg.TITLE_FA}\n{mg.SUBTITLE_FA}\n\n"
-            "الف) ثبت ورودی — عکس آمار تولید (OCR) و اکسل مصرف تاندیش هر بخش، جداگانه در DB.\n"
-            "ب) درخواست گزارش — بازه ۳/۶/۱۲ ماهه یا بازهٔ سفارشی جلالی؛ محاسبه از سابقهٔ DB.\n"
-            "سناریوهای تناژ هدف / پیش‌بینی همچنان در دسترس‌اند. آپلود ۴ فایل یک‌جا هم کار می‌کند.\n\n"
+            f"• «{kb.BTN_MG_INPUTS}»: عکس/اکسل آمار تولید، اکسل مصرف تاندیش هر بخش یا «{kb.BTN_MG_BULK}».\n"
+            f"• «{kb.BTN_MG_REPORT_REQ}»: بازه ۳/۶/۱۲ ماهه یا بازهٔ سفارشی از سابقه.\n"
+            "• سناریو ۱ (تناژ هدف) و سناریو ۲ (پیش‌بینی ماه‌های آینده).\n\n"
             f"{hist}",
             kb.main_goal_menu(),
         )
@@ -291,9 +289,15 @@ class MainGoalReportFlow:
             return
         self.clear(str(user["bale_user_id"]))
         months = mgh.load_history(self.db)
+        text = mgh.history_overview_text(months)
+        missing = [o for o in mgp.month_completeness(self.db) if o["missing"]]
+        if missing:
+            text += "\n\nبخش‌های باقی‌مانده:\n" + "\n".join(
+                f"• {o['label']}: " + "، ".join(o["missing"]) for o in missing[-8:]
+            )
         self._reply(
             message,
-            mgh.history_overview_text(months),
+            text,
             kb.main_goal_history_menu(can_delete=mgh.can_delete_month(user) and bool(months)),
         )
 
@@ -302,15 +306,17 @@ class MainGoalReportFlow:
         if not user:
             return
         if not mgh.can_delete_month(user):
-            self._reply(message, "حذف ماه از سابقه فقط برای مالک یا مدیر مجاز است.", kb.main_goal_menu())
+            self._reply(message, "حذف ماه از سابقه فقط برای مالک یا مدیر مجاز است.", kb.main_goal_history_menu())
             return
         months = mgh.load_history(self.db)
         if not months:
-            self._reply(message, "ماهی برای حذف وجود ندارد.", kb.main_goal_menu())
+            self._reply(message, "ماهی برای حذف وجود ندارد.", kb.main_goal_history_menu())
             return
+        # by period_key: normalized-only months have no legacy main_goal_months id
         self.pending[str(user["bale_user_id"])] = {
             "await": "delete_pick",
-            "ids": [m.id for m in months],
+            "keys": [m.period_key for m in months],
+            "labels": [m.label for m in months],
         }
         self._reply(
             message,
@@ -326,22 +332,21 @@ class MainGoalReportFlow:
             return True
         try:
             idx = int(mg.normalize_digits(text).strip())
-            mid = p["ids"][idx - 1]
             if idx < 1:
                 raise IndexError
+            key = p["keys"][idx - 1]
+            label = (p.get("labels") or [])[idx - 1] if p.get("labels") else key
         except (ValueError, IndexError):
             self._reply(message, "شمارهٔ ردیف معتبر بفرستید.", kb.main_goal_cancel_menu())
             return True
-        row = self.db.get_main_goal_month(mid)
-        self.db.delete_main_goal_month(mid)
+        self.db.delete_main_goal_period(key)
         self.clear(uid)
         log_activity(self.db, user, "main_goal_delete_month")
         months = mgh.load_history(self.db)
         self._reply(
             message,
-            f"🗑 ماه «{(row or {}).get('period_label') or mid}» از سابقه حذف شد.\n\n"
-            + mgh.history_overview_text(months),
-            kb.main_goal_menu(),
+            f"🗑 ماه «{label}» از سابقه حذف شد.\n\n" + mgh.history_overview_text(months),
+            kb.main_goal_history_menu(can_delete=bool(months)),
         )
         return True
 
@@ -361,30 +366,7 @@ class MainGoalReportFlow:
             )
         self._reply(message, "\n".join(lines), kb.main_goal_menu())
 
-    # ------------------------------------------------------------ sequential upload (one month)
-    def start_upload(self, message: dict) -> None:
-        user = self._user(message)
-        if not user:
-            return
-        uid = str(user["bale_user_id"])
-        batch = tehran_now().strftime("%Y%m%d_%H%M%S")
-        self.pending[uid] = {
-            "await": "file",
-            "expect": mg.FILE_KIND_ORDER[0],
-            "batch": batch,
-            "files": {},
-            "filenames": {},
-        }
-        n = len(self.db.list_main_goal_months())
-        self._reply(
-            message,
-            "آپلود ۴ فایل یک ماه (هر ۴ فایل باید بازهٔ یکسان داشته باشند).\n"
-            f"{mgh.history_count_line(n)}\n\n"
-            f"فایل Excel «{mg.FILE_KINDS[mg.FILE_KIND_ORDER[0]]}» را به‌صورت Document بفرستید (.xlsx).\n"
-            "بازه از نام فایل / شیت / سربرگ خوانده می‌شود (مثل «شهریور ۱۴۰۵»).",
-            kb.main_goal_upload_menu(),
-        )
-
+    # ------------------------------------------------------------ 📦 آپلود گروهی (inside 📥 ثبت ورودی ماه)
     def start_bulk(self, message: dict) -> None:
         user = self._user(message)
         if not user:
@@ -394,215 +376,188 @@ class MainGoalReportFlow:
             "await": "bulk",
             "batch": "bulk_" + tehran_now().strftime("%Y%m%d_%H%M%S"),
             "seq": 0,
-            "buckets": {},
             "stored": [],
         }
+        self.app._file_guide_kind[uid] = "mg_bulk"
         self._reply(
             message,
-            "📦 آپلود گروهی چند ماه\n"
-            "همهٔ فایل‌های چند ماه (مثلاً ۳ ماه × ۴ فایل = ۱۲ فایل) را به هر ترتیبی بفرستید.\n"
-            "نوع فایل (آمار تولید / مصرف تاندیش بیلت / بلوم / اسلب) و ماه از نام فایل، نام شیت یا سربرگ "
-            "تشخیص داده می‌شود؛ هر ماهی که ۴ فایلش کامل شود بلافاصله اعتبارسنجی و ذخیره می‌شود.\n"
-            "پیشنهاد نام فایل: «آمار تولید شهریور ۱۴۰۵.xlsx»، «مصرف تاندیش بیلت شهریور ۱۴۰۵.xlsx».\n"
-            "در پایان «✅ پایان آپلود گروهی» را بزنید.",
+            "📦 آپلود گروهی\n"
+            "فایل‌های پذیرفته‌شده (به هر ترتیب، هر تعداد ماه):\n"
+            "• عکس آمار تولید — فقط screenshot تب «ریخته‌گری» سامانهٔ otsteel (عکس تب «کوره» رد می‌شود)\n"
+            "• یا اکسل آمار تولید (.xlsx)\n"
+            "• اکسل مصرف تاندیش بیلت / بلوم / اسلب (.xlsx)\n"
+            "• اکسل لاگ سکوئنس تاندیش (.xlsx)\n"
+            "نوع فایل و ماه به‌طور خودکار تشخیص داده می‌شود (از نام فایل، نام شیت یا سربرگ؛ "
+            "بهتر است ماه شمسی مثل «شهریور ۱۴۰۵» در نام فایل باشد).\n"
+            "پس از هر فایل می‌گویم کدام ماه/بخش ذخیره شد و چه چیزی از آن ماه مانده است.\n"
+            f"در پایان «{kb.BTN_MG_BULK_DONE}» را بزنید.",
             kb.main_goal_bulk_menu(),
         )
 
     def handle_document(self, message: dict) -> bool:
-        """Return True if this document belonged to the main-goal upload flow."""
+        """Return True if this document belonged to a هدف اصلی upload step."""
         uid = self.app._uid(message)
         p = self.pending.get(uid)
-        if not p or p.get("await") not in {"file", "bulk", "prod_xlsx", "cons_xlsx", "prod_photo"}:
+        if not p or p.get("await") not in {"bulk", "prod_xlsx", "cons_xlsx", "prod_photo"}:
             return False
         if p.get("await") in {"prod_xlsx", "cons_xlsx"}:
             return self._handle_input_document(message, p)
         if p.get("await") == "prod_photo":
             return self.handle_photo(message)
-
         user = self._user(message)
         if not user:
             self.clear(uid)
             return True
-
         doc = message.get("document") or {}
         file_name = (doc.get("file_name") or "").strip()
         file_id = doc.get("file_id")
-        menu = kb.main_goal_bulk_menu() if p["await"] == "bulk" else kb.main_goal_upload_menu()
-        if not file_id:
-            self._reply(message, "فایل نامعتبر است.", menu)
-            return True
-        if not file_name.lower().endswith(".xlsx"):
+        mime = str(doc.get("mime_type") or "")
+        if file_id and (mime.startswith("image/") or file_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))):
+            return self._on_bulk_photo(message, user, p)
+        if not file_id or not file_name.lower().endswith(".xlsx"):
             self._reply(
                 message,
-                f"فقط .xlsx پذیرفته می‌شود (دریافت شد: {file_name or 'بدون‌نام'}).",
-                menu,
+                f"فقط .xlsx یا عکس آمار تولید پذیرفته می‌شود (دریافت شد: {file_name or 'بدون‌نام'}).",
+                kb.main_goal_bulk_menu(),
             )
             return True
-
         dest_dir = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / str(p["batch"])
         dest_dir.mkdir(parents=True, exist_ok=True)
-        if p["await"] == "bulk":
-            p["seq"] = int(p.get("seq") or 0) + 1
-            dest = dest_dir / f"in_{p['seq']:03d}.xlsx"
-        else:
-            dest = dest_dir / f"{p['expect']}.xlsx"
+        p["seq"] = int(p.get("seq") or 0) + 1
+        dest = dest_dir / f"in_{p['seq']:03d}.xlsx"
         try:
             self.app.client.download_file(file_id, dest)
         except Exception as exc:  # noqa: BLE001
             logger.exception("main_goal download failed")
-            self._reply(message, f"دانلود فایل از بله ناموفق بود: {exc}", menu)
+            self._reply(message, f"دانلود فایل از بله ناموفق بود: {exc}", kb.main_goal_bulk_menu())
             return True
+        return self._on_bulk_file(message, user, p, dest, file_name)
 
-        if p["await"] == "bulk":
-            return self._on_bulk_file(message, user, p, dest, file_name)
-        return self._on_sequential_file(message, user, p, dest, file_name)
+    def _bulk_store_excel(self, user: dict, dest: Path, file_name: str) -> tuple[Any, str, str]:
+        """Detect + store one bulk Excel via the normalized persistence functions.
 
-    def _on_sequential_file(self, message: dict, user: dict, p: dict, dest: Path, file_name: str) -> bool:
-        uid = str(user["bale_user_id"])
-        kind = p["expect"]
-        period, src = mg.detect_period(dest, filename=file_name)
-        p.setdefault("files", {})[kind] = str(dest)
-        p.setdefault("filenames", {})[kind] = file_name
-        next_kind = next((k for k in mg.FILE_KIND_ORDER if k not in p["files"]), None)
-        period_note = (
-            f"بازه تشخیص‌داده‌شده: {period.label_fa()} ({src})"
-            if period
-            else f"⚠ بازه تشخیص نشد ({src})"
-        )
-        if next_kind:
-            p["expect"] = next_kind
-            self.pending[uid] = p
-            self._reply(
-                message,
-                f"✅ «{mg.FILE_KINDS[kind]}» دریافت شد.\n{period_note}\n"
-                f"({len(p['files'])}/۴)\n\n"
-                f"حالا فایل «{mg.FILE_KINDS[next_kind]}» را بفرستید:",
-                kb.main_goal_upload_menu(),
+        Returns (InputStoreOutcome, activity key, kind label fa).
+        """
+        from services import main_goal_sequences as seq
+
+        parsed = seq.parse_sequence_excel(dest)
+        if parsed.ok and (parsed.section or seq.detect_section_from_file(dest, filename=file_name)):
+            out = mgp.store_sequences_from_excel(
+                self.db, dest, user=user, source="bot", filename=file_name,
+                section=parsed.section or seq.detect_section_from_file(dest, filename=file_name),
             )
-            return True
-
-        # all four → validate same period + store as one month
-        self.clear(uid)
-        try:
-            out = mgh.store_month_set(
-                self.db,
-                {k: Path(v) for k, v in p["files"].items()},
-                filenames=p.get("filenames") or {},
-                user=user,
-                source="bot",
-                inventory=self._inventory(user),
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("main_goal store failed")
-            self._reply(message, f"خطا در پردازش فایل‌ها: {exc}", kb.main_goal_menu())
-            return True
-        if not out.ok:
-            self._reply(
-                message,
-                (out.error_fa or "خطا") + "\n\nاین ماه ذخیره نشد؛ فایل‌های اصلاح‌شده را دوباره آپلود کنید.",
-                kb.main_goal_menu(),
-            )
-            return True
-        log_activity(self.db, user, "main_goal_store_month")
-        n = len(self.db.list_main_goal_months())
-        self._reply(
-            message,
-            out.text_fa(history_count=n)
-            + "\n\nبرای ماه بعدی «📤 آپلود ۴ فایل یک ماه» یا برای محاسبه یکی از سناریوها را بزنید.",
-            kb.main_goal_menu(),
-        )
-        return True
-
-    def _on_bulk_file(self, message: dict, user: dict, p: dict, dest: Path, file_name: str) -> bool:
+            return out, "main_goal_store_sequences", "لاگ سکوئنس تاندیش"
         kind, ksrc = mg.detect_file_kind(dest, filename=file_name)
-        period, psrc = mg.detect_period(dest, filename=file_name)
-        if not kind:
-            self._reply(
-                message,
-                f"⚠ نوع فایل «{file_name}» تشخیص نشد ({ksrc}).\n"
-                "نام فایل را با «آمار تولید» یا «مصرف تاندیش بیلت/بلوم/اسلب» شروع کنید و دوباره بفرستید.",
-                kb.main_goal_bulk_menu(),
-            )
-            return True
-        if not period:
-            self._reply(
-                message,
-                f"⚠ ماه/بازهٔ فایل «{file_name}» تشخیص نشد ({psrc}).\n"
-                "ماه شمسی (مثل «شهریور ۱۴۰۵») را در نام فایل بنویسید و دوباره بفرستید.",
-                kb.main_goal_bulk_menu(),
-            )
-            return True
-        key = period.key()
-        bucket = p["buckets"].setdefault(key, {"label": period.label_fa(), "files": {}, "filenames": {}})
-        replaced = kind in bucket["files"]
-        bucket["files"][kind] = str(dest)
-        bucket["filenames"][kind] = file_name
-        head = (
-            f"✅ «{file_name}» → {mg.FILE_KINDS[kind]} | {period.label_fa()}"
-            + (" (جایگزین فایل قبلی همین نوع)" if replaced else "")
-        )
-        if len(bucket["files"]) < len(mg.FILE_KIND_ORDER):
-            self._reply(message, head + "\n" + self._bulk_status_text(p), kb.main_goal_bulk_menu())
-            return True
-
-        # bucket complete → validate + store
-        try:
-            out = mgh.store_month_set(
-                self.db,
-                {k: Path(v) for k, v in bucket["files"].items()},
-                filenames=bucket["filenames"],
-                user=user,
-                source="bot",
+        if kind == "production":
+            out = mgp.store_production_from_excel(self.db, dest, user=user, source="bot", filename=file_name)
+            return out, "main_goal_store_production_xlsx", "اکسل آمار تولید"
+        if kind and kind.endswith("_consumption"):
+            section = kind.split("_", 1)[0]
+            out = mgp.store_consumption_from_excel(
+                self.db, dest, section, user=user, source="bot", filename=file_name,
                 inventory=self._inventory(user),
             )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("main_goal bulk store failed")
-            self._reply(message, head + f"\nخطا در پردازش ماه {bucket['label']}: {exc}", kb.main_goal_bulk_menu())
-            return True
-        p["buckets"].pop(key, None)
+            return out, "main_goal_store_consumption", f"مصرف تاندیش {mg.SECTION_LABEL_FA[section]}"
+        return (
+            mgp.InputStoreOutcome(
+                ok=False,
+                error_fa=(
+                    f"نوع فایل «{file_name}» تشخیص نشد ({ksrc}). نام فایل را با «آمار تولید»، "
+                    "«مصرف تاندیش بیلت/بلوم/اسلب» یا «سکوئنس تاندیش …» شروع کنید."
+                ),
+            ),
+            "",
+            "",
+        )
+
+    def _bulk_reply(self, message: dict, p: dict, head: str, out: Any, act: str, user: dict) -> bool:
         if not out.ok:
-            self._reply(
-                message,
-                head + f"\n❌ ماه {bucket['label']} ذخیره نشد:\n{out.error_fa}\n\n" + self._bulk_status_text(p),
-                kb.main_goal_bulk_menu(),
-            )
+            self._reply(message, f"{head}\n❌ {out.error_fa or 'ذخیره نشد'}\n\n" + self._bulk_status_text(p), kb.main_goal_bulk_menu())
             return True
-        p["stored"].append(bucket["label"])
-        log_activity(self.db, user, "main_goal_store_month")
-        n = len(self.db.list_main_goal_months())
+        log_activity(self.db, user, act)
+        label = out.period_label or out.period_key or "—"
+        if label not in p["stored"]:
+            p["stored"].append(label)
         self._reply(
             message,
-            head + "\n\n" + out.text_fa(history_count=n) + "\n\n" + self._bulk_status_text(p),
+            f"{head}\n{out.summary}\n{self._remaining_line(out)}\n\n" + self._bulk_status_text(p),
             kb.main_goal_bulk_menu(),
         )
         return True
 
-    def _bulk_status_text(self, p: dict, *, final: bool = False) -> str:
-        lines = []
-        if p.get("stored"):
-            lines.append("ذخیره‌شده در این نوبت: " + "، ".join(p["stored"]))
-        for _key, b in (p.get("buckets") or {}).items():
-            missing = [mg.FILE_KINDS[k] for k in mg.FILE_KIND_ORDER if k not in b["files"]]
-            if missing:
-                lines.append(f"⏳ {b['label']}: {len(b['files'])}/۴ — مانده: " + "، ".join(missing))
-        if final and any((p.get("buckets") or {}).values()):
-            lines.append("ماه‌های ناقص ذخیره نشدند.")
-        return "\n".join(lines) if lines else "(هنوز ماه کاملی نیست)"
+    def _on_bulk_file(self, message: dict, user: dict, p: dict, dest: Path, file_name: str) -> bool:
+        try:
+            out, act, kind_fa = self._bulk_store_excel(user, dest, file_name)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("main_goal bulk store failed")
+            self._reply(message, f"خطا در پردازش «{file_name}»: {exc}", kb.main_goal_bulk_menu())
+            return True
+        head = f"📄 «{file_name}»" + (f" → {kind_fa}" if kind_fa else "")
+        return self._bulk_reply(message, p, head, out, act, user)
 
-    def _bulk_done(self, message: dict, p: dict) -> bool:
+    def _on_bulk_photo(self, message: dict, user: dict, p: dict) -> bool:
+        file_id = self.app._extract_image_file_id(message)
+        if not file_id:
+            self._reply(message, "تصویر معتبر دریافت نشد.", kb.main_goal_bulk_menu())
+            return True
+        dest_dir = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / str(p["batch"])
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        p["seq"] = int(p.get("seq") or 0) + 1
+        dest = dest_dir / f"production_{p['seq']:03d}.png"
+        try:
+            self.app.client.download_file(file_id, dest)
+            ocr_res = mgocr.ocr_production_image(dest)
+            out = mgp.store_production_from_ocr(
+                self.db, dest, user=user, source="bot", filename=dest.name, ocr_result=ocr_res
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("main_goal bulk photo failed")
+            self._reply(message, f"خطا در OCR عکس: {exc}", kb.main_goal_bulk_menu())
+            return True
+        if out.tab_rejected:
+            self._reply(message, "📸 " + (out.error_fa or mgocr.ALARM_UNKNOWN_FA), kb.main_goal_bulk_menu())
+            log_activity(self.db, user, "main_goal_production_photo_rejected_tab")
+            return True
+        if not out.ok:
+            out.error_fa = (out.error_fa or "OCR ناقص بود.") + (
+                f" برای اصلاح، بعد از پایان «{kb.BTN_MG_INPUT_CORRECT}» را بزنید."
+            )
+        return self._bulk_reply(message, p, "📸 عکس آمار تولید", out, "main_goal_store_production_ocr", user)
+
+    @staticmethod
+    def _remaining_line(out: Any) -> str:
+        miss = list(getattr(out, "missing_parts", None) or [])
+        label = getattr(out, "period_label", "") or ""
+        if miss:
+            return f"⏳ باقی‌ماندهٔ «{label}»: " + "، ".join(miss)
+        return f"✅ همهٔ ورودی‌های «{label}» کامل است."
+
+    def _bulk_status_text(self, p: dict, *, final: bool = False) -> str:
+        stored = p.get("stored") or []
+        if not stored:
+            return "(هنوز فایلی در این نوبت ذخیره نشده)"
+        lines = ["ماه‌های دارای ورودی در این نوبت: " + "، ".join(stored)]
+        incomplete = [o for o in mgp.month_completeness(self.db) if o["label"] in stored and o["missing"]]
+        for o in incomplete:
+            lines.append(f"⏳ {o['label']}: مانده " + "، ".join(o["missing"]))
+        return "\n".join(lines)
+
+    def _bulk_done(self, message: dict, p: dict, *, stopped: bool = False) -> bool:
         uid = self.app._uid(message)
         user = self._user(message)
         self.clear(uid)
         if not user:
             return True
-        n = len(self.db.list_main_goal_months())
+        n = len(mgh.load_history(self.db))
+        head = (
+            "📦 آپلود گروهی متوقف شد؛ ماه‌های ذخیره‌شده می‌مانند."
+            if stopped
+            else "📦 آپلود گروهی پایان یافت."
+        )
         self._reply(
             message,
-            "📦 آپلود گروهی پایان یافت.\n"
-            + self._bulk_status_text(p, final=True)
-            + "\n\n"
-            + mgh.history_count_line(n),
-            kb.main_goal_menu(),
+            head + "\n" + self._bulk_status_text(p, final=True) + "\n\n" + mgh.history_count_line(n),
+            kb.main_goal_inputs_menu(),
         )
         return True
 
@@ -613,7 +568,7 @@ class MainGoalReportFlow:
             self._reply(
                 message,
                 "هنوز هیچ ماهی در سابقه ذخیره نشده است.\n"
-                f"ابتدا فایل‌های ۴گانهٔ حداقل {mgh.MIN_RECOMMENDED_MONTHS} ماه اخیر را آپلود کنید.",
+                f"ابتدا از «{kb.BTN_MG_INPUTS}» ورودی‌های حداقل {mgh.MIN_RECOMMENDED_MONTHS} ماه اخیر را ثبت کنید.",
                 kb.main_goal_menu(),
             )
             return None
@@ -790,8 +745,9 @@ class MainGoalReportFlow:
         self.clear(str(user["bale_user_id"]))
         overview = mgp.month_completeness(self.db)
         lines = [
-            "📥 ثبت ورودی گزارش هدف اصلی",
-            "عکس تب «ریخته گری» آمار تولید → OCR → DB | اکسل تاندیش → DB",
+            f"{kb.BTN_MG_INPUTS}",
+            "عکس تب «ریخته‌گری» آمار تولید → OCR | اکسل آمار تولید | اکسل مصرف تاندیش هر بخش",
+            f"چند فایل/چند ماه با هم: «{kb.BTN_MG_BULK}» | راهنما: «{kb.BTN_FILE_GUIDE}»",
             "",
         ]
         if overview:
@@ -813,6 +769,7 @@ class MainGoalReportFlow:
             return
         batch = tehran_now().strftime("%Y%m%d_%H%M%S")
         self.pending[str(user["bale_user_id"])] = {"await": "prod_photo", "batch": batch}
+        self.app._file_guide_kind[str(user["bale_user_id"])] = "mg_production_photo"
         self._reply(
             message,
             "📸 عکس تب «ریخته گری» صفحه آمار تولید (otsteel.ksc.ir/productionstatistics) را "
@@ -829,7 +786,8 @@ class MainGoalReportFlow:
             return
         batch = tehran_now().strftime("%Y%m%d_%H%M%S")
         self.pending[str(user["bale_user_id"])] = {"await": "prod_xlsx", "batch": batch}
-        self._reply(message, "📄 فایل Excel آمار تولید (.xlsx) را بفرستید.", kb.main_goal_upload_menu())
+        self.app._file_guide_kind[str(user["bale_user_id"])] = "mg_production_xlsx"
+        self._reply(message, "📤 فایل Excel آمار تولید (.xlsx) را بفرستید.", kb.main_goal_upload_menu())
 
     def start_cons_xlsx(self, message: dict, section: str) -> None:
         user = self._user(message)
@@ -841,6 +799,7 @@ class MainGoalReportFlow:
             "batch": batch,
             "section": section,
         }
+        self.app._file_guide_kind[str(user["bale_user_id"])] = "mg_consumption"
         self._reply(
             message,
             f"📤 اکسل مصرف تاندیش {mg.SECTION_LABEL_FA[section]} را بفرستید "
@@ -935,9 +894,7 @@ class MainGoalReportFlow:
             return True
         self.clear(uid)
         log_activity(self.db, user, "main_goal_store_production_ocr")
-        miss = out.missing_parts
-        extra = ("\n⚠ هنوز ناقص: " + "، ".join(miss)) if miss else "\n✅ همه ورودی‌های این ماه کامل است."
-        self._reply(message, out.summary + extra, kb.main_goal_inputs_menu())
+        self._reply(message, out.summary + "\n" + self._remaining_line(out), kb.main_goal_inputs_menu())
         return True
 
     def _handle_input_document(self, message: dict, p: dict) -> bool:
@@ -1004,9 +961,7 @@ class MainGoalReportFlow:
             self._reply(message, out.error_fa or "خطا", kb.main_goal_inputs_menu())
             return True
         log_activity(self.db, user, act)
-        miss = out.missing_parts
-        extra = ("\n⚠ هنوز ناقص: " + "، ".join(miss)) if miss else "\n✅ همه ورودی‌های این ماه کامل است."
-        self._reply(message, out.summary + extra, kb.main_goal_inputs_menu())
+        self._reply(message, out.summary + "\n" + self._remaining_line(out), kb.main_goal_inputs_menu())
         return True
 
     def _on_prod_correct(self, message: dict, p: dict, text: str) -> bool:
@@ -1075,9 +1030,7 @@ class MainGoalReportFlow:
             self._reply(message, out.error_fa or "ذخیره ناموفق", kb.main_goal_inputs_menu())
             return True
         log_activity(self.db, user, "main_goal_store_production_manual")
-        miss = out.missing_parts
-        extra = ("\n⚠ هنوز ناقص: " + "، ".join(miss)) if miss else "\n✅ همه ورودی‌های این ماه کامل است."
-        self._reply(message, out.summary + extra, kb.main_goal_inputs_menu())
+        self._reply(message, out.summary + "\n" + self._remaining_line(out), kb.main_goal_inputs_menu())
         return True
 
     # ------------------------------------------------------------ ب) درخواست گزارش بازه

@@ -262,9 +262,10 @@ def _test_merge_and_monthly_summary() -> None:
         assert pdf_out.exists() and pdf_out.stat().st_size > 1000
         assert kb.BTN_MONTHLY_SUMMARY in str(kb.analytics_menu())
         assert kb.BTN_INBOUND in str(kb.analytics_menu())
-        assert kb.BTN_GENERATE == "📊 گزارش کلی مواد"
-        assert kb.BTN_GENERATE in str(kb.analytics_menu())
-        assert kb.BTN_GENERATE not in str(kb.main_menu({"role": "owner", "active": 1}))
+        assert kb.BTN_COMPREHENSIVE == "📊 گزارش جامع"
+        assert kb.BTN_COMPREHENSIVE in str(kb.analytics_menu())
+        assert kb.canonical("📊 گزارش کلی مواد") == kb.BTN_COMPREHENSIVE  # merged + aliased
+        assert kb.BTN_COMPREHENSIVE not in str(kb.main_menu({"role": "owner", "active": 1}))
         mr_days_texts = [b["text"] for row in kb.material_request_days_menu()["keyboard"] for b in row]
         assert kb.BTN_MR_DAYS_DEFAULT in mr_days_texts
         assert all(x not in mr_days_texts for x in ("۷ روز", "۱۴ روز", "۳۰ روز"))
@@ -512,8 +513,10 @@ def _test_user_activity_log() -> None:
         values={"X": 3},
     ) is False
     assert "BTN_USER_ACTIVITY" in dir(kb) or hasattr(kb, "BTN_USER_ACTIVITY")
-    menu = {b["text"] for row in kb.analytics_menu()["keyboard"] for b in row}
+    # moved from reports to ⚙️ تنظیمات (owner/manager only)
+    menu = {b["text"] for row in kb.bot_settings_menu({"active": 1, "role": "owner"})["keyboard"] for b in row}
     assert kb.BTN_USER_ACTIVITY in menu
+    assert kb.BTN_USER_ACTIVITY not in {b["text"] for row in kb.analytics_menu()["keyboard"] for b in row}
     pdf_rows = [
         {"زمان": format_datetime(r["created_at"]), "فعالیت": r["message_fa"]}
         for r in rows
@@ -884,13 +887,11 @@ def main() -> int:
     assert kb.BTN_UPLOAD_MENU not in tech_menu
     assert kb.BTN_ANALYTICS not in tech_menu
     assert kb.BTN_MONTHLY not in tech_menu
-    assert kb.BTN_CATALOG_SETTINGS not in tech_menu
     for full_menu in (owner_menu, manager_menu, officer_menu):
         assert {kb.BTN_UPLOAD_MENU, kb.BTN_ANALYTICS, kb.BTN_SITE_STOCK}.issubset(full_menu)
         assert kb.BTN_INV_MENU not in full_menu  # moved under آپلود فایل
         assert kb.BTN_MONTHLY not in full_menu  # moved under آپلود فایل
-        assert kb.BTN_STATUS not in full_menu  # removed — use آپلود فایل
-        assert kb.BTN_CATALOG_SETTINGS in full_menu
+        assert not any("تخصیص به گروه" in t for t in full_menu)  # removed (catalog auto-sync)
         assert kb.BTN_MATERIAL_REQUEST in full_menu
         assert kb.BTN_WAREHOUSE_RETURN in full_menu
     assert kb.BTN_MATERIAL_REQUEST not in tech_menu
@@ -898,16 +899,19 @@ def main() -> int:
     assert can_request_materials(db.get_user("998"))
     assert can_request_materials(db.get_user("1002"))
     assert not can_request_materials(db.get_user("1001"))
-    assert kb.BTN_USERS in owner_menu and kb.BTN_USERS in manager_menu
-    assert kb.BTN_USERS not in tech_menu
-    assert kb.BTN_USERS not in officer_menu
+    # 👥 کاربران moved under ⚙️ تنظیمات (owner/manager)
+    for _u in ("998", "999"):
+        assert kb.BTN_USERS in menu_texts(kb.bot_settings_menu(db.get_user(_u)))
+    assert kb.BTN_USERS not in tech_menu and kb.BTN_USERS not in officer_menu
     assert kb.BTN_BOT_SETTINGS in owner_menu and kb.BTN_BOT_SETTINGS in manager_menu
     assert kb.BTN_BOT_SETTINGS not in tech_menu
     assert kb.BTN_BOT_SETTINGS not in officer_menu
-    bot_set_menu = menu_texts(kb.bot_settings_menu())
-    assert kb.BTN_SET_INVITE in bot_set_menu
-    assert kb.BTN_SET_WELCOME in bot_set_menu
-    assert kb.BTN_SET_LOGO in bot_set_menu
+    bot_set_menu = menu_texts(kb.bot_settings_menu(db.get_user("998")))
+    appear_menu = menu_texts(kb.appearance_menu())  # 🎨 ظاهر
+    assert kb.BTN_APPEARANCE in bot_set_menu
+    assert kb.BTN_SET_INVITE in appear_menu
+    assert kb.BTN_SET_WELCOME in appear_menu
+    assert kb.BTN_SET_LOGO in appear_menu
     assert kb.BTN_SET_STOCK_GROUP in bot_set_menu
     stock_g_menu = menu_texts(kb.bot_settings_stock_group_menu())
     assert kb.BTN_SETTINGS_VIEW in stock_g_menu
@@ -1001,7 +1005,8 @@ def main() -> int:
         kb.BTN_INV_LIST_CATEGORIES,
         kb.BTN_BACK_UPLOAD,
     }.issubset(main_src_menu)
-    assert kb.BTN_INV_DOWNLOAD == "📥 دانلود فایل منبع اصلی (اکسل)"
+    assert kb.BTN_INV_DOWNLOAD == "📄 دانلود اکسل منبع اصلی"
+    assert kb.canonical("📥 دانلود فایل منبع اصلی (اکسل)") == kb.BTN_INV_DOWNLOAD
     assert kb.BTN_INV_EDIT not in main_src_menu  # flattened — no nested edit opener
     assert menu_texts(kb.inventory_menu()) == main_src_menu
     assert menu_texts(kb.inventory_edit_menu()) == main_src_menu
@@ -1009,17 +1014,20 @@ def main() -> int:
     file_entry = menu_texts(kb.file_entry_menu())
     assert file_entry == upload_menu  # status/doc picker = upload picker (no site stock)
     assert kb.BTN_SITE_STOCK not in file_entry
-    assert kb.BTN_INV_MENU not in file_entry
+    assert kb.BTN_INV_MENU == kb.BTN_MAIN_SOURCE_FILE  # legacy name kept as alias constant
     assert kb.button_to_file_type(kb.BTN_WAREHOUSE_STOCK) == "product_inventory"
-    assert kb.button_to_file_type(kb.BTN_INV) == "product_inventory"
-    assert kb.button_to_file_type(kb.BTN_INV_UPLOAD) == "product_inventory"
+    # full replace goes through warning + confirm, never straight to a file slot
+    assert kb.button_to_file_type(kb.BTN_INV) is None
+    assert kb.button_to_file_type(kb.BTN_INV_UPLOAD) is None
+    assert kb.BTN_FULL_REPLACE_CONFIRM in menu_texts(kb.full_replace_confirm_menu())
     assert kb.button_to_file_type(kb.BTN_MONTHLY) == "monthly_consumption"
     assert kb.button_to_file_type(kb.BTN_SITE_STOCK) is None  # interactive, not Excel
     assert kb.button_to_file_type(kb.BTN_INV_MENU) is None  # legacy submenu opener
     assert kb.button_to_file_type(kb.BTN_MAIN_SOURCE_FILE) is None  # submenu opener
     assert kb.button_to_file_type(kb.BTN_UPLOAD_MENU) is None
     assert kb.button_to_file_type("📦 موجودی انبار") == "product_inventory"  # warehouse upload
-    assert kb.BTN_WAREHOUSE_STOCK == "📥 موجودی انبار"
+    assert kb.BTN_WAREHOUSE_STOCK == "📥 به‌روزرسانی موجودی انبار"
+    assert kb.canonical("📥 موجودی انبار") == kb.BTN_WAREHOUSE_STOCK
 
     # site stock inline 2-col keyboard (شرح | تعداد) + confirm
     items_fake = [

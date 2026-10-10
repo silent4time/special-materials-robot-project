@@ -228,7 +228,8 @@ def main() -> int:
         client.msgs.clear()
         app.handle_update({"message": dict(msg, text=kb.BTN_INBOUND_LEGACY)})
         assert client.msgs and "4 قلم" in client.msgs[0], client.msgs
-        assert kb.BTN_INBOUND == "📥 گزارش اقلام ورودی به انبار"
+        assert kb.BTN_INBOUND == "📄 گزارش اقلام ورودی به انبار"
+        assert kb.canonical("📥 گزارش اقلام ورودی به انبار") == kb.BTN_INBOUND  # old label alias
         assert kb.BTN_INBOUND in str(kb.analytics_menu())
         # technician denied
         n_docs = len(sent_docs); client.msgs.clear()

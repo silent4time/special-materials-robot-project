@@ -47,7 +47,6 @@ from auth.rbac import (
 )
 from bot import keyboards as kb
 from bot.activity import log_activity, resolve_display_name
-from bot.report_assistant import build_report_context, chat as report_assistant_chat
 from bot.jalali import (
     TEHRAN,
     format_date,
@@ -60,7 +59,8 @@ from bot.jalali import (
     year_choices_around,
     PERSIAN_MONTH_NAME_TO_NUM,
 )
-from bot.bale_api import BaleAPIError, BaleClient
+from bot.bale_api import BaleAPIError, BaleClient, public_markup
+from services import permissions as perm
 from bot.settings_text import (
     DEFAULT_INVITE_TEXT,
     PLACEHOLDER_HINT_INVITE,
@@ -99,76 +99,7 @@ from services.main_source import FIELD_LABELS_FA, INVENTORY_COLUMNS
 
 logger = logging.getLogger(__name__)
 
-HELP_TEXT = """راهنمای بازوی گزارش مواد / تاندیش
-
-جریان اصلی:
-۱) از «آپلود فایل» موجودی انبار / مصرف ماهیانه / فایل منبع اصلی را با Excel (.xlsx) بفرستید
-۲) «موجودی روزانه سایت» را به‌صورت تعاملی وارد کنید (نه Excel تکنسین)
-۳) از «گزارش‌ها / تحلیل تاندیش» گزارش‌ها و «گزارش کلی مواد» را بگیرید
-
-موجودی روزانه سایت (ورود تعاملی در SQLite):
-• سه بخش: موجودی مواد اسلب / بلوم / بیلت
-• ربات اقلام تخصیص‌یافته به هر گروه را نشان می‌دهد؛ مقدار را یکی‌یکی بفرستید
-• داده در جدول site_stock_entries ذخیره می‌شود (upsert روزانه)
-
-تنظیمات اقلام سایت / تخصیص به گروه (مالک، مدیر، کاردان مسئول — نه تکنسین):
-• همگام‌سازی اقلام از آخرین استخراج منبع اصلی
-• تخصیص خودکار از ستون سفارش کار مصرف ماهیانه (اسلب/بلوم/بیلت) + تخصیص دستی
-
-انواع فایل Excel (زیر «آپلود فایل»):
-• موجودی انبار / فایل منبع اصلی — ۳ ستون: کد دسته بندی، کد و شرح کالا، موجودی
-• مصرف ماهیانه مواد
-
-تحلیل:
-• همه گزارش‌های منوی تحلیل به‌صورت PDF و اکسل (.xlsx) ارسال می‌شوند (کپشن کوتاه در چت)
-• مصرف روزانه / بازه‌ای / پیشنهاد / بحرانی / مازاد / پیش‌بینی / ورودی انبار
-• مواد بحرانی — پوشش < CRITICAL_DAYS={critical} روز
-• اقلام بحرانی — تعداد تاندیش ماه × نرخ نوسازی/پچینگ منبع اصلی (PDF+اکسل)
-• اگر موجودی روزانه سایت ثبت شده باشد، برای «موجودی و مواد بحرانی» به‌عنوان منبع باقیمانده سایت استفاده می‌شود
-• سربرگ PDF (اختیاری): از «تنظیمات ربات» → «سربرگ PDF» آپلود کنید؛ روی همه صفحات گزارش اعمال می‌شود
-• دستیار هوشمند — فعلاً غیرفعال (گفتگوی محلی با Ollama؛ فقط با ASSISTANT_ENABLED=1 فعال می‌شود)
-
-🧾 گزارش تاندیش بعد از ریخته‌گری (همه نقش‌ها، از جمله تکنسین):
-• منوی اصلی → «🧾 گزارش تاندیش بعد از ریخته‌گری» → اسلب / بلوم / بیلت
-• ورود مرحله‌ای (شماره تاندیش، خط، سکوئنس، تعداد ذوب، مارک + اقلام بخش) یا «ورود سریع از متن»
-• پیش از ثبت، خلاصه نمایش داده می‌شود و قابل اصلاح است؛ ثبت با نام ثبت‌کننده و زمان تهران
-• تنظیم اقلام هر بخش (افزودن / ویرایش / حذف / ترتیب / خطوط): مالک و مدیر — «⚙️ تنظیمات گزارش تاندیش»
-
-درخواست مواد (مالک / مدیر / کاردان مسئول):
-• دکمه «🛒 درخواست مواد» در منوی اصلی
-• ورود تعداد روز پوشش (پیش‌فرض ۱)، بررسی پیشنهاد، تأیید یا اصلاح مقدار
-• پس از تأیید، از منبع اصلی (ledger) کسر می‌شود
-
-برگشت به انبار (مالک / مدیر / کاردان مسئول):
-• دکمه «↩️ برگشت به انبار» — پیشنهاد مواد مازاد سایت
-• پس از تأیید، به منبع اصلی (ledger مثبت) افزوده می‌شود
-
-نقش‌ها:
-• مالک / مدیر — همه ردیف‌ها + مدیریت کاربران + تنظیمات اقلام
-• کاردان مسئول — مثل بقیه نقش‌های عملیاتی کار می‌کند؛ همه ردیف‌ها + تنظیمات اقلام سایت
-• تکنسین — فقط ورود موجودی روزانه سایت (سه گروه)؛ بدون تنظیمات/گزارش
-
-شناسایی افراد با شناسه اکانت بله (bale_user_id) انجام می‌شود.
-هر ورودی داده با ثبت‌کننده = نام فرد از اکانت بله (همراه شناسه بله) ذخیره می‌شود.
-
-مدیریت کاربران (مالک/مدیر):
-• از منوی «کاربران»: اضافه / اصلاح نقش / حذف / لیست + لینک دعوت
-• دستورات اختیاری:
-  /users
-  /adduser <bale_id> <role> [name...]
-  /setrole <bale_id> <role>
-
-تنظیمات ربات (مالک/مدیر):
-• متن دعوت‌نامه کاربران (قالب + تصویر اختیاری)
-• پیام خوشامدگویی (قالب + تصویر اختیاری)
-• لوگوی ربات (تصویر برندینگ؛ در خوشامدگویی نمایش داده می‌شود)
-• گروه گزارش موجودی روزانه — پس از ثبت موجودی سایت، خلاصه به گروه بله ارسال می‌شود
-  (در گروه: /set_stock_group ؛ یا متغیر محیطی SITE_STOCK_REPORT_GROUP_ID)
-
-/reset — پاک کردن جلسه آپلود و وضعیت ورود جاری
-""".format(
-    critical=int(CRITICAL_DAYS) if CRITICAL_DAYS == int(CRITICAL_DAYS) else CRITICAL_DAYS,
-)
+from bot.help_text import HELP_TEXT, help_text_for  # noqa: E402  (re-exported)
 
 
 class BotApp:
@@ -177,7 +108,16 @@ class BotApp:
         self.db = db
         # pending analytics: mode + await month_range|my_*|range (day advanced)
         self._analysis_pending: dict[str, dict[str, Any]] = {}
-        self._analysis_tundish_filter: dict[str, str | None] = {}
+        # uid -> {"key": menu key, "origin": menu that opened a flow} (uniform «⬅️ بازگشت»)
+        self._nav: dict[str, dict[str, str]] = {}
+        # «📦 جایگزینی کامل منبع اصلی» waiting for confirm
+        self._full_replace_confirm: set[str] = set()
+        # «🧮 نیاز مواد برای N تاندیش» steps
+        self._n_tundish_pending: dict[str, dict[str, Any]] = {}
+        # «❓ راهنمای تهیهٔ فایل»: last file kind the user is asked for
+        self._file_guide_kind: dict[str, str] = {}
+        # درخواست مواد: Persian basis line of the last built list (shown in review)
+        self._mr_basis: dict[str, str] = {}
         # awaiting plain text for category code entry
         self._await_category_code: set[str] = set()
         # منبع اصلی edit/add record interactive flow
@@ -186,8 +126,6 @@ class BotApp:
         self._upload_return_menu: dict[str, str] = {}
         # site stock interactive entry: uid -> {group, items, values, awaiting_idx, walk_idx, guided, chat_id, message_id}
         self._site_stock_pending: dict[str, dict[str, Any]] = {}
-        # catalog assignment: uid -> {item_id} while choosing group
-        self._catalog_assign_pending: dict[str, dict[str, Any]] = {}
         # user-management interactive flows
         self._users_pending: dict[str, dict[str, Any]] = {}
         # bot settings interactive flows
@@ -195,8 +133,6 @@ class BotApp:
         # material request interactive flow
         self._material_req_pending: dict[str, dict[str, Any]] = {}
         self._warehouse_ret_pending: dict[str, dict[str, Any]] = {}
-        # report assistant free-text conversation (non-technician)
-        self._report_assistant_pending: set[str] = set()
         # اقلام بحرانی: year/month/counts entry
         self._critical_pending: dict[str, dict[str, Any]] = {}
         self._bot_username: str | None = None
@@ -260,7 +196,164 @@ class BotApp:
         return f"کاربر بدون نام ({uid})" if uid else "کاربر بدون نام"
 
     def _reply(self, message: dict, text: str, markup: dict | None = None) -> None:
+        markup = self._track_nav(message, markup)
         self.client.send_message(self._chat_id(message), text, reply_markup=markup)
+
+    # ---------- uniform navigation ----------
+    def _track_nav(self, message: dict, markup: dict | None) -> dict | None:
+        """Record which menu the user sees (``_menu`` marker) and strip the marker."""
+        if not isinstance(markup, dict) or "_menu" not in markup:
+            return markup
+        try:
+            uid = self._uid(message)
+        except (KeyError, TypeError):
+            return public_markup(markup)
+        key = str(markup.get("_menu"))
+        cur = self._nav.get(uid) or {}
+        if key == "flow":
+            origin = cur.get("origin") if cur.get("key") == "flow" else cur.get("key")
+            self._nav[uid] = {"key": "flow", "origin": origin or "main"}
+        else:
+            self._nav[uid] = {"key": key}
+        return public_markup(markup)
+
+    def _nav_target_back(self, uid: str) -> str:
+        cur = self._nav.get(uid) or {"key": "main"}
+        if cur.get("key") == "flow":
+            return cur.get("origin") or "main"
+        return kb.MENU_PARENT.get(cur.get("key") or "main") or "main"
+
+    def _open_menu(self, message: dict, user: dict, key: str) -> None:
+        """Open a menu by nav key (permission checks live in each opener)."""
+        openers = {
+            "site_stock": self.on_site_stock_menu,
+            "tundish_report": self.tundish_report.open_menu,
+            "reports": self.on_analytics_menu,
+            "critical": self.on_critical_items_menu,
+            "inbound_history": self.on_analytics_menu,
+            "main_goal": self.main_goal_report.open_menu,
+            "mg_inputs": self.main_goal_report.open_inputs,
+            "mg_history": self.main_goal_report.show_history,
+            "files": self.on_upload_menu,
+            "main_source": self.on_main_source_file_menu,
+            "settings": self.on_bot_settings_menu,
+            "users": self.on_users_menu,
+            "tr_settings": self.tundish_report.open_settings,
+            "reminders": self.reminder_settings.open_menu,
+            "appearance": self.on_appearance_menu,
+            "appearance_item": self.on_appearance_menu,
+            "letterhead": self.on_appearance_menu,
+            "stock_group": self.on_bot_settings_menu,
+        }
+        opener = openers.get(key)
+        if opener is None:
+            self._reply(message, "منوی اصلی:", kb.main_menu(user))
+            return
+        opener(message)
+
+    def _has_pending(self, uid: str) -> bool:
+        uid = str(uid)
+        session = self.db.get_or_create_session(uid)
+        return any(
+            (
+                uid in self._analysis_pending,
+                uid in self._await_category_code,
+                uid in self._main_source_pending,
+                uid in self._site_stock_pending,
+                uid in self._users_pending,
+                uid in self._bot_settings_pending,
+                uid in self._material_req_pending,
+                uid in self._warehouse_ret_pending,
+                uid in self._critical_pending,
+                uid in self._full_replace_confirm,
+                uid in self._n_tundish_pending,
+                uid in self.tundish_report.pending,
+                uid in self.tundish_report.settings_pending,
+                uid in self.main_goal_report.pending,
+                self.reminder_settings.has_pending(uid),
+                bool(session.get("pending_file_type")),
+            )
+        )
+
+    def _clear_all_pending(self, uid: str) -> None:
+        """Shared full clear: «🏠 منوی اصلی», /reset, «⬅️ بازگشت», «✖️ انصراف»."""
+        uid = str(uid)
+        self._clear_analysis_pending(uid)
+        self._clear_site_stock_pending(uid)
+        self._clear_users_pending(uid)
+        self._clear_material_req_pending(uid)
+        self._clear_warehouse_ret_pending(uid)
+        self._clear_critical_pending(uid)
+        self.tundish_report.clear(uid)
+        self.main_goal_report.clear(uid)
+        self.reminder_settings.clear(uid)
+        self._bot_settings_pending.pop(uid, None)
+        self._await_category_code.discard(uid)
+        self._main_source_pending.pop(uid, None)
+        self._upload_return_menu.pop(uid, None)
+        self._full_replace_confirm.discard(uid)
+        self._n_tundish_pending.pop(uid, None)
+        self._file_guide_kind.pop(uid, None)
+        try:
+            self.db.set_pending_file_type(uid, None)
+        except Exception:  # noqa: BLE001 - unknown user / no session
+            logger.debug("clear pending file type failed for %s", uid)
+
+    def on_nav_home(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        self._clear_all_pending(str(user["bale_user_id"]))
+        self._reply(message, "منوی اصلی:", kb.main_menu(user))
+
+    def on_nav_back(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        target = self._nav_target_back(uid)
+        self._clear_all_pending(uid)
+        self._open_menu(message, user, target)
+
+    def on_cancel(self, message: dict) -> None:
+        """Single «✖️ انصراف» for every multi-step flow (routes to the active one)."""
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        if uid in self.tundish_report.pending:
+            self.tundish_report.pending.pop(uid, None)
+            self._reply(message, "گزارش تاندیش لغو شد؛ چیزی ذخیره نشد.", kb.tundish_report_menu(user))
+            return
+        if uid in self.main_goal_report.pending:
+            self.main_goal_report.cancel(message)
+            return
+        if uid in self._site_stock_pending:
+            self.on_site_stock_cancel(message)
+            return
+        if uid in self._warehouse_ret_pending:
+            self.on_warehouse_return_cancel(message)
+            return
+        if uid in self._material_req_pending:
+            self.on_material_request_cancel(message)
+            return
+        session = self.db.get_or_create_session(uid)
+        if (
+            uid in self._main_source_pending
+            or uid in self._await_category_code
+            or session.get("pending_file_type")
+        ):
+            self.on_cancel_pending(message)
+            return
+        if not self._has_pending(uid):
+            target = (self._nav.get(uid) or {}).get("origin") or (self._nav.get(uid) or {}).get("key") or "main"
+            self._reply(message, "عملیاتی برای انصراف نیست.")
+            self._open_menu(message, user, target if target != "flow" else "main")
+            return
+        target = self._nav_target_back(uid)
+        self._clear_all_pending(uid)
+        self._reply(message, "لغو شد؛ چیزی ذخیره نشد.")
+        self._open_menu(message, user, target)
 
     def _user_or_deny(self, message: dict) -> dict | None:
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))
@@ -283,15 +376,14 @@ class BotApp:
         self._main_source_pending.pop(uid, None)
         self._upload_return_menu.pop(uid, None)
         self._site_stock_pending.pop(uid, None)
-        self._catalog_assign_pending.pop(uid, None)
         self._users_pending.pop(uid, None)
         self._bot_settings_pending.pop(uid, None)
         self._material_req_pending.pop(uid, None)
         self._warehouse_ret_pending.pop(uid, None)
-        self._report_assistant_pending.discard(uid)
+        self._n_tundish_pending.pop(uid, None)
         self._reply(
             message,
-            "دسترسی ندارید؛ فقط ورود موجودی روزانه سایت برای نقش تکنسین فعال است.",
+            "دسترسی ندارید؛ نقش تکنسین فقط «موجودی روزانه سایت» و «گزارش تاندیش» را دارد.",
             kb.main_menu(user),
         )
         return True
@@ -314,8 +406,7 @@ class BotApp:
         has_rates = bool(done.get("tank_consumption") or done.get("monthly_consumption"))
         if has_inv and has_rates:
             lines.append(
-                "\nداده‌های لازم برای گزارش‌ها آماده‌اند — از «گزارش‌ها / تحلیل تاندیش» "
-                "یا «گزارش کلی مواد» استفاده کنید."
+                f"\nداده‌های لازم برای گزارش‌ها آماده‌اند — از «{kb.BTN_ANALYTICS}» استفاده کنید."
             )
         elif has_inv or done.get("site_stock") or done.get("monthly_consumption"):
             lines.append("\nبا داده‌های موجود می‌توانید بخشی از گزارش‌ها را اجرا کنید.")
@@ -504,9 +595,6 @@ class BotApp:
     def _clear_warehouse_ret_pending(self, uid: str) -> None:
         self._warehouse_ret_pending.pop(str(uid), None)
 
-    def _clear_report_assistant_pending(self, uid: str) -> None:
-        self._report_assistant_pending.discard(str(uid))
-
     def _clear_critical_pending(self, uid: str) -> None:
         self._critical_pending.pop(str(uid), None)
 
@@ -517,18 +605,6 @@ class BotApp:
         """
         return inventory_with_ledger(self.db, frame)
 
-    def _apply_tundish_filter(self, frames: dict, uid: str) -> dict:
-        selected = self._analysis_tundish_filter.get(uid)
-        if not selected:
-            return frames
-        return {
-            key: filter_by_tundish_type(frame, selected) if frame is not None else frame
-            for key, frame in frames.items()
-        }
-
-    def _selected_tundish_label(self, uid: str) -> str:
-        return self._analysis_tundish_filter.get(uid) or kb.BTN_ALL_TUNDISHES
-
     def _require_files(self, message: dict, user: dict, goal: str) -> tuple[dict, dict, dict] | None:
         if self._deny_technician(message, user):
             return None
@@ -538,15 +614,14 @@ class BotApp:
         if missing:
             self._reply(
                 message,
-                "برای این گزارش این داده(ها) لازم است:\n• "
+                "برای این گزارش این داده‌ها لازم است:\n• "
                 + "\n• ".join(missing)
-                + "\n\nمنبع اصلی و مصرف ماهیانه را از «آپلود فایل» بفرستید؛ "
-                "موجودی روزانه سایت را می‌توانید تعاملی وارد کنید (Excel تکنسین لازم نیست).",
-                kb.analytics_menu(),
+                + f"\n\nمنبع اصلی و مصرف ماهیانه را از «{kb.BTN_UPLOAD_MENU}» بفرستید؛ "
+                f"موجودی روزانهٔ سایت را از «{kb.BTN_SITE_STOCK}» وارد کنید.",
+                kb.analytics_menu(user),
             )
             return None
         frames, metas = self._load_frames(user, session)
-        frames = self._apply_tundish_filter(frames, str(user["bale_user_id"]))
         return session, frames, metas
 
     # ---------- commands ----------
@@ -688,7 +763,7 @@ class BotApp:
                 message,
                 "این دستور را داخل گروهی بفرستید که ربات عضو آن است.\n"
                 "ربات همان chat_id را به‌عنوان «گروه گزارش موجودی روزانه» ذخیره می‌کند.\n"
-                "جایگزین: متغیر محیطی SITE_STOCK_REPORT_GROUP_ID یا منوی تنظیمات ربات.",
+                f"جایگزین: متغیر محیطی SITE_STOCK_REPORT_GROUP_ID یا «{kb.BTN_BOT_SETTINGS}» ← «{kb.BTN_SET_STOCK_GROUP}».",
                 kb.main_menu(user),
             )
             return
@@ -740,7 +815,7 @@ class BotApp:
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))
         self._reply(
             message,
-            HELP_TEXT,
+            help_text_for(user),
             kb.main_menu(user) if user else None,
         )
 
@@ -1135,49 +1210,20 @@ class BotApp:
             kb.main_menu(user),
         )
 
-    def cmd_setscope(self, message: dict, args: list[str]) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_technician(message, user) or not require_manager(user):
-            if not require_manager(user) and user.get("role") != "technician":
-                self._reply(message, "فقط مالک یا مدیر.")
-            return
-        if len(args) < 2:
-            self._reply(message, "فرمت: /setscope <bale_id> <scope>")
-            return
-        try:
-            updated = self.db.set_scope(args[0], args[1])
-        except KeyError:
-            self._reply(message, "کاربر یافت نشد.")
-            return
-        self._reply(
-            message,
-            (
-                "تنظیم قدیمی کاربر به‌روز شد."
-            ),
-            kb.main_menu(user),
-        )
-
     def cmd_reset(self, message: dict) -> None:
+        """/reset = same full clear as «🏠 منوی اصلی» (+ empty upload session)."""
         user = self._user_or_deny(message)
         if not user:
             return
         uid = str(user["bale_user_id"])
-        self._clear_analysis_pending(uid)
-        self._analysis_tundish_filter.pop(uid, None)
-        self._await_category_code.discard(uid)
-        self._main_source_pending.pop(uid, None)
-        self._upload_return_menu.pop(uid, None)
-        self._site_stock_pending.pop(uid, None)
-        self._catalog_assign_pending.pop(uid, None)
-        self._users_pending.pop(uid, None)
-        self._bot_settings_pending.pop(uid, None)
-        self._material_req_pending.pop(uid, None)
-        self._warehouse_ret_pending.pop(uid, None)
-        self._clear_report_assistant_pending(uid)
+        self._clear_all_pending(uid)
         self.db.reset_session(user["bale_user_id"])
-        self._reply(message, "جلسه آپلود و وضعیت ورود جاری پاک شد. از منو دوباره شروع کنید.", kb.main_menu(user))
+        self._reply(
+            message,
+            "همهٔ کارهای نیمه‌تمام (آپلود، گزارش‌ها، درخواست مواد، موجودی سایت، گزارش تاندیش، "
+            "هدف اصلی، یادآورها) پاک شد. داده‌های ذخیره‌شده دست نخورده‌اند.",
+            kb.main_menu(user),
+        )
 
     # ---------- request-driven flow ----------
     def on_pick_file_type(
@@ -1333,7 +1379,7 @@ class BotApp:
                 self._reply(
                     message,
                     "لیست کدهای دسته‌بندی خالی است.\n"
-                    "ابتدا از «آپلود فایل» → «فایل منبع اصلی» → «اضافه کردن کد دسته بندی» "
+                    f"ابتدا از «{kb.BTN_UPLOAD_MENU}» → «{kb.BTN_MAIN_SOURCE_FILE}» → «{kb.BTN_INV_ADD_CATEGORY}» "
                     "حداقل یک کد ۴ رقمی ثبت کنید، سپس دوباره فایل را بفرستید.",
                     self._keyboard_for_upload_return(user, default="main_source", consume=False),
                 )
@@ -1469,27 +1515,10 @@ class BotApp:
         inbound_report = None
         inbound_note = ""
         if pending == "product_inventory":
-            try:
-                counts = self.db.seed_catalog_from_inventory_extract(
-                    result.clean_path, only_missing=True
-                )
-                catalog_note = (
-                    f"\nکاتالوگ اقلام سایت: +{counts.get('inserted', 0)} قلم جدید "
-                    f"(ردشده/موجود={counts.get('skipped', 0)})."
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("catalog seed after inventory failed: %s", exc)
-            try:
-                wo_sync = self.db.sync_catalog_groups_from_latest_monthly(
-                    user["bale_user_id"]
-                )
-                if wo_sync.get("ok"):
-                    catalog_note += (
-                        f"\nتخصیص گروه از سفارش کار: "
-                        f"{wo_sync.get('counts', {}).get('assigned', 0)} قلم."
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("WO group sync after inventory failed: %s", exc)
+            # automatic catalog sync after every منبع اصلی change (names updated too)
+            from services.catalog_sync import note_fa as _cat_note, sync_after_change
+
+            catalog_note = _cat_note(sync_after_change(self.db, result.clean_path))
             if is_stock_upload and uploaded_stock_df is not None:
                 try:
                     live_after = pd.read_excel(result.clean_path, engine="openpyxl")
@@ -1513,23 +1542,6 @@ class BotApp:
                     "\nآپلود کامل منبع اصلی — پایه «گزارش اقلام ورودی به انبار» تغییر نکرد."
                 )
         elif pending == "monthly_consumption":
-            try:
-                # Prefer the just-uploaded raw/clean path for WO→group sync
-                wo_sync = self.db.sync_catalog_groups_from_monthly_path(
-                    result.raw_path
-                )
-                if not wo_sync.get("ok"):
-                    wo_sync = self.db.sync_catalog_groups_from_monthly_path(
-                        result.clean_path
-                    )
-                if wo_sync.get("ok"):
-                    catalog_note = (
-                        f"\nتخصیص گروه اسلب/بلوم/بیلت از سفارش کار: "
-                        f"{wo_sync.get('counts', {}).get('assigned', 0)} قلم "
-                        f"(نگاشت={wo_sync.get('mapping_size', 0)})."
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("WO group sync after monthly failed: %s", exc)
             try:
                 monthly_clean = pd.read_excel(result.clean_path, engine="openpyxl")
                 usage_sync = main_source_svc.sync_usage_from_monthly(
@@ -1592,83 +1604,241 @@ class BotApp:
         if inbound_report and inbound_report.get("id"):
             self._send_inbound_report_files(message, inbound_report)
 
-    def on_generate(self, message: dict) -> None:
+    # ---------- 📊 گزارش جامع (merged «گزارش کلی مواد» + «PDF کامل تحلیل») ----------
+    def on_comprehensive_prompt(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if not self._require_files(message, user, "full"):
+            return
+        self._ask_month_year_range(message, user, "comprehensive")
+
+    # ---------- optional «بخش: همه/اسلب/بلوم/بیلت» step ----------
+    _SECTION_STEP_MODES = frozenset({"daily", "comprehensive", "period"})
+
+    def _ask_section_step(self, message: dict, user: dict, mode: str, **ctx: Any) -> None:
+        uid = str(user["bale_user_id"])
+        self._analysis_pending[uid] = {"mode": mode, "await": "section", **ctx}
+        self._reply(
+            message,
+            "بخش (اختیاری): «همه بخش‌ها» یا یکی از اسلب / بلوم / بیلت را انتخاب کنید.",
+            kb.section_step_menu(),
+        )
+
+    def on_section_step_text(self, message: dict, text: str) -> bool:
+        uid = self._uid(message)
+        pending = self._analysis_pending.get(uid)
+        if not pending or pending.get("await") != "section":
+            return False
+        if text not in kb.SECTION_STEP_BUTTONS:
+            self._reply(message, "یکی از گزینه‌های بخش را انتخاب کنید.", kb.section_step_menu())
+            return True
+        user = self._user_or_deny(message)
+        if not user:
+            return True
+        section = kb.SECTION_STEP_BUTTONS[text]  # None = همه
+        self._clear_analysis_pending(uid)
+        mode = pending["mode"]
+        if pending.get("start_ym"):
+            self._run_month_ranged_report(
+                message, user, mode, tuple(pending["start_ym"]), tuple(pending["end_ym"]),
+                section=section or "",
+            )
+        else:
+            self._run_ranged_analysis(
+                message, user, mode, pending["start"], pending["end"], section=section or "",
+            )
+        return True
+
+    @staticmethod
+    def _section_frames(frames: dict, section: str | None) -> dict:
+        if not section:
+            return frames
+        return {
+            k: (filter_by_tundish_type(f, section) if f is not None else f)
+            for k, f in frames.items()
+        }
+
+    @staticmethod
+    def _section_label(section: str | None) -> str:
+        return {"slab": "اسلب", "bloom": "بلوم", "billet": "بیلت"}.get(section or "", "همه بخش‌ها")
+
+    # ---------- 🧮 نیاز مواد برای N تاندیش ----------
+    def on_n_tundish_start(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
         if self._deny_technician(message, user):
             return
-        session = self.db.get_or_create_session(user["bale_user_id"])
-        completeness = self._effective_completeness(user, session)
-        ok, err = can_generate_report(user, session, completeness)
-        if not ok:
-            self._reply(
-                message,
-                err + "\n\n" + self._status_text(session, user),
-                kb.analytics_menu(),
-            )
-            return
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._n_tundish_pending[uid] = {"await": "section"}
+        self._reply(
+            message,
+            f"{kb.BTN_N_TUNDISH}\n"
+            "بخش را انتخاب کنید (اسلب / بلوم / بیلت).\n"
+            "میان‌بُر: یک‌جا بنویسید، مثلاً «اسلب ۴».\n"
+            "مبنا: همان نرخ‌ها و قواعد «اقلام بحرانی» از منبع اصلی؛ گزارش فقط‌خواندنی است.",
+            kb.n_tundish_section_menu(),
+        )
 
-        paths = self._resolved_file_paths(user, session)
-        self._reply(message, "در حال پردازش و ساخت PDF…")
-        try:
-            frames, metas = process_session_files(
-                {k: v for k, v in paths.items() if v}, user
-            )
-            analytics = self._build_analytics_bundle(frames)
-            pdf_path = generate_report(frames, metas, user, analytics=analytics, letterhead_path=self._letterhead_path())
-            counts = {k: int(metas[k]["visible_rows"]) for k in metas}
-            self.db.save_report(user["bale_user_id"], session["id"], str(pdf_path), counts)
-            # keep paths available for further analytics: copy into fresh collecting session
-            saved_paths = {
-                "tank_consumption": session.get("tank_path"),
-                "product_inventory": session.get("inventory_path"),
-                "monthly_consumption": session.get("monthly_path"),
-            }
-            self.db.mark_session_done(session["id"])
-            new_session = self.db.get_or_create_session(user["bale_user_id"])
-            for ftype, path in saved_paths.items():
-                if path:
-                    self.db.store_file_slot(user["bale_user_id"], ftype, path)
-            self.client.send_document(
-                self._chat_id(message),
-                pdf_path,
-                caption="گزارش کلی مواد",
-            )
-            excel_ok = False
-            try:
-                xlsx_path = pdf_path.with_suffix(".xlsx")
-                generate_analytics_report_xlsx(
-                    frames,
-                    metas,
-                    analytics=analytics,
-                    output_path=xlsx_path,
-                    filename_stem="report",
+    def on_n_tundish_text(self, message: dict, text: str) -> bool:
+        from services import n_tundish_report as nt
+
+        uid = self._uid(message)
+        p = self._n_tundish_pending.get(uid)
+        if not p:
+            return False
+        step = p.get("await")
+        if step == "section":
+            short = nt.parse_shortcut(text)
+            if short:
+                p["section"], p["n"] = short
+                p["await"] = "mode"
+            elif text in nt.SECTION_BY_FA:
+                p["section"] = nt.SECTION_BY_FA[text]
+                p["await"] = "count"
+                self._reply(
+                    message,
+                    f"تعداد تاندیش {nt.SECTIONS[p['section']]} (عدد صحیح مثبت) را انتخاب کنید یا بنویسید:",
+                    kb.n_tundish_count_menu(),
                 )
-                self.client.send_document(
-                    self._chat_id(message),
-                    xlsx_path,
-                    caption="نسخه اکسل — گزارش کلی مواد",
-                )
-                excel_ok = True
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("analytics excel companion failed (on_generate)")
-                logger.warning("excel companion failed: %s", exc)
-            ok_msg = (
-                "گزارش PDF و اکسل ارسال شد. فایل‌های جلسه برای تحلیل بعدی نگه داشته شدند.\n"
-                if excel_ok
-                else "گزارش PDF ارسال شد. فایل‌های جلسه برای تحلیل بعدی نگه داشته شدند.\n"
-            )
+                return True
+            else:
+                self._reply(message, "یکی از بخش‌ها را انتخاب کنید یا مثلاً «اسلب ۴» بنویسید.", kb.n_tundish_section_menu())
+                return True
+        elif step == "count":
+            short = nt.parse_shortcut(text)
+            n = short[1] if short else nt.parse_count(text)
+            if short:
+                p["section"] = short[0]
+            if n is None:
+                self._reply(message, f"تعداد باید عدد صحیح مثبت (۱ تا {nt.MAX_N}) باشد.", kb.n_tundish_count_menu())
+                return True
+            p["n"] = n
+            p["await"] = "mode"
+        elif step == "mode":
+            mode = {kb.BTN_NT_WITH: "with", kb.BTN_NT_WITHOUT: "without"}.get(text)
+            if not mode:
+                self._reply(message, f"«{kb.BTN_NT_WITH}» یا «{kb.BTN_NT_WITHOUT}» را انتخاب کنید.", kb.n_tundish_mode_menu())
+                return True
+            self._n_tundish_pending.pop(uid, None)
+            self._run_n_tundish(message, p["section"], int(p["n"]), mode)
+            return True
+        if p.get("await") == "mode":
             self._reply(
                 message,
-                ok_msg
-                + "از «گزارش‌ها / تحلیل تاندیش» استفاده کنید یا با /reset جلسه را پاک کنید.",
-                kb.analytics_menu(),
+                f"{p['n']} تاندیش {nt.SECTIONS[p['section']]} — حالت را انتخاب کنید:\n"
+                f"• {kb.BTN_NT_WITH}: نرخ نوسازی + پچینگ\n• {kb.BTN_NT_WITHOUT}: فقط پچینگ\n"
+                "(سطح ریخته‌گری × N در هر دو حالت)",
+                kb.n_tundish_mode_menu(),
             )
-            log_activity(self.db, user, "report_generate_pdf")
+        return True
+
+    def _run_n_tundish(self, message: dict, section: str, n: int, mode: str) -> None:
+        from services import n_tundish_report as nt
+
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        self._reply(message, "در حال ساخت گزارش…")
+        try:
+            res = nt.generate_files(
+                self.db, user, section, n, mode, letterhead_path=self._letterhead_path()
+            )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("generate failed")
-            self._reply(message, f"خطا در تولید گزارش: {exc}", kb.analytics_menu())
+            logger.exception("n_tundish report failed")
+            self._reply(message, f"خطا در ساخت گزارش: {exc}", kb.analytics_menu(user))
+            return
+        if res.error:
+            self._reply(message, res.error, kb.analytics_menu(user))
+            return
+        chat = self._chat_id(message)
+        for path, cap in ((res.pdf, res.title), (res.xlsx, f"نسخه اکسل — {res.title}")):
+            try:
+                self.client.send_document(chat, path, caption=cap)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("send n_tundish file failed: %s", exc)
+        self._reply(message, res.bot_text(), kb.analytics_menu(user))
+        log_activity(self.db, user, "report_n_tundish", section=section, n=n, renovation=mode)
+
+    # ---------- 📦 جایگزینی کامل منبع اصلی (warning + confirm) ----------
+    def on_full_replace_start(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user):
+            return
+        if not perm.can(user, perm.MAIN_SOURCE_EDIT):
+            self._reply(message, "جایگزینی کامل منبع اصلی برای نقش شما مجاز نیست.", kb.upload_files_menu(user))
+            return
+        uid = str(user["bale_user_id"])
+        self._full_replace_confirm.add(uid)
+        self._reply(
+            message,
+            "⚠️ جایگزینی کامل منبع اصلی\n"
+            "فایل جدید مرجع همهٔ گزارش‌ها می‌شود: شناسه‌ها و کدهای دستهٔ جدید (و ردیف‌های ۱۸۰۰) "
+            "اضافه می‌شوند و مقادیر فعلی با فایل جدید به‌روز می‌شوند.\n"
+            "برای به‌روزرسانی معمول موجودی، از «" + kb.BTN_WAREHOUSE_STOCK + "» استفاده کنید.\n\n"
+            f"ادامه می‌دهید؟ «{kb.BTN_FULL_REPLACE_CONFIRM}»",
+            kb.full_replace_confirm_menu(),
+        )
+
+    def on_full_replace_confirm(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        if uid not in self._full_replace_confirm:
+            self._reply(message, f"ابتدا «{kb.BTN_FULL_REPLACE}» را بزنید.", kb.main_source_file_menu())
+            return
+        self._full_replace_confirm.discard(uid)
+        self.on_pick_file_type(message, "product_inventory", return_menu="main_source")
+
+    # ---------- ❓ راهنمای تهیهٔ فایل ----------
+    def on_file_guide(self, message: dict) -> None:
+        from services import file_guides
+
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        kind = self._file_guide_kind.get(uid)
+        if not kind:
+            pending = (self.db.get_or_create_session(uid) or {}).get("pending_file_type")
+            if pending in ("product_inventory", "monthly_consumption"):
+                kind = pending
+        # keep the current keyboard: re-send the guide without changing nav state
+        self.client.send_message(self._chat_id(message), file_guides.guide_text(kind))
+
+    # ---------- ⚙️ تنظیمات → 🎨 ظاهر / 🔐 دسترسی نقش‌ها ----------
+    def on_appearance_menu(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if not perm.can(user, perm.SETTINGS):
+            self._reply(message, "این بخش فقط برای مالک یا مدیر است.", kb.main_menu(user))
+            return
+        self._bot_settings_pending.pop(str(user["bale_user_id"]), None)
+        self._reply(
+            message,
+            "🎨 ظاهر — متن دعوت‌نامه، پیام خوشامد، لوگو و سربرگ PDF:",
+            kb.appearance_menu(),
+        )
+
+    def on_role_permissions(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if not perm.can(user, perm.SETTINGS):
+            self._reply(message, "این بخش فقط برای مالک یا مدیر است.", kb.main_menu(user))
+            return
+        self._reply(
+            message,
+            perm.matrix_text_fa()
+            + "\n\n(ویرایش دسترسی‌ها در فاز بعد اضافه می‌شود؛ فعلاً فقط نمایش.)",
+            kb.bot_settings_menu(user),
+        )
 
     # ---------- آپلود فایل / فایل منبع اصلی ----------
     def on_upload_menu(self, message: dict) -> None:
@@ -1685,11 +1855,12 @@ class BotApp:
         self.db.set_pending_file_type(user["bale_user_id"], None)
         self._reply(
             message,
-            "منوی آپلود فایل\n"
-            "• موجودی انبار — Excel انبار (به‌روزرسانی منبع اصلی)\n"
-            "• مصرف ماهیانه مواد\n"
-            "• فایل منبع اصلی — آپلود Excel / افزودن و ویرایش رکورد / کد دسته",
-            kb.upload_files_menu(),
+            f"{kb.BTN_UPLOAD_MENU}\n"
+            f"• {kb.BTN_WAREHOUSE_STOCK} — Excel انبار؛ فقط شناسه‌های موجود به‌روز می‌شوند "
+            "(شناسهٔ جدید فقط با کد ۴رقمی موجود و غیر ۱۸۰۰)\n"
+            f"• {kb.BTN_MONTHLY} — Excel مصرف ماهیانه\n"
+            f"• {kb.BTN_MAIN_SOURCE_FILE} — جایگزینی کامل / دانلود / رکورد / کد دسته",
+            kb.upload_files_menu(user),
         )
 
     def on_main_source_file_menu(self, message: dict) -> None:
@@ -1710,13 +1881,9 @@ class BotApp:
         )
         self._reply(
             message,
-            "منوی فایل منبع اصلی\n" + hint,
+            f"{kb.BTN_MAIN_SOURCE_FILE}\n" + hint,
             kb.main_source_file_menu(),
         )
-
-    def on_inventory_menu(self, message: dict) -> None:
-        """Alias for legacy callers."""
-        self.on_main_source_file_menu(message)
 
     def on_add_category_prompt(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -1846,11 +2013,6 @@ class BotApp:
 
     def _clear_main_source_pending(self, uid: str) -> None:
         self._main_source_pending.pop(str(uid), None)
-
-    def on_inventory_edit_menu(self, message: dict) -> None:
-        """Legacy nested edit menu — now flattened into main_source_file_menu."""
-        self.on_main_source_file_menu(message)
-
 
     def on_inv_download(self, message: dict) -> None:
         """Send current cleaned منبع اصلی (product_inventory) as Excel with Persian headers."""
@@ -2219,51 +2381,25 @@ class BotApp:
             "suggest": sug,
         }
 
-    def on_tundish_filter_menu(self, message: dict) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_technician(message, user):
-            return
-        self._reply(
-            message,
-            "فیلتر نوع تاندیش را برای تحلیل‌ها و PDF انتخاب کنید:\n"
-            f"فیلتر فعلی: {self._selected_tundish_label(str(user['bale_user_id']))}",
-            kb.tundish_filter_menu(),
-        )
-
-    def on_tundish_filter_choice(self, message: dict, label: str | None) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_technician(message, user):
-            return
-        uid = str(user["bale_user_id"])
-        self._analysis_tundish_filter[uid] = label
-        self._clear_analysis_pending(uid)
-        selected = label or kb.BTN_ALL_TUNDISHES
-        self._reply(message, f"فیلتر تحلیل روی «{selected}» تنظیم شد.", kb.analytics_menu())
-
     def on_analytics_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
         if self._deny_technician(message, user):
             return
-        self._clear_analysis_pending(user["bale_user_id"])
-        self._clear_report_assistant_pending(str(user["bale_user_id"]))
-        self._clear_critical_pending(str(user["bale_user_id"]))
-        self.main_goal_report.clear(str(user["bale_user_id"]))
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self._clear_critical_pending(uid)
+        self._n_tundish_pending.pop(uid, None)
+        self.main_goal_report.clear(uid)
         session = self.db.get_or_create_session(user["bale_user_id"])
         done = self._effective_completeness(user, session)
         lines = [
-            "منوی گزارش‌ها / تحلیل تاندیش",
-            f"آستانه بحرانی: {CRITICAL_DAYS} روز پوشش موجودی",
+            kb.BTN_ANALYTICS,
             "",
             self._status_text(session, user),
             "",
-            f"فیلتر نوع تاندیش: {self._selected_tundish_label(str(user['bale_user_id']))}",
-            "یک گزینه را انتخاب کنید:",
+            "یک گزارش را انتخاب کنید:",
         ]
         if not any(
             done.get(k)
@@ -2278,7 +2414,7 @@ class BotApp:
                 "\nهنوز داده‌ای نیست — منبع اصلی / مصرف ماهیانه را آپلود کنید "
                 "یا موجودی روزانه سایت را تعاملی وارد کنید."
             )
-        self._reply(message, "\n".join(lines), kb.analytics_menu())
+        self._reply(message, "\n".join(lines), kb.analytics_menu(user))
 
     def on_daily_report(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -2318,10 +2454,10 @@ class BotApp:
             extra += f"\nمبنای گزارش امروز: {horizon_header_note(basis)}"
         self._reply(
             message,
-            "🚨 اقلام بحرانی\n"
-            "۱) تعداد تاندیش بیلت/بلوم/اسلب ماه را ثبت کنید\n"
+            f"{kb.BTN_CRITICAL_ITEMS}\n"
+            "۱) (اختیاری) تعداد تاندیش بیلت/بلوم/اسلب ماه را ثبت کنید — فقط وقتی لاگ توالی تاندیش نیست\n"
             "۲) گزارش را بگیرید: PDF اصلی (فقط اقلام شرکت)، PDF جداگانه "
-            "اقلام پیمانکار و اکسل با دو شیت جدا؛ پس از انتخاب ماه، حالت "
+            "اقلام پیمانکار و اکسل با دو شیت جدا؛ حالت "
             "«با نوسازی» یا «بدون نوسازی» را انتخاب کنید\n"
             "تاریخ گزارش = امروز؛ مبنا: میانگین تعداد تاندیش ۳ ماه کامل گذشته (لاگ توالی "
             "تاندیش، در نبود آن ثبت دستی)؛ نیاز = مصرف پیش‌بینی‌شده در افق "
@@ -2721,7 +2857,7 @@ class BotApp:
             self._reply(
                 message,
                 "هنوز گزارش اقلام ورودی ثبت نشده است.\n"
-                "پس از هر آپلود «📥 موجودی انبار» گزارش به‌طور خودکار ساخته و ذخیره می‌شود.",
+                f"پس از هر آپلود «{kb.BTN_WAREHOUSE_STOCK}» گزارش به‌طور خودکار ساخته و ذخیره می‌شود.",
                 kb.analytics_menu(),
             )
             return
@@ -2809,38 +2945,15 @@ class BotApp:
             return
         self._ask_month_year_range(message, user, "period")
 
-    def on_forecast_prompt(self, message: dict) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if not self._require_files(message, user, "forecast"):
-            return
-        self._ask_month_year_range(message, user, "forecast")
-
-    def on_suggest_prompt(self, message: dict) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if not self._require_files(message, user, "suggest"):
-            return
-        self._ask_month_year_range(message, user, "suggest")
-
-    def on_analytics_pdf(self, message: dict) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_technician(message, user):
-            return
-        if not self._require_files(message, user, "full"):
-            return
-        self._ask_month_year_range(message, user, "analytics_pdf")
-
     def on_user_activity_report(self, message: dict) -> None:
-        """Owner/manager+/non-technician: گزارش فعالیت کاربران for a Jalali month range."""
+        """«📋 فعالیت کاربران» (⚙️ تنظیمات, owner/manager) for a Jalali month range."""
         user = self._user_or_deny(message)
         if not user:
             return
         if self._deny_technician(message, user):
+            return
+        if not perm.can(user, perm.USER_ACTIVITY):
+            self._reply(message, "فعالیت کاربران فقط برای مالک یا مدیر است.", kb.main_menu(user))
             return
         self._ask_month_year_range(message, user, "user_activity")
 
@@ -3258,8 +3371,17 @@ class BotApp:
         mode: str,
         start_ym: tuple[int, int],
         end_ym: tuple[int, int],
+        *,
+        section: str | None = None,
     ) -> None:
-        """Dispatch report generation for an inclusive Jalali month/year range."""
+        """Dispatch report generation for an inclusive Jalali month/year range.
+
+        ``section`` None → ask the optional «بخش» step first (daily / comprehensive /
+        period); "" = همه بخش‌ها.
+        """
+        if mode in self._SECTION_STEP_MODES and section is None:
+            self._ask_section_step(message, user, mode, start_ym=list(start_ym), end_ym=list(end_ym))
+            return
         range_label = format_month_year_range(start_ym, end_ym)
         start_g, end_g = month_year_to_gregorian_bounds(start_ym, end_ym)
 
@@ -3271,18 +3393,18 @@ class BotApp:
             self._run_user_activity_report(message, user, start_ym, end_ym, range_label)
             return
 
-        if mode == "analytics_pdf":
-            self._run_analytics_pdf(message, user, start_g, end_g, range_label)
+        if mode in {"comprehensive", "analytics_pdf"}:
+            self._run_comprehensive(message, user, start_g, end_g, range_label, section=section or "")
             return
 
-        if mode in {"period", "forecast", "suggest"}:
+        if mode == "period":
             self._run_ranged_analysis(
-                message, user, mode, start_g, end_g, range_label=range_label
+                message, user, mode, start_g, end_g, range_label=range_label, section=section or ""
             )
             return
 
         if mode == "daily":
-            self._run_daily_report(message, user, start_g, end_g, range_label)
+            self._run_daily_report(message, user, start_g, end_g, range_label, section=section or "")
             return
         if mode == "remaining":
             self._run_remaining_critical(message, user, start_g, end_g, range_label)
@@ -3291,7 +3413,7 @@ class BotApp:
             self._run_surplus_report(message, user, start_g, end_g, range_label)
             return
 
-        self._reply(message, "حالت گزارش ناشناخته است.", kb.analytics_menu())
+        self._reply(message, "حالت گزارش ناشناخته است.", kb.analytics_menu(user))
 
     def _run_daily_report(
         self,
@@ -3300,18 +3422,21 @@ class BotApp:
         start: date,
         end: date,
         range_label: str,
+        *,
+        section: str = "",
     ) -> None:
         loaded = self._require_files(message, user, "daily")
         if not loaded:
             return
         _, frames, _ = loaded
+        frames = self._section_frames(frames, section)
         rates = daily_rates(
             frames.get("tank_consumption"),
             frames.get("monthly_consumption"),
             start=start,
             end=end,
         )
-        title = f"مصرف روزانه مواد — {range_label}"
+        title = f"مصرف روزانه مواد — {range_label} — {self._section_label(section)}"
         cols = [
             "material_name",
             "tundish_type",
@@ -3330,7 +3455,10 @@ class BotApp:
         self._send_simple_pdf_report(
             message,
             title=title,
-            subtitle=f"میانگین مصرف روزانه (ماده / تاندیش) — {range_label}",
+            subtitle=(
+                f"بخش: {self._section_label(section)} | مبنا: میانگین مصرف روزانه هر ماده/تاندیش = "
+                f"مصرف ثبت‌شده در {range_label} ÷ تعداد روزهای دارای داده (موجودی روزانه سایت و مصرف ماهیانه)"
+            ),
             columns=cols,
             rows=self._df_to_row_dicts(rates, cols),
             empty_message="در این بازه داده‌ای برای این گزارش نیست.",
@@ -3363,7 +3491,7 @@ class BotApp:
         crit = critical_materials(rates, rem, CRITICAL_DAYS)
         rem_cols = ["material_name", "remaining_qty", "unit", "location"]
         crit_cols = ["material_name", "remaining_qty", "avg_daily", "days_of_cover", "unit"]
-        title = f"موجودی و مواد بحرانی — {range_label}"
+        title = f"پوشش کوتاه‌مدت موجودی سایت — {range_label}"
         rem_rows = self._df_to_row_dicts(rem, rem_cols)
         crit_rows = self._df_to_row_dicts(crit, crit_cols)
         if not rem_rows and not crit_rows:
@@ -3373,8 +3501,8 @@ class BotApp:
             message,
             title=title,
             subtitle=(
-                f"منبع موجودی: {rem_source} | نرخ مصرف بر اساس {range_label} | "
-                f"آستانه بحرانی: پوشش < {CRITICAL_DAYS} روز"
+                f"مبنا: روزهای پوشش = موجودی فعلی ÷ میانگین مصرف روزانهٔ {range_label}؛ "
+                f"اقلام با پوشش کمتر از {CRITICAL_DAYS} روز بحرانی‌اند | منبع موجودی: {rem_source}"
             ),
             sections=[
                 {
@@ -3393,8 +3521,8 @@ class BotApp:
                 },
             ],
             filename_stem="remaining_critical",
-            output_name="موجودی_و_مواد_بحرانی.pdf",
-            caption=f"گزارش موجودی و مواد بحرانی — {range_label}",
+            output_name="پوشش_کوتاه_مدت_موجودی_سایت.pdf",
+            caption=f"پوشش کوتاه‌مدت موجودی سایت — {range_label}",
             log_user=user,
             log_action="report_remaining",
         )
@@ -3462,141 +3590,59 @@ class BotApp:
         end: date,
         *,
         range_label: str | None = None,
+        section: str | None = None,
     ) -> None:
-        goal = {"period": "period", "forecast": "forecast", "suggest": "suggest"}.get(mode, "period")
-        loaded = self._require_files(message, user, goal)
-        if not loaded:
-            return
-        _, frames, _ = loaded
-        days = range_day_count(start, end)
-        tank = frames.get("tank_consumption")
-        monthly = frames.get("monthly_consumption")
-        inv = frames.get("product_inventory")
+        """Day-level / month-level «📅 گزارش مصرف بازه‌ای» (rebuilt from current data)."""
+        from services import period_consumption as pc
+
         label = range_label or f"از {format_date(start)} تا {format_date(end)}"
-
-        if mode == "period":
-            period = period_consumption(tank, start, end)
-            title = f"گزارش مصرف بازه‌ای — {label}"
-            cols = [
-                "material_name",
-                "tundish_type",
-                "tundish_id",
-                "quantity",
-                "unit",
-                "start",
-                "end",
-            ]
-            if period.empty:
-                self._empty_range_reply(message, label)
-                return
-            self._send_simple_pdf_report(
-                message,
-                title=title,
-                subtitle=f"مصرف مواد {label} ({days} روز)",
-                columns=cols,
-                rows=self._df_to_row_dicts(period, cols),
-                empty_message="در این بازه داده‌ای برای این گزارش نیست.",
-                filename_stem="period_consumption",
-                output_name="گزارش_مصرف_بازه‌ای.pdf",
-                caption=f"گزارش مصرف بازه‌ای — {label}",
-                log_user=user,
-                log_action="report_period",
-            )
+        if mode != "period":
+            self._reply(message, "حالت گزارش ناشناخته است.", kb.analytics_menu(user))
             return
-
-        rates = daily_rates(tank, monthly)
-        rates_r = daily_rates(tank, monthly, start=start, end=end)
-        use_rates = rates_r if not rates_r.empty else rates
-
-        if mode == "forecast":
-            fc = forecast(use_rates, days)
-            title = f"پیش‌بینی نیاز تاندیش — {label}"
-            cols = [
-                "material_name",
-                "tundish_type",
-                "tundish_id",
-                "avg_daily",
-                "days",
-                "forecast_need",
-                "unit",
-            ]
-            if fc.empty:
-                self._empty_range_reply(message, label)
-                return
-            self._send_simple_pdf_report(
-                message,
-                title=title,
-                subtitle=f"پیش‌بینی نیاز برای {days} روز ({label})",
-                columns=cols,
-                rows=self._df_to_row_dicts(fc, cols),
-                empty_message="در این بازه داده‌ای برای این گزارش نیست.",
-                filename_stem="forecast",
-                output_name="پیش‌بینی_نیاز_تاندیش.pdf",
-                caption=f"پیش‌بینی نیاز تاندیش — {label}",
-                log_user=user,
-                log_action="report_forecast",
-            )
+        if section is None:
+            self._ask_section_step(message, user, mode, start=start, end=end)
             return
-
-        if mode == "suggest":
-            sug = suggest_requests(
-                use_rates,
-                remaining(self._inventory_with_ledger(inv)),
-                days,
-                inventory_df=inv,
+        if self._deny_technician(message, user):
+            return
+        try:
+            res = pc.generate_files(
+                self.db, start, end, range_label=label, section=section or None,
+                letterhead_path=self._letterhead_path(),
             )
-            title = f"پیشنهاد درخواست مواد — {label}"
-            cols = [
-                "material_name",
-                "avg_daily",
-                "days",
-                "forecast_need",
-                "remaining_qty",
-                "suggest_qty",
-                "unit",
-            ]
-            # Prefer rows with positive suggest_qty
-            shown = sug
-            if not sug.empty and "suggest_qty" in sug.columns:
-                positive = sug.loc[sug["suggest_qty"] > 0]
-                shown = positive
-            if shown.empty:
-                self._empty_range_reply(
-                    message,
-                    label,
-                    text="پیشنهادی نیست — موجودی برای بازه درخواست کافی به‌نظر می‌رسد.",
-                )
-                return
-            self._send_simple_pdf_report(
-                message,
-                title=title,
-                subtitle=(
-                    f"پیشنهاد برای {days} روز ({label}) | "
-                    "فرمول: max(0, پیش‌بینی نیاز − موجودی باقیمانده)"
-                ),
-                columns=cols,
-                rows=self._df_to_row_dicts(shown, cols),
-                empty_message="در این بازه داده‌ای برای این گزارش نیست.",
-                filename_stem="suggest",
-                output_name="پیشنهاد_درخواست_مواد.pdf",
-                caption=f"پیشنهاد درخواست مواد — {label}",
-                log_user=user,
-                log_action="report_suggest",
-            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("period consumption failed")
+            self._reply(message, f"خطا در ساخت گزارش: {exc}", kb.analytics_menu(user))
+            return
+        if res.error:
+            self._reply(message, res.error, kb.analytics_menu(user))
+            return
+        chat = self._chat_id(message)
+        for path, cap in ((res.pdf, res.title), (res.xlsx, f"نسخه اکسل — {res.title}")):
+            try:
+                self.client.send_document(chat, path, caption=cap)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("send period file failed: %s", exc)
+        self._reply(message, res.bot_text(), kb.analytics_menu(user))
+        log_activity(self.db, user, "report_period")
 
-    def _run_analytics_pdf(
+    def _run_comprehensive(
         self,
         message: dict,
         user: dict,
         start: date,
         end: date,
         range_label: str,
+        *,
+        section: str = "",
     ) -> None:
+        """«📊 گزارش جامع» — PDF + XLSX for a Jalali month range (+ optional section)."""
         loaded = self._require_files(message, user, "full")
         if not loaded:
             return
         session, frames, metas = loaded
-        self._reply(message, f"در حال ساخت PDF تحلیل تاندیش ({range_label})…")
+        frames = self._section_frames(frames, section)
+        range_label = f"{range_label} — {self._section_label(section)}"
+        self._reply(message, f"در حال ساخت گزارش جامع ({range_label})…")
         try:
             analytics = self._build_analytics_bundle(frames, start=start, end=end)
             pdf_path = generate_report(
@@ -3611,7 +3657,7 @@ class BotApp:
             self.client.send_document(
                 self._chat_id(message),
                 pdf_path,
-                caption=f"گزارش تحلیل تاندیش — {range_label}",
+                caption=f"{kb.BTN_COMPREHENSIVE} — {range_label}",
             )
             excel_ok = False
             try:
@@ -3621,12 +3667,12 @@ class BotApp:
                     metas,
                     analytics=analytics,
                     output_path=xlsx_path,
-                    filename_stem="analytics",
+                    filename_stem="comprehensive",
                 )
                 self.client.send_document(
                     self._chat_id(message),
                     xlsx_path,
-                    caption=f"نسخه اکسل — گزارش تحلیل تاندیش — {range_label}",
+                    caption=f"نسخه اکسل — {kb.BTN_COMPREHENSIVE} — {range_label}",
                 )
                 excel_ok = True
             except Exception as exc:  # noqa: BLE001
@@ -3634,12 +3680,13 @@ class BotApp:
                 logger.warning("excel companion failed: %s", exc)
             self._reply(
                 message,
-                "گزارش PDF و اکسل ارسال شد." if excel_ok else "PDF تحلیل ارسال شد.",
-                kb.analytics_menu(),
+                "گزارش جامع (PDF و اکسل) ارسال شد." if excel_ok else "PDF گزارش جامع ارسال شد.",
+                kb.analytics_menu(user),
             )
+            log_activity(self.db, user, "report_comprehensive")
         except Exception as exc:  # noqa: BLE001
-            logger.exception("analytics pdf failed")
-            self._reply(message, f"خطا در تولید PDF: {exc}", kb.analytics_menu())
+            logger.exception("comprehensive report failed")
+            self._reply(message, f"خطا در تولید گزارش: {exc}", kb.analytics_menu(user))
 
     def _resolve_monthly_source(self, user: dict) -> tuple[Path | None, str | None]:
         """Prefer raw monthly upload (plant detail); else cleaned session/latest."""
@@ -3776,10 +3823,6 @@ class BotApp:
             except BaleAPIError:
                 pass
 
-    def _clear_catalog_pending(self, uid: str) -> None:
-        self._catalog_assign_pending.pop(str(uid), None)
-
-    # ---------- موجودی روزانه سایت (interactive) ----------
     def _actor_full_name(self, user: dict | None = None, *, actor_display_name: str | None = None) -> str:
         """Display name only (no Bale id) for registrar stamps."""
         user = user or {}
@@ -3833,7 +3876,6 @@ class BotApp:
         self._clear_analysis_pending(uid)
         self._await_category_code.discard(uid)
         self._clear_site_stock_pending(uid)
-        self._clear_catalog_pending(uid)
         self.db.set_pending_file_type(user["bale_user_id"], None)
         day = self.db.tehran_today()
         actor_note = ""
@@ -3871,20 +3913,14 @@ class BotApp:
 
         items = site_items_for_group(self.db, group_key)
         if not items:
-            try:
-                self.db.sync_catalog_groups_from_latest_monthly()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("WO sync before site stock group failed: %s", exc)
-            items = site_items_for_group(self.db, group_key)
-        if not items:
             self._reply(
                 message,
-                f"هیچ قلمی به «{label}» تخصیص داده نشده است.\n"
+                f"لیست موجودی روزانهٔ «{label}» خالی است.\n"
+                "این لیست از ستون «کلید واژه» / محل مصرف منبع اصلی ساخته می‌شود"
                 + (
-                    "ابتدا مصرف ماهیانه را آپلود کنید (تخصیص از سفارش کار) "
-                    "یا از منوی «تنظیمات اقلام سایت / تخصیص به گروه» اقلام را تخصیص دهید."
-                    if can_configure_catalog(user)
-                    else "با مدیر یا کاردان مسئول برای تخصیص اقلام تماس بگیرید."
+                    f"؛ منبع اصلی را از «{kb.BTN_UPLOAD_MENU}» ← «{kb.BTN_MAIN_SOURCE_FILE}» بررسی کنید."
+                    if perm.can(user, perm.MAIN_SOURCE_EDIT)
+                    else "؛ با مدیر یا کاردان مسئول تماس بگیرید."
                 ),
                 kb.site_stock_menu(),
             )
@@ -4365,260 +4401,6 @@ class BotApp:
         answer()
 
     # ---------- تنظیمات اقلام سایت / تخصیص ----------
-    def _deny_catalog_settings(self, message: dict, user: dict) -> bool:
-        if can_configure_catalog(user):
-            return False
-        if user.get("role") == "technician":
-            self._deny_technician(message, user)
-        else:
-            self._reply(
-                message,
-                "دسترسی تنظیمات اقلام سایت فقط برای مالک، مدیر و کاردان مسئول است.",
-                kb.main_menu(user),
-            )
-        return True
-
-    def on_catalog_settings_menu(self, message: dict) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_catalog_settings(message, user):
-            return
-        uid = str(user["bale_user_id"])
-        self._clear_analysis_pending(uid)
-        self._clear_site_stock_pending(uid)
-        self._clear_catalog_pending(uid)
-        self._await_category_code.discard(uid)
-        total = len(self.db.list_catalog_items(active_only=True))
-        unassigned = len(self.db.list_unassigned_catalog_items(active_only=True))
-        self._reply(
-            message,
-            "⚙️ تنظیمات اقلام سایت / تخصیص به گروه\n"
-            f"اقلام فعال کاتالوگ: {total} | بدون گروه: {unassigned}\n"
-            "ابتدا در صورت نیاز از منبع اصلی همگام‌سازی کنید، سپس اقلام را به اسلب/بلوم/بیلت تخصیص دهید.",
-            kb.catalog_settings_menu(),
-        )
-
-    def on_catalog_seed(self, message: dict) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_catalog_settings(message, user):
-            return
-        result = self.db.seed_catalog_from_latest_warehouse()
-        if not result.get("ok"):
-            self._reply(
-                message,
-                result.get("error")
-                or "همگام‌سازی ناموفق. ابتدا فایل منبع اصلی را آپلود کنید.",
-                kb.catalog_settings_menu(),
-            )
-            return
-        counts = result["counts"]
-        extract = result["extract"]
-        wo_note = ""
-        try:
-            wo_sync = self.db.sync_catalog_groups_from_latest_monthly()
-            if wo_sync.get("ok"):
-                wo_note = (
-                    f"\nتخصیص از سفارش کار مصرف ماهیانه: "
-                    f"{wo_sync.get('counts', {}).get('assigned', 0)} قلم "
-                    f"(نگاشت={wo_sync.get('mapping_size', 0)})."
-                )
-            elif wo_sync.get("error"):
-                wo_note = f"\n(سفارش کار: {wo_sync.get('error')})"
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("WO sync on catalog seed failed: %s", exc)
-        self._reply(
-            message,
-            "✅ همگام‌سازی کاتالوگ از آخرین منبع اصلی انجام شد.\n"
-            f"ردیف‌های فایل: {counts.get('total_rows', 0)}\n"
-            f"افزوده: {counts.get('inserted', 0)} | به‌روز: {counts.get('updated', 0)} | "
-            f"ردشده/موجود: {counts.get('skipped', 0)}\n"
-            f"منبع: extract#{extract.get('id')} ({extract.get('row_count')} ردیف تمیز)"
-            f"{wo_note}",
-            kb.catalog_settings_menu(),
-        )
-
-    def on_catalog_list(self, message: dict, unassigned_only: bool = False) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_catalog_settings(message, user):
-            return
-        if unassigned_only:
-            rows = self.db.list_unassigned_catalog_items(active_only=True)
-            title = "📭 اقلام بدون گروه"
-        else:
-            rows = self.db.list_catalog_with_assignments(active_only=True)
-            title = "📋 لیست اقلام و تخصیص‌ها"
-        if not rows:
-            self._reply(
-                message,
-                title + "\nلیست خالی است. ابتدا همگام‌سازی از منبع اصلی را بزنید.",
-                kb.catalog_settings_menu(),
-            )
-            return
-        # Keep up to 80 for pick-by-number; PDF uses the same window
-        uid = str(user["bale_user_id"])
-        pdf_cap = 80
-        self._catalog_assign_pending[uid] = {
-            "mode": "pick",
-            "rows": rows[:pdf_cap],
-            "unassigned_only": unassigned_only,
-        }
-        inventory_frame, _, _ = self._load_latest_inventory_frame(
-            user, include_catalog_fallback=False
-        )
-        inventory_by_id: dict[str, dict] = {}
-        if inventory_frame is not None and not inventory_frame.empty:
-            for _, inv_row in inventory_frame.iterrows():
-                item_id = self._inventory_cell(inv_row.get("id"), "")
-                if item_id:
-                    inventory_by_id[item_id] = inv_row.to_dict()
-        pdf_rows: list[dict[str, Any]] = []
-        for i, r in enumerate(rows[:pdf_cap], 1):
-            group = r.get("tundish_group")
-            g_label = SITE_STOCK_GROUPS.get(group, "—") if group else "—"
-            inv = inventory_by_id.get(str(r["id"]).strip(), {})
-            category = self._inventory_cell(
-                inv.get("category_code"), self._inventory_cell(r.get("category_code"))
-            )
-            quantity = self._inventory_cell(inv.get("quantity"))
-            desc = self._inventory_cell(r.get("name_desc"), str(r["id"]))
-            pdf_rows.append(
-                {
-                    "ردیف": i,
-                    "کد دسته": category,
-                    "شناسه": str(r["id"]),
-                    "شرح": desc,
-                    "موجودی": quantity,
-                    "گروه": g_label,
-                }
-            )
-        extra = ""
-        if len(rows) > pdf_cap:
-            extra = f" (نمایش {pdf_cap} از {len(rows)}؛ با شناسه دقیق بفرستید)"
-        cols = ["ردیف", "کد دسته", "شناسه", "شرح", "موجودی", "گروه"]
-        self._send_simple_pdf_report(
-            message,
-            title=title.replace("📋 ", "").replace("📭 ", ""),
-            subtitle=f"{len(pdf_rows)} قلم{extra}",
-            columns=cols,
-            rows=pdf_rows,
-            filename_stem="catalog_list",
-            output_name="لیست_اقلام_کاتالوگ.pdf",
-            caption=f"{title} — {len(pdf_rows)} قلم{extra}",
-            reply_ok="برای تخصیص، شماره یا شناسه را بفرستید",
-            reply_markup=kb.catalog_settings_menu(),
-            log_user=user,
-            log_action="catalog_list_pdf",
-        )
-
-    def on_catalog_pick_text(self, message: dict, text: str) -> bool:
-        """While awaiting item pick for assignment."""
-        uid = str(self._uid(message))
-        pending = self._catalog_assign_pending.get(uid)
-        if not pending or pending.get("mode") != "pick":
-            return False
-        # Ignore menu buttons — let dispatcher handle them
-        menu_buttons = {
-            kb.BTN_CATALOG_SETTINGS,
-            kb.BTN_CATALOG_LIST,
-            kb.BTN_CATALOG_UNASSIGNED,
-            kb.BTN_CATALOG_SEED,
-            kb.BTN_BACK_MAIN,
-            kb.BTN_BACK_CATALOG,
-            kb.BTN_SITE_STOCK,
-            kb.BTN_HELP,
-            kb.BTN_CANCEL_PENDING,
-        }
-        if text in menu_buttons or text in kb.SITE_GROUP_BUTTONS or text in kb.ASSIGN_GROUP_BUTTONS:
-            return False
-        user = self._user_or_deny(message)
-        if not user:
-            self._clear_catalog_pending(uid)
-            return True
-        if self._deny_catalog_settings(message, user):
-            return True
-        rows = pending.get("rows") or []
-        raw = (text or "").strip()
-        trans = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-        raw_n = raw.translate(trans)
-        chosen = None
-        if raw_n.isdigit():
-            n = int(raw_n)
-            if 1 <= n <= len(rows):
-                chosen = rows[n - 1]
-        if chosen is None:
-            for r in rows:
-                if str(r["id"]).strip() == raw:
-                    chosen = r
-                    break
-        if chosen is None:
-            # try full catalog by id
-            item = self.db.get_catalog_item(raw)
-            if item and item.get("active"):
-                chosen = item
-        if chosen is None:
-            self._reply(
-                message,
-                "قلم یافت نشد. شماره لیست یا شناسه دقیق را بفرستید.",
-                kb.catalog_settings_menu(),
-            )
-            return True
-        item_id = chosen["id"]
-        self._catalog_assign_pending[uid] = {"mode": "assign", "item_id": item_id}
-        current = self.db.get_item_assignment(item_id)
-        cur_label = (
-            SITE_STOCK_GROUPS.get(current["tundish_group"], current["tundish_group"])
-            if current
-            else "—"
-        )
-        name = chosen.get("name_desc") or item_id
-        self._reply(
-            message,
-            f"قلم انتخاب شد:\n[{item_id}] {name}\nتخصیص فعلی: {cur_label}\n"
-            "گروه مقصد را انتخاب کنید:",
-            kb.catalog_assign_menu(),
-        )
-        return True
-
-    def on_catalog_assign_group(self, message: dict, group_key: str | None) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_catalog_settings(message, user):
-            return
-        uid = str(user["bale_user_id"])
-        pending = self._catalog_assign_pending.get(uid)
-        if not pending or pending.get("mode") != "assign":
-            self._reply(
-                message,
-                "ابتدا از لیست یک قلم را انتخاب کنید.",
-                kb.catalog_settings_menu(),
-            )
-            return
-        item_id = pending["item_id"]
-        try:
-            if group_key is None:
-                self.db.unassign_item(item_id)
-                msg = f"تخصیص قلم [{item_id}] حذف شد."
-            else:
-                row = self.db.assign_item_to_group(
-                    item_id, group_key, assigned_by=user["bale_user_id"]
-                )
-                label = SITE_STOCK_GROUPS.get(row["tundish_group"], row["tundish_group"])
-                msg = f"✅ قلم [{item_id}] به «{label}» تخصیص داده شد."
-        except (ValueError, KeyError) as exc:
-            self._reply(message, str(exc), kb.catalog_settings_menu())
-            self._clear_catalog_pending(uid)
-            return
-        self._clear_catalog_pending(uid)
-        self._reply(message, msg, kb.catalog_settings_menu())
-
-
-    # ---------- bot settings (owner/manager) ----------
     def _letterhead_path(self) -> Path | None:
         """Return configured blank letterhead PDF path if present on disk."""
         raw = self.db.get_setting("letterhead_pdf")
@@ -4640,7 +4422,7 @@ class BotApp:
         if not require_manager(user):
             self._reply(
                 message,
-                "فقط مالک یا مدیر به بخش تنظیمات ربات دسترسی دارد.",
+                "فقط مالک یا مدیر به «⚙️ تنظیمات» دسترسی دارد.",
                 kb.main_menu(user),
             )
             return None
@@ -4666,8 +4448,8 @@ class BotApp:
         self._clear_bot_settings_pending(str(user["bale_user_id"]))
         self._reply(
             message,
-            "تنظیمات ربات — یک بخش را انتخاب کنید:",
-            kb.bot_settings_menu(),
+            f"{kb.BTN_BOT_SETTINGS} — یک بخش را انتخاب کنید:",
+            kb.bot_settings_menu(user),
         )
 
     def on_bot_settings_section(self, message: dict, which: str) -> None:
@@ -4928,7 +4710,7 @@ class BotApp:
         )
         self._reply(
             message,
-            f"✅ شناسه گروه گزارش از تنظیمات ربات حذف شد.{env_bit}",
+            f"✅ شناسه گروه گزارش از تنظیمات حذف شد.{env_bit}",
             self._settings_item_menu("stock_group"),
         )
 
@@ -5219,9 +5001,13 @@ class BotApp:
                 "پیشنهادی نیست — موجودی برای بازه درخواست کافی به‌نظر می‌رسد."
             )
         return (
-            f"🛒 پیشنهاد درخواست مواد برای پوشش {days_label} روز — "
-            f"جدول اقلام در PDF ({len(lines)} قلم).\n"
-            "تأیید همه / اصلاح / انصراف را انتخاب کنید."
+            f"🛒 پیشنهاد درخواست مواد برای پوشش {days_label} روز — {len(lines)} قلم:\n"
+            + "\n".join(
+                f"{i}) {ln.get('item_name') or ln.get('item_id')}: {float(ln.get('quantity') or 0):g} {ln.get('unit') or ''}".strip()
+                for i, ln in enumerate(lines[:40], 1)
+            )
+            + ("\n…" if len(lines) > 40 else "")
+            + "\n\nتأیید همه / اصلاح / انصراف را انتخاب کنید."
         )
 
     def _mr_lines_to_pdf_rows(self, lines: list[dict]) -> list[dict[str, Any]]:
@@ -5259,25 +5045,42 @@ class BotApp:
         prefix: str | None = None,
     ) -> None:
         body = self._format_mr_review(days, lines)
+        basis = self._mr_basis.get(self._uid(message))
+        if basis:
+            body = f"{body}\n\n{basis}"
         if prefix:
             body = f"{prefix}\n\n{body}"
-        markup = kb.material_request_review_menu()
-        if not lines:
-            self._reply(message, body, markup)
+        if lines:
+            body += f"\n\nبرای فایل پیش‌نویس (بدون ثبت) «{kb.BTN_MR_DRAFT}» را بزنید."
+        self._reply(message, body[:3900], kb.material_request_review_menu())
+
+    def on_material_request_draft(self, message: dict) -> None:
+        """«📄 پیش‌نویس PDF/اکسل»: files of the CURRENT review list — no DB write/ledger."""
+        uid = self._uid(message)
+        pending = self._material_req_pending.get(uid)
+        user = self._user_or_deny(message)
+        if not user:
             return
+        if not pending or not pending.get("lines"):
+            self._reply(message, f"ابتدا از «{kb.BTN_MATERIAL_REQUEST}» لیست را بسازید.", kb.main_menu(user))
+            return
+        lines = pending.get("lines") or []
+        days = pending.get("days") or 1
         days_label = int(days) if float(days) == int(days) else days
         cols = ["ردیف", "شناسه", "شرح", "گروه", "موجودی", "مصرف روز", "پیشنهاد", "واحد"]
+        basis = self._mr_basis.get(uid) or ""
         self._send_simple_pdf_report(
             message,
-            title=f"پیشنهاد درخواست مواد — پوشش {days_label} روز",
-            subtitle=f"{len(lines)} قلم",
+            title=f"پیش‌نویس درخواست مواد — پوشش {days_label} روز",
+            subtitle=f"{len(lines)} قلم — پیش‌نویس (ثبت نشده) | {basis}",
             columns=cols,
             rows=self._mr_lines_to_pdf_rows(lines),
-            filename_stem="material_request_review",
-            output_name="پیشنهاد_درخواست_مواد.pdf",
-            caption=f"پیشنهاد درخواست مواد — {len(lines)} قلم",
-            reply_ok=body,
-            reply_markup=markup,
+            empty_message="لیست خالی است.",
+            filename_stem="material_request_draft",
+            output_name="پیش‌نویس_درخواست_مواد.pdf",
+            caption=f"پیش‌نویس درخواست مواد — {len(lines)} قلم (ثبت نشده)",
+            reply_ok="پیش‌نویس PDF و اکسل ارسال شد؛ هنوز چیزی ثبت نشده است.",
+            reply_markup=kb.material_request_review_menu(),
         )
 
 
@@ -5290,21 +5093,20 @@ class BotApp:
         missing = missing_files_for_goal("suggest", completeness)
         if missing:
             return [], (
-                "برای درخواست مواد این داده(ها) لازم است:\n• "
+                "برای درخواست مواد این داده‌ها لازم است:\n• "
                 + "\n• ".join(missing)
-                + "\n\nمنبع اصلی و مصرف ماهیانه را از «آپلود فایل» بفرستید "
-                "(موجودی روزانه سایتِ Excel لازم نیست اگر مصرف ماهیانه موجود باشد)."
+                + f"\n\nمنبع اصلی و مصرف ماهیانه را از «{kb.BTN_UPLOAD_MENU}» بفرستید."
             )
+        # Never filtered by section (cleanup item 7) — the whole plant is proposed.
         frames, _metas = self._load_frames(user, session)
-        frames = self._apply_tundish_filter(frames, str(user["bale_user_id"]))
         tank = frames.get("tank_consumption")
         monthly = frames.get("monthly_consumption")
         inv = self._inventory_with_ledger(frames.get("product_inventory"))
-        end = date.today()
-        start = end - timedelta(days=max(0, int(days) - 1))
-        rates = daily_rates(tank, monthly)
-        rates_r = daily_rates(tank, monthly, start=start, end=end)
-        use_rates = rates_r if rates_r is not None and not rates_r.empty else rates
+        # Rate window = last 3 complete months; ``days`` = coverage horizon only.
+        from services.consumption_rates import rates_last_complete_months
+
+        use_rates, basis, _w = rates_last_complete_months(tank, monthly)
+        self._mr_basis[str(user["bale_user_id"])] = basis
         rem = remaining(inv)
         # اولویت 0 items are not proposed in a material request.
         sug = suggest_requests(use_rates, rem, days, inventory_df=inv)
@@ -5492,7 +5294,8 @@ class BotApp:
             kb.BTN_BACK_MAIN,
             kb.BTN_MATERIAL_REQUEST,
             kb.BTN_HELP,
-            kb.BTN_RESET,
+            kb.BTN_HOME,
+            kb.BTN_BACK,
         }:
             return False
         raw = (text or "").strip().translate(
@@ -5804,7 +5607,6 @@ class BotApp:
                 + "\n\nیا ابتدا موجودی روزانه سایت را وارد کنید."
             )
         frames, _ = self._load_frames(user, session) if any(completeness.values()) else ({}, {})
-        frames = self._apply_tundish_filter(frames, str(user["bale_user_id"]))
         tank = frames.get("tank_consumption")
         monthly = frames.get("monthly_consumption")
         rates = daily_rates(tank, monthly)
@@ -6088,129 +5890,12 @@ class BotApp:
 
     # ---------- dispatcher ----------
 
-    # ---------- local report assistant ----------
-    _ASSISTANT_DISABLED_FA = (
-        "دستیار هوشمند فعلاً غیرفعال است.\n"
-        "این قابلیت به‌صورت موقت خاموش شده و گفتگو با Ollama باز نمی‌شود."
-    )
-
-    def _assistant_disabled_reply(self, message: dict, user: dict | None = None) -> None:
-        """Reply that دستیار هوشمند is temporarily off (no Ollama chat)."""
-        self._clear_report_assistant_pending(self._uid(message))
-        if user is None:
-            user = self.db.get_user(self._uid(message))
-        if user and user.get("role") != "technician":
-            menu = kb.analytics_menu()
-        elif user:
-            menu = kb.main_menu(user)
-        else:
-            menu = None
-        self._reply(message, self._ASSISTANT_DISABLED_FA, menu)
-
-    def cmd_assistant(self, message: dict) -> None:
-        """Slash command: /assistant — gated by ASSISTANT_ENABLED (default off)."""
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if not ASSISTANT_ENABLED:
-            self._assistant_disabled_reply(message, user)
-            return
-        self.on_report_assistant_start(message)
-
-    def on_report_assistant_start(self, message: dict) -> None:
-        """Enter report-only assistant conversation (all roles except technician)."""
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if self._deny_technician(message, user):
-            return
-        if not ASSISTANT_ENABLED:
-            self._assistant_disabled_reply(message, user)
-            return
-        uid = str(user["bale_user_id"])
-        self._clear_analysis_pending(uid)
-        self._report_assistant_pending.add(uid)
-        self._reply(
-            message,
-            "دستیار هوشمند (محلی — Ollama)\n"
-            "فقط دربارهٔ گزارش‌ها و اعداد داخل ربات بپرسید.\n"
-            "برای پایان، «پایان گفتگو» یا بازگشت به تحلیل را بزنید.",
-            kb.report_assistant_menu(),
-        )
-
-    def on_report_assistant_end(self, message: dict) -> None:
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        uid = str(user["bale_user_id"])
-        self._clear_report_assistant_pending(uid)
-        if self._deny_technician(message, user):
-            return
-        self._reply(message, "گفتگو با دستیار هوشمند پایان یافت.", kb.analytics_menu())
-
-    def on_report_assistant_text(self, message: dict, text: str) -> bool:
-        """Handle free text while in assistant mode. Returns True if consumed."""
-        uid = self._uid(message)
-        if uid not in self._report_assistant_pending:
-            return False
-        user = self._user_or_deny(message)
-        if not user:
-            self._clear_report_assistant_pending(uid)
-            return True
-        if not ASSISTANT_ENABLED:
-            self._assistant_disabled_reply(message, user)
-            return True
-        if user.get("role") == "technician":
-            self._clear_report_assistant_pending(uid)
-            self._deny_technician(message, user)
-            return True
-        # Exit controls
-        if text in {kb.BTN_END_ASSISTANT, kb.BTN_BACK_ANALYTICS, kb.BTN_BACK_MAIN}:
-            self._clear_report_assistant_pending(uid)
-            if text == kb.BTN_BACK_MAIN:
-                self._reply(message, "منوی اصلی:", kb.main_menu(user))
-            else:
-                self._reply(message, "گفتگو با دستیار هوشمند پایان یافت.", kb.analytics_menu())
-            return True
-        # Let known analytics / main menu buttons leave conversation and fall through
-        leave_buttons = {
-            kb.BTN_ANALYTICS,
-            kb.BTN_DAILY,
-            kb.BTN_SUGGEST,
-            kb.BTN_PERIOD,
-            kb.BTN_REMAINING,
-            kb.BTN_SURPLUS,
-            kb.BTN_INBOUND,
-            kb.BTN_INBOUND_LEGACY,
-            kb.BTN_FORECAST,
-            kb.BTN_MONTHLY_SUMMARY,
-            kb.BTN_USER_ACTIVITY,
-            kb.BTN_ANALYTICS_PDF,
-            kb.BTN_TUNDISH_FILTER,
-            kb.BTN_HELP,
-            kb.BTN_RESET,
-            kb.BTN_GENERATE,
-            kb.BTN_REPORT_ASSISTANT,
-        }
-        if text in leave_buttons:
-            self._clear_report_assistant_pending(uid)
-            return False
-        try:
-            context = build_report_context(self.db, user)
-            reply = report_assistant_chat(text, context)
-        except Exception:  # noqa: BLE001
-            logger.exception("report assistant failed")
-            reply = (
-                "دستیار محلی در دسترس نیست؛ Ollama را روی سرور بررسی کنید."
-            )
-        log_activity(self.db, user, "report_assistant_asked")
-        self._reply(message, reply, kb.report_assistant_menu())
-        return True
-
     def handle_message(self, message: dict) -> None:
         if not message:
             return
-        text = (message.get("text") or "").strip()
+        raw_text = (message.get("text") or "").strip()
+        # Old / renamed labels → current label (old keyboards stay usable)
+        text = kb.canonical(raw_text)
 
         # Group chats: only /set_stock_group (avoid menu spam in groups)
         if self._is_group_chat(message):
@@ -6219,34 +5904,24 @@ class BotApp:
                 cmd = parts[0].split("@")[0].lower()
                 if cmd == "/set_stock_group":
                     self.cmd_set_stock_group(message)
-                # ignore other slash commands / chatter in groups
             return
 
-        # Bot-settings letterhead PDF wait — before generic document handler
         if message.get("document"):
             if self.on_bot_settings_letterhead_document(message):
                 return
-
-        # Bot-settings image wait (photo or image document) — before generic document handler
         if message.get("photo") or message.get("document"):
             if self.on_bot_settings_photo(message):
                 return
-
-        # گزارش هدف اصلی multi-file upload — before generic Excel slot handler
+        # هدف اصلی uploads (single input / bulk) — before generic Excel slot handler
         if message.get("document"):
             if self.main_goal_report.handle_document(message):
                 return
-
         if message.get("document"):
             self.on_document(message)
             return
-
         if message.get("photo"):
-            if self.main_goal_report.handle_photo(message):
-                return
-            # Photo outside known flows — ignore politely if registered
+            self.main_goal_report.handle_photo(message)
             return
-
         if not text:
             return
 
@@ -6254,71 +5929,95 @@ class BotApp:
             parts = text.split()
             cmd = parts[0].split("@")[0].lower()
             args = parts[1:]
-            # any slash command abandons unfinished drafts
-            self.tundish_report.clear(self._uid(message))
-            self.main_goal_report.clear(self._uid(message))
-            self.reminder_settings.clear(self._uid(message))
             mapping = {
                 "/start": lambda: self.cmd_start(message, args),
                 "/help": lambda: self.cmd_help(message),
                 "/users": lambda: self.cmd_users(message),
                 "/adduser": lambda: self.cmd_adduser(message, args),
                 "/setrole": lambda: self.cmd_setrole(message, args),
-                "/setscope": lambda: self.cmd_setscope(message, args),
                 "/reset": lambda: self.cmd_reset(message),
                 "/status": lambda: self.on_status(message),
-                "/report": lambda: self.on_generate(message),
+                "/report": lambda: self.on_comprehensive_prompt(message),
                 "/analytics": lambda: self.on_analytics_menu(message),
-                "/assistant": lambda: self.cmd_assistant(message),
                 "/set_stock_group": lambda: self.cmd_set_stock_group(message),
             }
             handler = mapping.get(cmd)
+            # any slash command abandons unfinished drafts (/start with token too)
+            uid = self._uid(message)
+            if cmd != "/start" or not args:
+                self._clear_all_pending(uid)
             if handler:
                 handler()
             else:
                 self._reply(message, "دستور ناشناخته. /help را ببینید.")
             return
 
-        # یادآور گزارش‌های الزامی — settings (owner/manager)
+        # ---- uniform navigation first (never swallowed by a pending flow) ----
+        if text == kb.BTN_HOME:
+            self.on_nav_home(message)
+            return
+        if text == kb.BTN_BACK:
+            self.on_nav_back(message)
+            return
+        if text == kb.BTN_CANCEL:
+            self.on_cancel(message)
+            return
+        if text == kb.BTN_HELP:
+            self.cmd_help(message)
+            return
+        if text == kb.BTN_FILE_GUIDE:
+            self.on_file_guide(message)
+            return
+        if raw_text in kb.REMOVED_HINTS:
+            user = self._user_or_deny(message)
+            if user:
+                self._clear_all_pending(str(user["bale_user_id"]))
+                self._reply(message, kb.REMOVED_HINTS[raw_text], kb.main_menu(user))
+            return
+
+        # یادآورها — settings (owner/manager)
         if self.reminder_settings.handle_text(message, text):
             return
-
-        # گزارش تاندیش بعد از ریخته‌گری — menu buttons + entry/settings flows
+        # 🧾 گزارش تاندیش — menu buttons + entry/settings flows
         if self.tundish_report.handle_text(message, text):
             return
-
-        # گزارش هدف اصلی — 4-file upload + compute
+        # 🎯 هدف اصلی
         if self.main_goal_report.handle_text(message, text):
+            return
+        # 🧮 نیاز مواد برای N تاندیش (section / N / mode steps; «اسلب ۴» shortcut)
+        if self.on_n_tundish_text(message, text):
+            return
+        # optional section step (مصرف روزانه / گزارش جامع / مصرف بازه‌ای)
+        if self.on_section_step_text(message, text):
+            return
+        # «📦 جایگزینی کامل منبع اصلی» confirm
+        if text == kb.BTN_FULL_REPLACE_CONFIRM:
+            self.on_full_replace_confirm(message)
             return
 
         # month/year range typed while awaiting (از YYYY/MM تا YYYY/MM)
         if parse_month_year_range(text):
             if self.on_month_year_range_choice(message, custom_text=text):
                 return
-
         # custom day-level date range while awaiting
         if parse_custom_range_message(text):
             if self.on_date_range_choice(message, preset=None, custom_text=text):
                 return
-
         # interactive year / month picks while awaiting month-range wizard
         if self.on_month_year_range_choice(message, picked=text):
             return
-
         # منبع اصلی edit/add record free-text
         if self.on_main_source_flow_text(message, text):
             return
-
         # اقلام بحرانی year/month/count text
         if self.on_critical_flow_text(message, text):
             return
-
         # category code entry (plain 4-digit text while awaiting)
         if self.on_category_code_text(message, text):
             return
 
         # --- موجودی روزانه سایت (buttons BEFORE quantity parse so nav never stuck) ---
-        if text == kb.BTN_SITE_STOCK or text == kb.BTN_TANK:
+        if text == kb.BTN_SITE_STOCK:
             self.on_site_stock_menu(message)
             return
         if text in kb.SITE_GROUP_BUTTONS:
@@ -6327,362 +6026,60 @@ class BotApp:
         if text == kb.BTN_SITE_SKIP:
             self.on_site_stock_skip(message)
             return
-        if text == kb.BTN_SITE_CANCEL:
-            self.on_site_stock_cancel(message)
-            return
         if text == kb.BTN_BACK_SITE:
-            # clear pending (incl. markup) then group menu — on_site_stock_menu clears again
             self.on_site_stock_menu(message)
             return
-
-        # site stock quantity entry (number while awaiting items)
         if self.on_site_stock_quantity_text(message, text):
-            return
-
-        # catalog item pick (number/id while awaiting)
-        if self.on_catalog_pick_text(message, text):
             return
 
         # user-management interactive flow (role/id text)
         if self.on_users_flow_text(message, text):
             return
-
         # bot-settings interactive text (invite/welcome templates)
         if self.on_bot_settings_flow_text(message, text):
             return
-
         # material-request coverage days (typed number)
         if self.on_material_request_days_text(message, text):
             return
-
         # material-request / warehouse-return edit text (pick item / qty)
         if self.on_material_request_edit_text(message, text):
             return
         if self.on_warehouse_return_edit_text(message, text):
             return
 
-        # local report assistant free-text mode
-        if self.on_report_assistant_text(message, text):
-            return
-
-        # keyboard buttons
-        if text == kb.BTN_HELP:
-            self.cmd_help(message)
-            return
-        if text == kb.BTN_GENERATE:
-            self.on_generate(message)
-            return
-        if text == kb.BTN_RESET:
-            self.cmd_reset(message)
-            return
-        if text == kb.BTN_CANCEL_PENDING:
-            self.on_cancel_pending(message)
-            return
-        if text == kb.BTN_USERS:
-            self.on_users_menu(message)
-            return
-        if text == kb.BTN_USERS_ADD:
-            self.on_users_add_start(message)
-            return
-        if text == kb.BTN_USERS_EDIT:
-            self.on_users_edit_start(message)
-            return
-        if text == kb.BTN_USERS_DELETE:
-            self.on_users_delete_start(message)
-            return
-        if text == kb.BTN_USERS_LIST:
-            self.cmd_users(message)
-            return
-        if text == kb.BTN_BACK_USERS:
-            user = self._require_manager_user(message)
-            if user:
-                self._clear_users_pending(str(user["bale_user_id"]))
-                self._reply(message, "منوی اصلی:", kb.main_menu(user))
-            return
-
-        # --- تنظیمات ربات ---
-        if text == kb.BTN_BOT_SETTINGS:
-            self.on_bot_settings_menu(message)
-            return
-        if text == kb.BTN_SET_INVITE:
-            self.on_bot_settings_section(message, "invite")
-            return
-        if text == kb.BTN_SET_WELCOME:
-            self.on_bot_settings_section(message, "welcome")
-            return
-        if text == kb.BTN_SET_LOGO:
-            self.on_bot_settings_section(message, "logo")
-            return
-        if text == kb.BTN_SET_LETTERHEAD:
-            self.on_bot_settings_section(message, "letterhead")
-            return
-        if text == kb.BTN_SET_STOCK_GROUP:
-            self.on_bot_settings_section(message, "stock_group")
-            return
-        if text == kb.BTN_SETTINGS_CLEAR_STOCK_GROUP:
-            self.on_bot_settings_clear_stock_group(message)
-            return
-        if text == kb.BTN_SETTINGS_UPLOAD_LETTERHEAD:
-            self.on_bot_settings_upload_letterhead_start(message)
-            return
-        if text == kb.BTN_SETTINGS_CLEAR_LETTERHEAD:
-            self.on_bot_settings_clear_letterhead(message)
-            return
-        if text == kb.BTN_SETTINGS_VIEW:
-            self.on_bot_settings_view(message)
-            return
-        if text == kb.BTN_SETTINGS_EDIT_TEXT:
-            self.on_bot_settings_edit_text_start(message)
-            return
-        if text == kb.BTN_SETTINGS_SET_IMAGE:
-            self.on_bot_settings_set_image_start(message)
-            return
-        if text == kb.BTN_SETTINGS_CLEAR_IMAGE:
-            self.on_bot_settings_clear_image(message)
-            return
-        if text == kb.BTN_BACK_BOT_SETTINGS:
-            self.on_bot_settings_menu(message)
-            return
-
-
-        # --- درخواست مواد / برگشت به انبار ---
-        if text == kb.BTN_MATERIAL_REQUEST:
-            self.on_material_request_start(message)
-            return
-        if text == kb.BTN_WAREHOUSE_RETURN:
-            self.on_warehouse_return_start(message)
-            return
-        if text == kb.BTN_MR_HISTORY:
-            self.on_material_request_history(message)
-            return
-        if text == kb.BTN_MR_DAYS_DEFAULT:
-            if self.on_material_request_days(message, 1):
-                return
-        if text == kb.BTN_MR_CONFIRM_ALL:
-            uid = self._uid(message)
-            if uid in self._warehouse_ret_pending:
-                self.on_warehouse_return_confirm(message)
-            else:
-                self.on_material_request_confirm(message)
-            return
-        if text == kb.BTN_MR_EDIT:
-            uid = self._uid(message)
-            if uid in self._warehouse_ret_pending:
-                self.on_warehouse_return_edit_start(message)
-            else:
-                self.on_material_request_edit_start(message)
-            return
-        if text == kb.BTN_MR_CANCEL:
-            uid = self._uid(message)
-            if uid in self._warehouse_ret_pending:
-                self.on_warehouse_return_cancel(message)
-            elif uid in self._material_req_pending:
-                self.on_material_request_cancel(message)
-            else:
-                user = self._user_or_deny(message)
-                if user:
-                    self._reply(message, "عملیاتی برای انصراف نیست.", kb.main_menu(user))
-            return
-        if text == kb.BTN_MR_BACK_REVIEW:
-            uid = self._uid(message)
-            if uid in self._warehouse_ret_pending:
-                self.on_warehouse_return_back_review(message)
-            else:
-                self.on_material_request_back_review(message)
-            return
-
-        if text == kb.BTN_ANALYTICS:
-            self.on_analytics_menu(message)
-            return
-        if text == kb.BTN_TUNDISH_FILTER:
-            self.on_tundish_filter_menu(message)
-            return
-        if text == kb.BTN_ALL_TUNDISHES:
-            self.on_tundish_filter_choice(message, None)
-            return
-        if text == kb.BTN_TUNDISH_SLAB:
-            self.on_tundish_filter_choice(message, kb.BTN_TUNDISH_SLAB)
-            return
-        if text == kb.BTN_TUNDISH_BLOOM:
-            self.on_tundish_filter_choice(message, kb.BTN_TUNDISH_BLOOM)
-            return
-        if text == kb.BTN_TUNDISH_BILLET:
-            self.on_tundish_filter_choice(message, kb.BTN_TUNDISH_BILLET)
-            return
-        if text == kb.BTN_BACK_MAIN or text == kb.BTN_BACK_PREV:
-            user = self._user_or_deny(message)
-            if user:
-                uid = str(user["bale_user_id"])
-                self._clear_analysis_pending(uid)
-                self._clear_site_stock_pending(uid)
-                self._clear_catalog_pending(uid)
-                self._clear_users_pending(uid)
-                self._clear_material_req_pending(uid)
-                self._clear_warehouse_ret_pending(uid)
-                self._clear_report_assistant_pending(uid)
-                self._clear_critical_pending(uid)
-                self.tundish_report.clear(uid)
-                self.main_goal_report.clear(uid)
-                self.reminder_settings.clear(uid)
-                self._bot_settings_pending.pop(uid, None)
-                self._await_category_code.discard(uid)
-                self._main_source_pending.pop(uid, None)
-                self._reply(message, "منوی اصلی:", kb.main_menu(user))
-            return
-        if text == kb.BTN_BACK_ANALYTICS:
-            self.on_analytics_menu(message)
-            return
-        if text == kb.BTN_DAILY:
-            self.on_daily_report(message)
-            return
-        if text == kb.BTN_REMAINING:
-            self.on_remaining_critical(message)
-            return
-        if text == kb.BTN_MAIN_GOAL or text == kb.BTN_MG_BACK:
-            self.main_goal_report.open_menu(message)
-            return
-        if text == kb.BTN_MG_START:
-            self.main_goal_report.start_upload(message)
-            return
-        if text == kb.BTN_MG_RECENT:
-            self.main_goal_report.show_recent(message)
-            return
-
-        if text == kb.BTN_CRITICAL_ITEMS or text == kb.BTN_BACK_CRITICAL:
-            self.on_critical_items_menu(message)
-            return
-        if text == kb.BTN_CRITICAL_COUNTS:
-            self.on_critical_counts_start(message)
-            return
-        if text == kb.BTN_CRITICAL_REPORT:
-            self.on_critical_report_start(message)
-            return
-        if text == kb.BTN_SURPLUS:
-            self.on_surplus_report(message)
-            return
-        if text in (kb.BTN_INBOUND, kb.BTN_INBOUND_LEGACY):
-            self.on_inbound_report(message)
+        handler = self._button_handlers().get(text)
+        if handler is not None:
+            handler(message)
             return
         inbound_hist_id = self._inbound_history_id(text)
         if inbound_hist_id is not None:
             self.on_inbound_report(message, report_id=inbound_hist_id)
             return
-        if text == kb.BTN_PERIOD:
-            self.on_period_prompt(message)
-            return
-        if text == kb.BTN_FORECAST:
-            self.on_forecast_prompt(message)
-            return
-        if text == kb.BTN_SUGGEST:
-            self.on_suggest_prompt(message)
-            return
-        if text == kb.BTN_ANALYTICS_PDF:
-            self.on_analytics_pdf(message)
-            return
-        if text == kb.BTN_MONTHLY_SUMMARY:
-            self.on_monthly_summary(message)
-            return
-        if text == kb.BTN_USER_ACTIVITY:
-            self.on_user_activity_report(message)
-            return
-        if text == kb.BTN_REPORT_ASSISTANT:
-            self.on_report_assistant_start(message)
-            return
-        if text == kb.BTN_END_ASSISTANT:
-            self.on_report_assistant_end(message)
-            return
-        if text == kb.BTN_MY_CURRENT:
-            if self.on_month_year_range_choice(message, preset="current"):
+        if text == kb.BTN_MR_DAYS_DEFAULT:
+            if self.on_material_request_days(message, 1):
                 return
-        if text == kb.BTN_MY_3:
-            if self.on_month_year_range_choice(message, preset="3m"):
-                return
-        if text == kb.BTN_MY_YTD:
-            if self.on_month_year_range_choice(message, preset="ytd"):
-                return
-        if text == kb.BTN_MY_CUSTOM:
-            if self.on_month_year_range_choice(message, preset="custom"):
-                return
-        if text == kb.BTN_MY_TYPED:
-            if self.on_month_year_range_choice(message, preset="typed"):
-                return
-        if text == kb.BTN_MY_DAY_ADV:
-            if self.on_month_year_range_choice(message, preset="day_advanced"):
-                return
-        if text == kb.BTN_RANGE_TODAY:
-            if self.on_date_range_choice(message, "today"):
-                return
-        if text == kb.BTN_RANGE_7:
-            if self.on_date_range_choice(message, "7d"):
-                return
-        if text == kb.BTN_RANGE_30:
-            if self.on_date_range_choice(message, "30d"):
-                return
-        if text == kb.BTN_RANGE_CUSTOM:
-            if self.on_date_range_choice(message, "custom"):
-                return
-
-        # آپلود فایل section + فایل منبع اصلی submenu
-        # «📥/📦 موجودی انبار» prefer warehouse upload via button_to_file_type (not submenu).
-        # Legacy «📦 منبع اصلی» and «📦 فایل منبع اصلی» open main-source submenu.
-        if text == kb.BTN_UPLOAD_MENU or text == kb.BTN_BACK_UPLOAD:
-            self.on_upload_menu(message)
+        presets = {
+            kb.BTN_MY_CURRENT: "current",
+            kb.BTN_MY_3: "3m",
+            kb.BTN_MY_YTD: "ytd",
+            kb.BTN_MY_CUSTOM: "custom",
+            kb.BTN_MY_TYPED: "typed",
+            kb.BTN_MY_DAY_ADV: "day_advanced",
+        }
+        if text in presets and self.on_month_year_range_choice(message, preset=presets[text]):
             return
-        if text in {kb.BTN_MAIN_SOURCE_FILE, kb.BTN_INV_MENU, kb.BTN_INV_EDIT, kb.BTN_BACK_INV_EDIT}:
-            self.on_main_source_file_menu(message)
-            return
-        if text == kb.BTN_INV_EDIT_RECORD:
-            self.on_inv_edit_record_start(message)
-            return
-        if text == kb.BTN_INV_ADD_RECORD:
-            self.on_inv_add_record_start(message)
-            return
-        if text == kb.BTN_INV_ADD_CATEGORY:
-            self.on_add_category_prompt(message)
-            return
-        if text == kb.BTN_INV_LIST_CATEGORIES:
-            self.on_list_categories(message)
-            return
-        if text == kb.BTN_INV_DOWNLOAD:
-            self.on_inv_download(message)
-            return
-
-        # --- تنظیمات اقلام سایت ---
-        if text == kb.BTN_CATALOG_SETTINGS:
-            self.on_catalog_settings_menu(message)
-            return
-        if text == kb.BTN_CATALOG_LIST:
-            self.on_catalog_list(message, unassigned_only=False)
-            return
-        if text == kb.BTN_CATALOG_UNASSIGNED:
-            self.on_catalog_list(message, unassigned_only=True)
-            return
-        if text == kb.BTN_CATALOG_SEED:
-            self.on_catalog_seed(message)
-            return
-        if text == kb.BTN_BACK_CATALOG:
-            self.on_catalog_settings_menu(message)
-            return
-        if text in kb.ASSIGN_GROUP_BUTTONS:
-            self.on_catalog_assign_group(message, kb.ASSIGN_GROUP_BUTTONS[text])
-            return
-        if text == kb.BTN_CATALOG_UNASSIGN:
-            self.on_catalog_assign_group(message, None)
+        day_presets = {
+            kb.BTN_RANGE_TODAY: "today",
+            kb.BTN_RANGE_7: "7d",
+            kb.BTN_RANGE_30: "30d",
+            kb.BTN_RANGE_CUSTOM: "custom",
+        }
+        if text in day_presets and self.on_date_range_choice(message, day_presets[text]):
             return
 
         file_type = kb.button_to_file_type(text)
         if file_type:
-            # Excel from «فایل منبع اصلی» returns there; warehouse/monthly → آپلود فایل
-            if text in {
-                kb.BTN_INV_UPLOAD,
-                kb.BTN_INV,
-                "📥 ورود فایل اکسل",
-                FILE_TYPES["product_inventory"]["label_fa"],
-            }:
-                ret = "main_source"
-            else:
-                ret = "upload"
-            self.on_pick_file_type(message, file_type, return_menu=ret)
+            self.on_pick_file_type(message, file_type, return_menu="upload")
             return
 
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))
@@ -6691,6 +6088,95 @@ class BotApp:
             "لطفاً از دکمه‌های منو استفاده کنید یا /help را بزنید.",
             kb.main_menu(user) if user else None,
         )
+
+    def _button_handlers(self) -> dict[str, Any]:
+        """Static button → handler map (menu-walk smoke checks every keyboard label)."""
+        return {
+            kb.BTN_USERS: self.on_users_menu,
+            kb.BTN_USERS_ADD: self.on_users_add_start,
+            kb.BTN_USERS_EDIT: self.on_users_edit_start,
+            kb.BTN_USERS_DELETE: self.on_users_delete_start,
+            kb.BTN_USERS_LIST: self.cmd_users,
+            # ⚙️ تنظیمات
+            kb.BTN_BOT_SETTINGS: self.on_bot_settings_menu,
+            kb.BTN_APPEARANCE: self.on_appearance_menu,
+            kb.BTN_ROLE_PERMS: self.on_role_permissions,
+            kb.BTN_USER_ACTIVITY: self.on_user_activity_report,
+            kb.BTN_SET_INVITE: lambda m: self.on_bot_settings_section(m, "invite"),
+            kb.BTN_SET_WELCOME: lambda m: self.on_bot_settings_section(m, "welcome"),
+            kb.BTN_SET_LOGO: lambda m: self.on_bot_settings_section(m, "logo"),
+            kb.BTN_SET_LETTERHEAD: lambda m: self.on_bot_settings_section(m, "letterhead"),
+            kb.BTN_SET_STOCK_GROUP: lambda m: self.on_bot_settings_section(m, "stock_group"),
+            kb.BTN_SETTINGS_CLEAR_STOCK_GROUP: self.on_bot_settings_clear_stock_group,
+            kb.BTN_SETTINGS_UPLOAD_LETTERHEAD: self.on_bot_settings_upload_letterhead_start,
+            kb.BTN_SETTINGS_CLEAR_LETTERHEAD: self.on_bot_settings_clear_letterhead,
+            kb.BTN_SETTINGS_VIEW: self.on_bot_settings_view,
+            kb.BTN_SETTINGS_EDIT_TEXT: self.on_bot_settings_edit_text_start,
+            kb.BTN_SETTINGS_SET_IMAGE: self.on_bot_settings_set_image_start,
+            kb.BTN_SETTINGS_CLEAR_IMAGE: self.on_bot_settings_clear_image,
+            # درخواست مواد / برگشت به انبار
+            kb.BTN_MATERIAL_REQUEST: self.on_material_request_start,
+            kb.BTN_WAREHOUSE_RETURN: self.on_warehouse_return_start,
+            kb.BTN_MR_HISTORY: self.on_material_request_history,
+            kb.BTN_MR_CONFIRM_ALL: self._on_mr_wr_confirm,
+            kb.BTN_MR_EDIT: self._on_mr_wr_edit,
+            kb.BTN_MR_BACK_REVIEW: self._on_mr_wr_back_review,
+            kb.BTN_MR_DRAFT: self.on_material_request_draft,
+            kb.BTN_MR_DAYS_DEFAULT: lambda m: self.on_material_request_days(m, 1),
+            # 📊 گزارش‌ها
+            kb.BTN_ANALYTICS: self.on_analytics_menu,
+            kb.BTN_DAILY: self.on_daily_report,
+            kb.BTN_COMPREHENSIVE: self.on_comprehensive_prompt,
+            kb.BTN_PERIOD: self.on_period_prompt,
+            kb.BTN_REMAINING: self.on_remaining_critical,
+            kb.BTN_CRITICAL_ITEMS: self.on_critical_items_menu,
+            kb.BTN_CRITICAL_COUNTS: self.on_critical_counts_start,
+            kb.BTN_CRITICAL_REPORT: self.on_critical_report_start,
+            kb.BTN_N_TUNDISH: self.on_n_tundish_start,
+            kb.BTN_SURPLUS: self.on_surplus_report,
+            kb.BTN_INBOUND: self.on_inbound_report,
+            kb.BTN_MONTHLY_SUMMARY: self.on_monthly_summary,
+            # 📤 ورود فایل‌ها / 📦 منبع اصلی
+            kb.BTN_UPLOAD_MENU: self.on_upload_menu,
+            kb.BTN_MAIN_SOURCE_FILE: self.on_main_source_file_menu,
+            kb.BTN_FULL_REPLACE: self.on_full_replace_start,
+            kb.BTN_FULL_REPLACE_CONFIRM: self.on_full_replace_confirm,
+            kb.BTN_INV_EDIT_RECORD: self.on_inv_edit_record_start,
+            kb.BTN_INV_ADD_RECORD: self.on_inv_add_record_start,
+            kb.BTN_INV_ADD_CATEGORY: self.on_add_category_prompt,
+            kb.BTN_INV_LIST_CATEGORIES: self.on_list_categories,
+            kb.BTN_INV_DOWNLOAD: self.on_inv_download,
+            kb.BTN_WAREHOUSE_STOCK: lambda m: self.on_pick_file_type(m, "product_inventory", return_menu="upload"),
+            kb.BTN_MONTHLY: lambda m: self.on_pick_file_type(m, "monthly_consumption", return_menu="upload"),
+            # موجودی روزانه سایت
+            kb.BTN_SITE_STOCK: self.on_site_stock_menu,
+            kb.BTN_SITE_SKIP: self.on_site_stock_skip,
+            kb.BTN_BACK_SITE: self.on_site_stock_menu,
+            # nav
+            kb.BTN_HOME: self.on_nav_home,
+            kb.BTN_BACK: self.on_nav_back,
+            kb.BTN_CANCEL: self.on_cancel,
+            kb.BTN_HELP: self.cmd_help,
+            kb.BTN_FILE_GUIDE: self.on_file_guide,
+        }
+
+    def _on_mr_wr_confirm(self, message: dict) -> None:
+        if self._uid(message) in self._warehouse_ret_pending:
+            self.on_warehouse_return_confirm(message)
+        else:
+            self.on_material_request_confirm(message)
+
+    def _on_mr_wr_edit(self, message: dict) -> None:
+        if self._uid(message) in self._warehouse_ret_pending:
+            self.on_warehouse_return_edit_start(message)
+        else:
+            self.on_material_request_edit_start(message)
+
+    def _on_mr_wr_back_review(self, message: dict) -> None:
+        if self._uid(message) in self._warehouse_ret_pending:
+            self.on_warehouse_return_back_review(message)
+        else:
+            self.on_material_request_back_review(message)
 
     def handle_update(self, update: dict) -> None:
         try:

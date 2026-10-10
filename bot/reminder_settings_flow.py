@@ -50,6 +50,13 @@ class ReminderSettingsFlow:
     def clear(self, uid: str) -> None:
         self.pending.pop(str(uid), None)
 
+    def has_pending(self, uid: str) -> bool:
+        """True only while a typed answer / role toggle is awaited (not mere viewing)."""
+        return (self.pending.get(str(uid)) or {}).get("mode") in {"users", "schedule", "roles"}
+
+    def open_menu(self, message: dict) -> None:
+        self.open(message)
+
     def _reply(self, message: dict, text: str, markup: dict | None = None) -> None:
         self.app._reply(message, text[:3900], markup)
 
@@ -96,7 +103,7 @@ class ReminderSettingsFlow:
             return True
         if not p:
             return False
-        if text == kb.BTN_BACK_BOT_SETTINGS or text in kb.PENDING_INPUT_RESERVED_TEXTS:
+        if kb.is_pending_reserved_text(text):
             self.clear(uid)
             return False
         if p.get("mode") == "users":
@@ -118,7 +125,7 @@ class ReminderSettingsFlow:
         self._reply(
             message,
             rem.status_text(self.db)
-            + "\n\nیادآور برای ۴ فایل ماهانهٔ «گزارش هدف اصلی» است و در صورت نبودِ ماه‌های الزامی "
+            + "\n\nیادآور برای ۴ ورودی ماهانهٔ «هدف اصلی» (آمار تولید + مصرف تاندیش سه بخش) است و در صورت نبودِ ماه‌های الزامی "
             "به دریافت‌کنندگان در بله پیام می‌دهد.",
             self._menu(),
         )
