@@ -43,6 +43,20 @@ def main() -> int:
     assert "httpx HTTP Request" not in out, out  # INFO from httpx suppressed
     assert out.count("bot[REDACTED]") >= 3, out
 
+    # uvicorn access log formatter unpacks record.args (5-tuple) — must keep working
+    import uvicorn.logging as ulog
+
+    abuf = io.StringIO()
+    ah = logging.StreamHandler(abuf)
+    ah.setFormatter(ulog.AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False))
+    alog = logging.getLogger("uvicorn.access.smoke")
+    alog.addHandler(ah)
+    alog.propagate = False
+    alog.info('%s - "%s %s HTTP/%s" %d', "127.0.0.1:1", "GET", f"/x?u=https://tapi.bale.ai/{FAKE}/getMe", "1.1", 200)
+    aout = abuf.getvalue()
+    assert '"GET /x?u=https://tapi.bale.ai/bot[REDACTED]/getMe HTTP/1.1" 200' in aout, aout
+    assert "FAKEsecret" not in aout
+
     # configured token value redacted even without the bot prefix
     log_redact._configured_token = lambda: "987654:ConfiguredSecretValue"  # type: ignore[assignment]
     assert "ConfiguredSecretValue" not in redact("x 987654:ConfiguredSecretValue y")

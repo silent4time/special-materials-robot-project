@@ -37,15 +37,34 @@ def redact(text: object) -> str:
     return s
 
 
+def _has_token(value: object) -> bool:
+    try:
+        text = value if isinstance(value, str) else str(value)
+    except Exception:  # noqa: BLE001
+        return False
+    return redact(text) != text
+
+
+def _redact_arg(value: object) -> object:
+    """Redacted str when the argument's text carries a token, else unchanged."""
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return redact(value) if _has_token(value) else value
+
+
 def _redact_record(record: logging.LogRecord) -> logging.LogRecord:
     if getattr(record, "_token_redacted", False):
         return record
-    try:
-        msg = record.getMessage()
-    except Exception:  # noqa: BLE001 - bad args; fall back to raw msg
-        msg = str(record.msg)
-    record.msg = redact(msg)
-    record.args = None
+    # Keep ``args`` (formatters such as uvicorn's access log unpack them); redact
+    # the template and every argument whose text carries a token instead.
+    if isinstance(record.msg, str):
+        record.msg = redact(record.msg)
+    elif _has_token(record.msg):
+        record.msg = redact(record.msg)
+    if isinstance(record.args, tuple):
+        record.args = tuple(_redact_arg(a) for a in record.args)
+    elif isinstance(record.args, dict):
+        record.args = {k: _redact_arg(v) for k, v in record.args.items()}
     if record.exc_info and not record.exc_text:
         try:
             record.exc_text = logging.Formatter().formatException(record.exc_info)
