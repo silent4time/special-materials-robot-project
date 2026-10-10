@@ -1,3 +1,5 @@
+@font-face { font-family: "Vazirmatn"; src: url("/fonts/Vazirmatn-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Vazirmatn"; src: url("/fonts/Vazirmatn-Bold.ttf") format("truetype"); font-weight: 700; font-display: swap; }
 :root {
   --bg: #f4f6f8;
   --card: #fff;
@@ -10,7 +12,7 @@
   --border: #d0d7de;
   --radius: 10px;
   --shadow: 0 1px 3px rgba(0,0,0,.08);
-  font-family: "Tahoma", "Segoe UI", "Vazirmatn", sans-serif;
+  font-family: "Vazirmatn", "Tahoma", sans-serif;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -90,7 +92,7 @@ h2 { font-size: 1.1rem; margin: 0 0 .75rem; }
   pointer-events: none;
 }
 label { display: block; margin: .6rem 0 .25rem; font-weight: 600; font-size: .92rem; }
-input[type="text"], input[type="password"], input[type="number"], input[type="date"], select {
+input:not([type]), input[type="text"], input[type="password"], input[type="number"], input[type="date"], select {
   width: 100%;
   max-width: 420px;
   padding: .55rem .7rem;
@@ -185,3 +187,63 @@ td input[type="number"] { max-width: 110px; }
 .tabs a { padding: .35rem .9rem; border: 1px solid #cfd8dc; border-radius: 999px; text-decoration: none; color: inherit; }
 .tabs a.active { background: var(--primary, #1565c0); color: #fff; border-color: transparent; }
 details summary { cursor: pointer; margin: .5rem 0; font-weight: 600; }
+
+
+/* ---- web UI polish (1405/07/19) ---- */
+/* Vazirmatn everywhere — monospace breaks Persian letter joining */
+body, input, select, textarea, button, pre, code, kbd, samp, table {
+  font-family: "Vazirmatn", "Tahoma", sans-serif;
+}
+pre, code, textarea { direction: rtl; text-align: right; unicode-bidi: plaintext; }
+pre { white-space: pre-wrap; word-break: break-word; line-height: 1.8; background: #f8fafc;
+      border: 1px solid var(--border); border-radius: 8px; padding: .75rem 1rem; }
+textarea { width: 100%; max-width: 640px; padding: .55rem .7rem; border: 1px solid var(--border);
+           border-radius: 8px; line-height: 1.8; background: #fff; }
+input.jdate, input[dir="ltr"] { text-align: right; }
+
+/* header: logout must stay visible (global «button {color:#fff}» made it invisible) */
+.nav button.linkish, .nav form button.linkish {
+  color: var(--err) !important;
+  background: none !important;
+  border: 1px solid #ef9a9a;
+  border-radius: 6px;
+  padding: .15rem .6rem;
+  font-weight: 600;
+}
+.nav button.linkish:hover { background: #ffebee !important; }
+.topbar-inner { max-width: 1280px; }
+.nav { font-size: .9rem; gap: .35rem .8rem; }
+
+/* inline compact action buttons inside table rows */
+button.linkish, .btn-small {
+  background: none; color: var(--err) !important; border: 1px solid #ef9a9a; border-radius: 6px;
+  padding: .1rem .55rem; font-size: .85rem;
+}
+button.linkish:hover, .btn-small:hover { background: #ffebee; }
+td.actions { white-space: nowrap; width: 1%; text-align: left; }
+td.actions form { display: inline; margin: 0; }
+
+/* Persian file picker (native input hidden, see base.html script) */
+.filepick { display: inline-flex; align-items: center; gap: .6rem; flex-wrap: wrap; font-weight: 400; margin: .25rem 0; }
+.filepick input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+.filepick .fp-btn { background: #546e7a; color: #fff; border-radius: 8px; padding: .45rem .95rem; cursor: pointer; }
+.filepick .fp-btn:hover { background: #455a64; }
+.filepick .fp-name { color: var(--muted); font-size: .88rem; }
+.filepick.has-file .fp-name { color: var(--ink); }
+.filepick input[type="file"]:focus + .fp-btn { outline: 2px solid var(--primary); }
+
+/* clean label / input grid (reminders timing etc.) */
+.kv-grid { display: grid; grid-template-columns: minmax(220px, max-content) 140px 1fr; gap: .55rem 1rem; align-items: center; margin: .75rem 0; }
+.kv-grid label { margin: 0; font-weight: 600; }
+.kv-grid input { width: 100%; max-width: 140px; }
+.kv-grid .hint { color: var(--muted); font-size: .85rem; }
+@media (max-width: 640px) { .kv-grid { grid-template-columns: 1fr; } }
+.secondary-text { color: var(--muted); font-size: .85rem; }
+
+/* header layout: row 1 = brand … user + خروج ; row 2 = nav (always visible at 1280px) */
+.topbar-inner { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "brand user" "nav nav"; gap: .5rem 1rem; }
+.topbar-inner .brand { grid-area: brand; }
+.topbar-inner .user-chip { grid-area: user; display: flex; align-items: center; gap: .5rem; white-space: nowrap; }
+.topbar-inner .nav { grid-area: nav; border-top: 1px solid #eef2f6; padding-top: .45rem; }
+.logout-form { display: inline; margin: 0; }
+td textarea { min-width: 200px; }

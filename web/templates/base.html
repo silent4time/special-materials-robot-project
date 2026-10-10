@@ -26,13 +26,13 @@
       {% if can(user, "role_permissions") %}<a href="/settings/permissions">🔐 دسترسی نقش‌ها</a>{% endif %}
       {% if can(user, "reminders") %}<a href="/settings/reminders">🔔 یادآورها</a>{% endif %}
       {% if can(user, "user_activity") %}<a href="/reports/user-activity">📋 فعالیت کاربران</a>{% endif %}
-      <form action="/logout" method="post" style="display:inline">
-        <button type="submit" class="linkish">خروج</button>
-      </form>
     </nav>
     <div class="user-chip">
       {{ user.display_name or user.bale_user_id }}
       <span class="badge">{{ role_label(user.role) }}</span>
+      <form action="/logout" method="post" class="logout-form">
+        <button type="submit" class="linkish logout-btn" title="خروج از پنل وب">⎋ خروج</button>
+      </form>
     </div>
   </div>
 </header>
@@ -41,5 +41,20 @@
   {% block content %}{% endblock %}
   <p class="footer-note">همان نقش‌ها و پایگاه‌دادهٔ ربات بله — پنل وب فرآیند جداست.</p>
 </main>
+<script>
+/* Persian file picker: «انتخاب فایل» / «فایلی انتخاب نشده» + chosen file name */
+document.querySelectorAll('input[type="file"]').forEach(function (inp) {
+  var wrap = document.createElement('span'); wrap.className = 'filepick';
+  var btn = document.createElement('span'); btn.className = 'fp-btn'; btn.textContent = 'انتخاب فایل';
+  var name = document.createElement('span'); name.className = 'fp-name'; name.textContent = 'فایلی انتخاب نشده';
+  inp.parentNode.insertBefore(wrap, inp); wrap.appendChild(inp); wrap.appendChild(btn); wrap.appendChild(name);
+  if (!inp.closest('label')) { btn.addEventListener('click', function () { inp.click(); }); }
+  inp.addEventListener('change', function () {
+    var n = Array.prototype.map.call(inp.files || [], function (f) { return f.name; }).join('، ');
+    name.textContent = n || 'فایلی انتخاب نشده';
+    wrap.classList.toggle('has-file', !!n);
+  });
+});
+</script>
 </body>
 </html>
