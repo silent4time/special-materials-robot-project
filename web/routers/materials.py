@@ -12,8 +12,48 @@ from web.templating import render
 router = APIRouter(prefix="/materials", tags=["materials"])
 
 
+def _clean(v: object) -> str:
+    t = "" if v is None else str(v).strip()
+    return "" if t.lower() in {"nan", "none"} else t
+
+
 def _catalog_items(db: Database) -> list[dict]:
-    return db.list_catalog_with_assignments(active_only=True)
+    """Catalog rows enriched from the factory-wide منبع اصلی (display only):
+    ``display_name`` = کلید واژه (as the bot's daily lists), ``secondary`` = شرح کالا,
+    ``group_fa`` = محل استفاده, ``unit``. Submitted keys stay the material ID."""
+    items = db.list_catalog_with_assignments(active_only=True)
+    try:
+        from services import main_source as ms
+
+        df = ms.load_primary_frame(db)
+    except Exception:  # noqa: BLE001
+        df = None
+    by_id: dict[str, dict] = {}
+    if df is not None and not df.empty and "id" in df.columns:
+        for rec in df.to_dict("records"):
+            iid = _clean(rec.get("id"))
+            if iid and iid not in by_id:
+                by_id[iid] = rec
+    out = []
+    for it in items:
+        rec = by_id.get(str(it.get("id")), {})
+        desc = _clean(rec.get("product_name")) or _clean(it.get("name_desc"))
+        kw = _clean(rec.get("keyword"))
+        group = _clean(rec.get("usage_location"))
+        if not group and it.get("tundish_group"):
+            from config import SITE_STOCK_GROUPS
+
+            group = str(SITE_STOCK_GROUPS.get(it["tundish_group"], it["tundish_group"])).replace("موجودی مواد ", "")
+        row = dict(it)
+        row.update(
+            display_name=kw or desc or str(it.get("id")),
+            secondary=desc if kw and desc and desc != kw else "",
+            group_fa=group,
+            unit=_clean(rec.get("unit")),
+            category_code=_clean(rec.get("category_code")) or _clean(it.get("category_code")),
+        )
+        out.append(row)
+    return out
 
 
 @router.get("/request")
