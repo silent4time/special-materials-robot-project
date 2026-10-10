@@ -27,6 +27,7 @@ from services import permissions as perm
 BTN_BACK = "⬅️ بازگشت"
 BTN_HOME = "🏠 منوی اصلی"
 BTN_CANCEL = "✖️ انصراف"
+MAIN_MENU_TEXT = "🏠 منوی اصلی — یک گزینه را انتخاب کنید."
 NAV_ROW = [BTN_BACK, BTN_HOME]
 
 # menu key → parent menu key (``None`` = top). Flow keyboards use key "flow" and

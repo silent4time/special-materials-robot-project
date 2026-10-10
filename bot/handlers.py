@@ -302,7 +302,7 @@ class BotApp:
         }
         opener = openers.get(key)
         if opener is None:
-            self._reply(message, "منوی اصلی:", kb.main_menu(user))
+            self._reply(message, kb.MAIN_MENU_TEXT, kb.main_menu(user))
             return
         opener(message)
 
@@ -359,7 +359,7 @@ class BotApp:
         if not user:
             return
         self._clear_all_pending(str(user["bale_user_id"]))
-        self._reply(message, "منوی اصلی:", kb.main_menu(user))
+        self._reply(message, kb.MAIN_MENU_TEXT, kb.main_menu(user))
 
     def on_nav_back(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -490,6 +490,11 @@ class BotApp:
         if uid in self._material_req_pending:
             self.on_material_request_cancel(message)
             return
+        if uid in self._full_replace_confirm:
+            # warning screen of «جایگزینی کامل» was opened from 📦 منبع اصلی → back there
+            self._full_replace_confirm.discard(uid)
+            self._reply(message, "لغو شد؛ منبع اصلی تغییری نکرد.", kb.main_source_file_menu(user))
+            return
         session = self.db.get_or_create_session(uid)
         if (
             uid in self._main_source_pending
@@ -568,7 +573,7 @@ class BotApp:
         if pending and pending in FILE_TYPES:
             lines.append(f"\nدر انتظار آپلود: {FILE_TYPES[pending]['label_fa']}")
         else:
-            lines.append("\nنوع ورود اطلاعات را از دکمه‌های زیر انتخاب کنید.")
+            lines.append(f"\nبرای ورود داده از «{kb.BTN_UPLOAD_MENU}» یا «{kb.BTN_SITE_STOCK}» استفاده کنید.")
         has_inv = bool(done.get("product_inventory"))
         has_rates = bool(done.get("tank_consumption") or done.get("monthly_consumption"))
         if has_inv and has_rates:
@@ -1117,7 +1122,7 @@ class BotApp:
         ):
             self._clear_users_pending(uid)
             if raw == kb.BTN_BACK_MAIN:
-                self._reply(message, "منوی اصلی:", kb.main_menu(user))
+                self._reply(message, kb.MAIN_MENU_TEXT, kb.main_menu(user))
             else:
                 self._reply(message, "مدیریت کاربران:", kb.users_menu())
             return True
@@ -1448,22 +1453,21 @@ class BotApp:
         if had_main_source:
             self._upload_return_menu.pop(uid, None)
             menu = kb.main_source_file_menu(user)
+            text = "لغو شد؛ چیزی ذخیره نشد. (📦 منبع اصلی)"
         else:
+            dest = self._upload_return_menu.get(uid) or "main"
             menu = self._keyboard_for_upload_return(user, default="main")
-        self._reply(message, "عملیات لغو شد.\n" + self._status_text(session, user), menu)
+            where = {"main_source": "📦 منبع اصلی", "upload": "📤 ورود فایل‌ها"}.get(dest, "🏠 منوی اصلی")
+            text = f"لغو شد؛ فایلی دریافت نشد. ({where})"
+        self._reply(message, text, menu)
 
     def on_status(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
             return
         session = self.db.get_or_create_session(user["bale_user_id"])
-        # Technicians keep their limited main menu; others get a file-entry picker
-        # so status → choose type works without going through main_menu submenu.
-        if not perm.can_any(user, (perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT)):
-            menu = kb.main_menu(user)
-        else:
-            menu = kb.file_entry_menu(user)
-        self._reply(message, self._status_text(session, user), menu)
+        # /status is informational → keep the user on the main menu
+        self._reply(message, self._status_text(session, user), kb.main_menu(user))
 
     def on_document(self, message: dict) -> None:
         user = self._user_or_deny(message)
