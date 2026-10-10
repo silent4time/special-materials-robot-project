@@ -111,7 +111,8 @@ BTN_SURPLUS = "📦 گزارش مواد مازاد"
 BTN_FORECAST = "🔮 پیش‌بینی نیاز تاندیش"
 BTN_ANALYTICS_PDF = "📄 PDF کامل تحلیل"
 BTN_MONTHLY_SUMMARY = "📥 دریافت خلاصه مصرف ماهیانه"
-BTN_INBOUND = "📥 گزارش ورودی به انبار"
+BTN_INBOUND = "📥 گزارش اقلام ورودی به انبار"
+BTN_INBOUND_LEGACY = "📥 گزارش ورودی به انبار"  # old keyboards still on clients
 BTN_CRITICAL_ITEMS = "🚨 اقلام بحرانی"
 BTN_CRITICAL_COUNTS = "📝 ثبت تعداد تاندیش ماهانه"
 BTN_CRITICAL_REPORT = "📄 تولید گزارش اقلام بحرانی"
@@ -546,6 +547,13 @@ def analytics_menu() -> dict:
         rows.insert(pdf_idx, [BTN_REPORT_ASSISTANT])
     return BaleClient.reply_keyboard(rows)
 
+
+
+def inbound_history_menu(labels: list[str] | None = None) -> dict:
+    """Earlier stored inbound reports (one button per stock upload) + back."""
+    rows = [[lbl] for lbl in (labels or [])]
+    rows.append([BTN_BACK_ANALYTICS])
+    return BaleClient.reply_keyboard(rows)
 
 
 def critical_items_menu() -> dict:

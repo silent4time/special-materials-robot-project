@@ -28,6 +28,47 @@
   </div>
 </div>
 
+<div class="card" id="inbound">
+  <h2>📥 گزارش اقلام ورودی به انبار</h2>
+  <p class="muted">
+    پس از هر آپلود «📥 موجودی انبار» (ربات) خودکار ساخته و ذخیره می‌شود. پایه مقایسه = آپلود موجودی انبار قبلی
+    (آپلود کامل منبع اصلی و ویرایش/افزودن/حذف رکورد پایه را تغییر نمی‌دهند).
+    ورودی = افزایش موجودی شناسه‌های موجود در پایه + شناسه جدید با کد ۴ رقمی موجود در منبع اصلی و موجودی بیشتر از صفر.
+    کد 1800 لحاظ نمی‌شود؛ ردیف‌های رد شده (⛔) جدا آمده و ورودی حساب نمی‌شوند.
+  </p>
+  {% if inbound_latest %}
+  {% set r = inbound_latest %}
+  <p><strong>آخرین گزارش:</strong> آپلود {{ r.upload_label }}
+    {% if r.has_baseline %}— پایه {{ r.baseline_label }}{% else %}— اولین پایه (بدون مقایسه){% endif %}
+    — ورودی {{ r.n_inbound }} قلم (افزایش {{ r.n_increase }}، شناسه جدید {{ r.n_new_id }})، ⛔ رد شده {{ r.n_rejected }}</p>
+  <div class="report-actions">
+    <a class="btn" href="/reports/inbound/{{ r.id }}.pdf">آخرین گزارش (PDF)</a>
+    <a class="btn" href="/reports/inbound/{{ r.id }}.xlsx">آخرین گزارش (اکسل)</a>
+  </div>
+  {% if r.lines %}
+  <div style="overflow-x:auto"><table>
+    <thead><tr><th>ردیف</th><th>کد دسته</th><th>شناسه مواد</th><th>کلید واژه</th><th>واحد</th><th>موجودی قبلی</th><th>موجودی جدید</th><th>مقدار ورودی</th><th>نوع</th><th>تأمین‌کننده</th><th>محل استفاده</th></tr></thead>
+    <tbody>
+    {% for l in r.lines[:50] %}
+      <tr><td>{{ l["ردیف"] }}</td><td>{{ l["کد دسته"] }}</td><td>{{ l["شناسه مواد"] }}</td><td>{{ l["کلید واژه"] }}</td><td>{{ l["واحد"] }}</td><td>{{ l["موجودی قبلی"] }}</td><td>{{ l["موجودی جدید"] }}</td><td>{{ l["مقدار ورودی"] }}</td><td>{{ l["نوع"] }}</td><td>{{ l["تأمین‌کننده"] }}</td><td>{{ l["محل استفاده"] }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+  {% if inbound_history|length > 1 %}
+  <p class="muted" style="margin-top:1rem">گزارش‌های قبلی (بر اساس تاریخ آپلود):</p>
+  <ul class="muted">
+    {% for h in inbound_history %}{% if h.id != r.id %}
+    <li>{{ h.upload_label }} — ورودی {{ h.n_inbound }} قلم، ⛔ {{ h.n_rejected }}
+      — <a href="/reports/inbound/{{ h.id }}.pdf">PDF</a> | <a href="/reports/inbound/{{ h.id }}.xlsx">اکسل</a></li>
+    {% endif %}{% endfor %}
+  </ul>
+  {% endif %}
+  {% else %}
+  <p class="muted">هنوز گزارش اقلام ورودی ثبت نشده است.</p>
+  {% endif %}
+</div>
+
 <div class="card" id="critical-items">
   <h2>🚨 اقلام بحرانی نسوز تاندیش</h2>
   <p class="muted">

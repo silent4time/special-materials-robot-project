@@ -515,6 +515,44 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_main_goal_seq_period
                     ON main_goal_tundish_sequences(period_key, section);
+
+                -- t221u: frozen warehouse stock-upload snapshots (inbound baseline).
+                -- Only «📥 موجودی انبار» stock uploads create rows (kind=stock_update);
+                -- full منبع اصلی uploads / edits / sync never move the baseline.
+                CREATE TABLE IF NOT EXISTS inventory_stock_uploads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL DEFAULT 'stock_update',
+                    extract_id INTEGER,
+                    raw_path TEXT,
+                    snapshot_path TEXT NOT NULL,
+                    sha256 TEXT,
+                    row_count INTEGER NOT NULL DEFAULT 0,
+                    bale_user_id TEXT,
+                    actor_display_name TEXT,
+                    note TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_inv_stock_uploads_kind
+                    ON inventory_stock_uploads(kind, id);
+                CREATE TABLE IF NOT EXISTS inventory_inbound_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    stock_upload_id INTEGER NOT NULL UNIQUE,
+                    baseline_upload_id INTEGER,
+                    bale_user_id TEXT,
+                    actor_display_name TEXT,
+                    upload_created_at TEXT NOT NULL,
+                    baseline_created_at TEXT,
+                    n_increase INTEGER NOT NULL DEFAULT 0,
+                    n_new_id INTEGER NOT NULL DEFAULT 0,
+                    n_rejected INTEGER NOT NULL DEFAULT 0,
+                    n_zero_new INTEGER NOT NULL DEFAULT 0,
+                    n_excluded_1800 INTEGER NOT NULL DEFAULT 0,
+                    total_inbound REAL NOT NULL DEFAULT 0,
+                    lines_json TEXT NOT NULL DEFAULT '[]',
+                    rejected_json TEXT NOT NULL DEFAULT '[]',
+                    summary_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL
+                );
                 """.replace("{SITE_GROUP_SQL}", SITE_STOCK_GROUP_SQL)
             )
             self._migrate_users_role_check(conn)
@@ -1085,6 +1123,107 @@ class Database:
                 (str(bale_user_id), file_type),
             ).fetchone()
             return dict(row) if row else None
+
+    # ── t221u: inbound baseline snapshots + stored inbound reports ──────────
+    def insert_stock_upload(
+        self,
+        *,
+        snapshot_path: str,
+        kind: str = "stock_update",
+        extract_id: int | None = None,
+        raw_path: str | None = None,
+        sha256: str | None = None,
+        row_count: int = 0,
+        bale_user_id: str | int | None = None,
+        actor_display_name: str | None = None,
+        note: str | None = None,
+        created_at: str | None = None,
+    ) -> int:
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO inventory_stock_uploads
+                    (kind, extract_id, raw_path, snapshot_path, sha256, row_count,
+                     bale_user_id, actor_display_name, note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    kind, extract_id, raw_path, snapshot_path, sha256, int(row_count),
+                    None if bale_user_id is None else str(bale_user_id),
+                    actor_display_name, note, created_at or _utcnow(),
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def latest_stock_upload(
+        self, *, kind: str = "stock_update", before_id: int | None = None
+    ) -> Optional[dict[str, Any]]:
+        """Newest stock-upload snapshot (the inbound baseline), optionally < before_id."""
+        q = "SELECT * FROM inventory_stock_uploads WHERE kind = ?"
+        args: list[Any] = [kind]
+        if before_id is not None:
+            q += " AND id < ?"
+            args.append(int(before_id))
+        q += " ORDER BY id DESC LIMIT 1"
+        with self.connect() as conn:
+            row = conn.execute(q, args).fetchone()
+            return dict(row) if row else None
+
+    def get_stock_upload(self, upload_id: int) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM inventory_stock_uploads WHERE id = ?", (int(upload_id),)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def count_stock_uploads(self) -> int:
+        with self.connect() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM inventory_stock_uploads").fetchone()[0])
+
+    def insert_inbound_report(self, **fields: Any) -> int:
+        cols = [
+            "stock_upload_id", "baseline_upload_id", "bale_user_id", "actor_display_name",
+            "upload_created_at", "baseline_created_at", "n_increase", "n_new_id",
+            "n_rejected", "n_zero_new", "n_excluded_1800", "total_inbound",
+            "lines_json", "rejected_json", "summary_json",
+        ]
+        vals = [fields.get(c) for c in cols]
+        with self.connect() as conn:
+            cur = conn.execute(
+                f"INSERT INTO inventory_inbound_reports ({', '.join(cols)}, created_at) "
+                f"VALUES ({', '.join('?' for _ in cols)}, ?)",
+                (*vals, _utcnow()),
+            )
+            return int(cur.lastrowid)
+
+    def get_inbound_report(self, report_id: int) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM inventory_inbound_reports WHERE id = ?", (int(report_id),)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def latest_inbound_report(self) -> Optional[dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM inventory_inbound_reports ORDER BY stock_upload_id DESC, id DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_inbound_reports(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, stock_upload_id, baseline_upload_id, bale_user_id,
+                       actor_display_name, upload_created_at, baseline_created_at,
+                       n_increase, n_new_id, n_rejected, n_zero_new, n_excluded_1800,
+                       total_inbound, created_at
+                FROM inventory_inbound_reports
+                ORDER BY stock_upload_id DESC, id DESC LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def get_previous_extracted(
         self, bale_user_id: str | int, file_type: str

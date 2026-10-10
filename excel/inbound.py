@@ -1,4 +1,4 @@
-"""Warehouse inbound report: delta between two inventory snapshots.
+"""LEGACY (superseded by services.inbound_report, t221u) — delta between two inventory snapshots.
 
 Inbound = brand-new items OR quantity increases (positive delta).
 Decreases and unchanged quantities are omitted.

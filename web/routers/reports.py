@@ -11,6 +11,7 @@ from analytics.critical_items import RENO_LABEL_FA, RENO_MODES, normalize_reno_m
 from bot.jalali import PERSIAN_MONTH_NAMES, format_month_year, jalali_today
 from db.models import Database
 from web.deps import get_db, require_materials_user, require_non_technician
+from services import inbound_report as inbound_svc
 from web.services import reports as report_svc
 from web.services.data import data_completeness
 from web.templating import render
@@ -77,7 +78,47 @@ async def reports_page(
         "error": request.query_params.get("err"),
     }
     ctx.update(_critical_context(db, request))
+    # t221u: «گزارش اقلام ورودی به انبار» — same stored reports as the bot
+    ctx["inbound_latest"] = inbound_svc.latest_report(db)
+    ctx["inbound_history"] = inbound_svc.list_reports(db, limit=20)
     return render(request, "reports.html", ctx)
+
+
+def _inbound_file(db: Database, report_id: int, kind: str):
+    report = inbound_svc.get_report(db, int(report_id))
+    if not report:
+        return None, "گزارش اقلام ورودی یافت نشد."
+    try:
+        pdf_path, xlsx_path = inbound_svc.build_report_files(db, report)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"خطا در تولید گزارش اقلام ورودی: {exc}"
+    return (pdf_path if kind == "pdf" else xlsx_path), None
+
+
+@router.get("/inbound/{report_id}.pdf")
+async def inbound_pdf(
+    report_id: int,
+    user=Depends(require_non_technician),
+    db: Database = Depends(get_db),
+):
+    path, err = _inbound_file(db, report_id, "pdf")
+    if err or not path:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#inbound", status_code=303)
+    log_activity(db, user, "report_inbound", report_id=int(report_id), source="web")
+    return FileResponse(path, media_type="application/pdf", filename=path.name)
+
+
+@router.get("/inbound/{report_id}.xlsx")
+async def inbound_xlsx(
+    report_id: int,
+    user=Depends(require_non_technician),
+    db: Database = Depends(get_db),
+):
+    path, err = _inbound_file(db, report_id, "xlsx")
+    if err or not path:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#inbound", status_code=303)
+    log_activity(db, user, "report_inbound_xlsx", report_id=int(report_id), source="web")
+    return FileResponse(path, media_type=_XLSX, filename=path.name)
 
 
 @router.post("/critical-items/counts")

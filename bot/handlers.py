@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -45,7 +46,7 @@ from auth.rbac import (
     role_label,
 )
 from bot import keyboards as kb
-from bot.activity import log_activity
+from bot.activity import log_activity, resolve_display_name
 from bot.report_assistant import build_report_context, chat as report_assistant_chat
 from bot.jalali import (
     TEHRAN,
@@ -71,9 +72,7 @@ from config import ASSISTANT_ENABLED, BOT_ASSETS_DIR, BOT_USERNAME, CRITICAL_DAY
 from db.models import Database
 from services import main_source as main_source_svc
 from services import site_stock_notify
-from excel.inbound import (
-    compute_inbound_delta,
-)
+from services import inbound_report as inbound_svc
 from excel.processor import (
     ExcelValidationError,
     extract_and_save_clean,
@@ -1404,6 +1403,22 @@ class BotApp:
         new_kept = int(result.kept_row_count)
         merge_note = ""
         skipped_note = ""
+        # t221u: «📥 موجودی انبار» (stock update) vs authorized full منبع اصلی upload.
+        # Only stock updates feed the inbound report / move its baseline.
+        full_source = (
+            pending == "product_inventory"
+            and upload_origin == "main_source"
+            and not format_redirect_note
+            and can_configure_catalog(user)
+        )
+        is_stock_upload = pending == "product_inventory" and not full_source
+        uploaded_stock_df: pd.DataFrame | None = None
+        inbound_rejected: list[dict] = []
+        if is_stock_upload:
+            try:
+                uploaded_stock_df = pd.read_excel(result.clean_path, engine="openpyxl")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("could not read uploaded stock frame for inbound: %s", exc)
         if old_df is not None and not old_df.empty:
             try:
                 new_df = pd.read_excel(result.clean_path, engine="openpyxl")
@@ -1411,15 +1426,12 @@ class BotApp:
                     # منبع اصلی is the reference: a stock update never adds a new
                     # 4-digit code nor a NEW 1800 row; an authorized full-source
                     # upload may add both (shared rule in services.main_source).
-                    full_source = (
-                        upload_origin == "main_source"
-                        and not format_redirect_note
-                        and can_configure_catalog(user)
-                    )
                     new_df, skipped = main_source_svc.filter_inventory_upload(
                         old_df, new_df, allow_new_codes=full_source
                     )
                     skipped_note = main_source_svc.skipped_rows_note_fa(skipped)
+                    if is_stock_upload:
+                        inbound_rejected = list(skipped)
                     if skipped:
                         logger.info(
                             "inventory upload: %d rows skipped (full_source=%s)",
@@ -1443,7 +1455,7 @@ class BotApp:
         session = self.db.store_file_slot(
             user["bale_user_id"], pending, str(result.clean_path)
         )
-        self.db.save_extracted(
+        extract_id = self.db.save_extracted(
             bale_user_id=user["bale_user_id"],
             session_id=session["id"],
             file_type=pending,
@@ -1454,6 +1466,7 @@ class BotApp:
         )
 
         catalog_note = ""
+        inbound_report = None
         inbound_note = ""
         if pending == "product_inventory":
             try:
@@ -1477,28 +1490,28 @@ class BotApp:
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("WO group sync after inventory failed: %s", exc)
-            try:
-                new_clean_df = pd.read_excel(result.clean_path, engine="openpyxl")
-                inbound_df = compute_inbound_delta(
-                    old_df,
-                    new_clean_df,
-                    category_allowlist=allowlist
-                    or self.db.active_category_code_set(),
+            if is_stock_upload and uploaded_stock_df is not None:
+                try:
+                    live_after = pd.read_excel(result.clean_path, engine="openpyxl")
+                    inbound_report = inbound_svc.record_stock_upload(
+                        self.db,
+                        uploaded=uploaded_stock_df,
+                        live_before=old_df,
+                        live_after=live_after,
+                        rejected=inbound_rejected,
+                        bale_user_id=user["bale_user_id"],
+                        actor_display_name=resolve_display_name(user),
+                        extract_id=extract_id,
+                        raw_path=dest,
+                    )
+                    inbound_note = "\n\n" + inbound_svc.summary_text_fa(inbound_report)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("inbound report after stock upload failed")
+                    inbound_note = f"\n(گزارش اقلام ورودی ساخته نشد: {exc})"
+            elif full_source:
+                inbound_note = (
+                    "\nآپلود کامل منبع اصلی — پایه «گزارش اقلام ورودی به انبار» تغییر نکرد."
                 )
-                n_in = int(len(inbound_df))
-                if old_df is None or (isinstance(old_df, pd.DataFrame) and old_df.empty):
-                    inbound_note = (
-                        "\nپایه مقایسه ورودی موجود نیست (اولین آپلود موجودی)."
-                    )
-                elif n_in > 0:
-                    inbound_note = (
-                        f"\n{n_in} قلم ورودی شناسایی شد — "
-                        "از «گزارش ورودی به انبار» جزئیات را ببینید."
-                    )
-                else:
-                    inbound_note = "\nقلم ورودی جدیدی نسبت به موجودی قبلی شناسایی نشد."
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("inbound delta after inventory failed: %s", exc)
         elif pending == "monthly_consumption":
             try:
                 # Prefer the just-uploaded raw/clean path for WO→group sync
@@ -1576,6 +1589,8 @@ class BotApp:
             + self._status_text(session, user),
             reply_menu,
         )
+        if inbound_report and inbound_report.get("id"):
+            self._send_inbound_report_files(message, inbound_report)
 
     def on_generate(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -2686,100 +2701,62 @@ class BotApp:
         # Inventory snapshot + rates from monthly/tank filtered by selected months.
         self._ask_month_year_range(message, user, "surplus")
 
-    def on_inbound_report(self, message: dict) -> None:
-        """Snapshot-diff inbound report — no month/year range prompt; always PDF."""
+    def on_inbound_report(self, message: dict, report_id: int | None = None) -> None:
+        """«📥 گزارش اقلام ورودی به انبار» — stored report per stock upload (t221u).
+
+        No recompute: shows the latest stored report (or ``report_id``) as summary
+        + PDF + XLSX, and a keyboard of earlier reports listed by upload date.
+        """
         user = self._user_or_deny(message)
         if not user:
             return
         if self._deny_technician(message, user):
             return
-        uid = user["bale_user_id"]
-        # Prefer caller's extracts; fall back to plant-wide DB (same as دانلود منبع اصلی).
-        latest = self.db.get_latest_extracted(uid, "product_inventory")
-        if not latest:
-            latest = self.db.get_latest_extracted_any("product_inventory")
-        previous = None
-        if latest:
-            previous = self.db.get_previous_extracted(uid, "product_inventory")
-            if (not previous) or int(previous.get("id") or 0) >= int(latest.get("id") or 0):
-                previous = self.db.get_extracted_before(
-                    int(latest["id"]), "product_inventory"
-                )
-        if not latest or not latest.get("clean_path"):
+        history = inbound_svc.list_reports(self.db, limit=11)
+        if report_id is not None:
+            report = inbound_svc.get_report(self.db, int(report_id))
+        else:
+            report = inbound_svc.latest_report(self.db)
+        if not report:
             self._reply(
                 message,
-                "هیچ منبع اصلی در پایگاه‌داده برای مقایسه یافت نشد.\n"
-                "ابتدا از منوی «فایل منبع اصلی» یا «موجودی انبار» فایل اکسل را آپلود کنید.",
+                "هنوز گزارش اقلام ورودی ثبت نشده است.\n"
+                "پس از هر آپلود «📥 موجودی انبار» گزارش به‌طور خودکار ساخته و ذخیره می‌شود.",
                 kb.analytics_menu(),
             )
             return
-        if not previous or not previous.get("clean_path"):
-            self._reply(
-                message,
-                "پایه مقایسه موجود نیست.\n"
-                "فقط یک نسخه از منبع اصلی ذخیره شده؛ پس از آپلود موجودی بعدی "
-                "می‌توانید «گزارش ورودی به انبار» را ببینید.",
-                kb.analytics_menu(),
-            )
-            return
-        prev_path = Path(previous["clean_path"])
-        curr_path = Path(latest["clean_path"])
-        if not prev_path.exists() or not curr_path.exists():
-            self._reply(
-                message,
-                "فایل موجودی قبلی یا فعلی روی سرور یافت نشد.\n"
-                "لطفاً دوباره منبع اصلی را آپلود کنید.",
-                kb.analytics_menu(),
-            )
-            return
+        others = [h for h in history if int(h["id"]) != int(report["id"])][:10]
+        menu = kb.inbound_history_menu(
+            [inbound_svc.history_button_label(h) for h in others]
+        )
+        self._reply(message, inbound_svc.summary_text_fa(report), menu)
+        self._send_inbound_report_files(message, report)
+        log_activity(self.db, user, "report_inbound", report_id=int(report["id"]))
+
+    def _send_inbound_report_files(self, message: dict, report: dict) -> None:
+        """PDF (A4 portrait + letterhead) + XLSX of a stored inbound report."""
         try:
-            prev_df = pd.read_excel(prev_path, engine="openpyxl")
-            curr_df = pd.read_excel(curr_path, engine="openpyxl")
+            pdf_path, xlsx_path = inbound_svc.build_report_files(self.db, report)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("inbound load failed")
-            self._reply(
-                message,
-                f"خواندن فایل‌های موجودی برای گزارش ورودی ناموفق بود: {exc}",
-                kb.analytics_menu(),
-            )
+            logger.exception("inbound report files failed")
+            self._reply(message, f"خطا در تولید فایل گزارش اقلام ورودی: {exc}")
             return
-        allowlist = self.db.active_category_code_set()
-        inbound = compute_inbound_delta(
-            prev_df, curr_df, category_allowlist=allowlist
-        )
-        n = int(len(inbound))
-        cols = [
-            "کد کالا",
-            "شرح",
-            "کد دسته",
-            "مقدار قبلی",
-            "مقدار جدید",
-            "مقدار ورودی",
-            "وضعیت",
-        ]
-        if n <= 0:
-            self._empty_range_reply(
-                message,
-                text="هیچ قلم ورودی (جدید یا افزایش موجودی) در دسته‌های مجاز شناسایی نشد.",
-            )
-            return
-        title = "گزارش ورودی به انبار"
-        subtitle = (
-            f"{n} قلم (جدید یا افزایش) در دسته‌های مجاز "
-            "(فقط کدهای دسته‌بندی تعریف‌شده در ربات)"
-        )
-        self._send_simple_pdf_report(
-            message,
-            title=title,
-            subtitle=subtitle,
-            columns=cols,
-            rows=self._df_to_row_dicts(inbound, cols),
-            filename_stem="inbound",
-            output_name="گزارش_ورودی_به_انبار.pdf",
-            caption=f"گزارش ورودی به انبار — {n} قلم",
-            log_user=user,
-            log_action="report_inbound",
-        )
+        label = report.get("upload_label") or ""
+        for path, cap in (
+            (pdf_path, f"{inbound_svc.REPORT_TITLE} — {label}"),
+            (xlsx_path, f"نسخه اکسل — {inbound_svc.REPORT_TITLE} — {label}"),
+        ):
+            try:
+                self.client.send_document(self._chat_id(message), path, caption=cap)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("send inbound file failed (%s): %s", path, exc)
+
+    @staticmethod
+    def _inbound_history_id(text: str) -> int | None:
+        if not text.startswith(inbound_svc.HISTORY_PREFIX):
+            return None
+        m = re.search(r"\(#(\d+)\)\s*$", text)
+        return int(m.group(1)) if m else None
 
     def _ask_month_year_range(self, message: dict, user: dict, mode: str) -> None:
         """Central prompt: every time-based report asks Jalali month+year from–to first."""
@@ -6204,6 +6181,7 @@ class BotApp:
             kb.BTN_REMAINING,
             kb.BTN_SURPLUS,
             kb.BTN_INBOUND,
+            kb.BTN_INBOUND_LEGACY,
             kb.BTN_FORECAST,
             kb.BTN_MONTHLY_SUMMARY,
             kb.BTN_USER_ACTIVITY,
@@ -6582,8 +6560,12 @@ class BotApp:
         if text == kb.BTN_SURPLUS:
             self.on_surplus_report(message)
             return
-        if text == kb.BTN_INBOUND:
+        if text in (kb.BTN_INBOUND, kb.BTN_INBOUND_LEGACY):
             self.on_inbound_report(message)
+            return
+        inbound_hist_id = self._inbound_history_id(text)
+        if inbound_hist_id is not None:
+            self.on_inbound_report(message, report_id=inbound_hist_id)
             return
         if text == kb.BTN_PERIOD:
             self.on_period_prompt(message)
