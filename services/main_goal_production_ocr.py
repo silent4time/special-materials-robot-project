@@ -19,6 +19,8 @@ the CASTING tab («ریخته گری») of otsteel.ksc.ir/productionstatistics.
 """
 from __future__ import annotations
 
+from services import user_errors
+
 import json
 import logging
 import re
@@ -720,7 +722,7 @@ def ocr_production_image(path: Path | str) -> ProductionOCRResult:
         return ProductionOCRResult(ok=False, error_fa=str(exc))
     except Exception as exc:  # noqa: BLE001
         logger.exception("OCR failed")
-        return ProductionOCRResult(ok=False, error_fa=f"خطای OCR: {exc}")
+        return ProductionOCRResult(ok=False, error_fa=user_errors.error_fa("خطای OCR", exc))
     if not (text or "").strip():
         return ProductionOCRResult(
             ok=False,

@@ -741,7 +741,7 @@ def filter_months_by_range(
             selected = []
         if len(selected) < n:
             warns.append(
-                f"فقط {len(selected)} ماه در DB موجود است (درخواست: {n} ماه اخیر)."
+                f"فقط {len(selected)} ماه در سابقهٔ ذخیره‌شده موجود است (درخواست: {n} ماه اخیر)."
             )
         return selected, warns
 
@@ -865,7 +865,7 @@ def scenario_range_report(
         error_fa=None,
         kind="range",
         title=f"{mg.TITLE_FA} — گزارش بازه",
-        subtitle=f"{spec.label_fa} | {model.n_months} ماه از DB",
+        subtitle=f"{spec.label_fa} | {model.n_months} ماه از سابقهٔ ذخیره‌شده",
         sections=sections,
         summary="\n".join(lines),
         warnings=warns,

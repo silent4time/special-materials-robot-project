@@ -1,6 +1,8 @@
 """Build report PDFs + Excel for the web dashboard (reuses analytics + shared generators)."""
 from __future__ import annotations
 
+from services import user_errors
+
 import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -300,7 +302,7 @@ def generate_monthly_summary_files(
         return None, None, str(exc) or "در این بازه داده‌ای برای خلاصه مصرف نیست."
     except Exception as exc:  # noqa: BLE001
         logger.exception("monthly summary web failed")
-        return None, None, f"خطا در تولید خلاصه: {exc}"
+        return None, None, user_errors.error_fa("خطا در تولید خلاصه", exc)
 
 
 def data_status(db: Database, user: dict[str, Any]) -> dict[str, Any]:
@@ -344,4 +346,4 @@ def generate_critical_items_files(
         from services.critical_items_report import CriticalItemsResult
 
         logger.exception("critical items web failed")
-        return CriticalItemsResult(error=f"خطا در تولید گزارش اقلام بحرانی: {exc}")
+        return CriticalItemsResult(error=user_errors.error_fa("خطا در تولید گزارش اقلام بحرانی", exc))

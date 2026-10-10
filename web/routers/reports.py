@@ -1,6 +1,8 @@
 """Report PDF / Excel downloads — denied for technicians (mirror bot analytics)."""
 from __future__ import annotations
 
+from services import user_errors
+
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -98,7 +100,7 @@ def _inbound_file(db: Database, report_id: int, kind: str):
     try:
         pdf_path, xlsx_path = inbound_svc.build_report_files(db, report)
     except Exception as exc:  # noqa: BLE001
-        return None, f"خطا در تولید گزارش اقلام ورودی: {exc}"
+        return None, user_errors.error_fa("خطا در تولید گزارش اقلام ورودی", exc)
     return (pdf_path if kind == "pdf" else xlsx_path), None
 
 

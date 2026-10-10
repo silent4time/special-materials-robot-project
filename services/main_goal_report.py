@@ -16,6 +16,8 @@ Assumed columns (resilient aliases — see COLUMN docs in module constants):
 """
 from __future__ import annotations
 
+from services import user_errors
+
 import json
 import re
 from dataclasses import asdict, dataclass, field
@@ -332,7 +334,7 @@ def detect_period(
     try:
         xl = pd.ExcelFile(path)
     except Exception as exc:  # noqa: BLE001
-        return None, f"خواندن Excel ناموفق: {exc}"
+        return None, user_errors.error_fa("خواندن Excel ناموفق", exc)
 
     # 2) sheet names
     for sheet in xl.sheet_names:
@@ -420,7 +422,7 @@ def detect_file_kind(path: Path | str, *, filename: str | None = None) -> tuple[
     try:
         xl = pd.ExcelFile(path)
     except Exception as exc:  # noqa: BLE001
-        return None, f"خواندن Excel ناموفق: {exc}"
+        return None, user_errors.error_fa("خواندن Excel ناموفق", exc)
     for sheet in xl.sheet_names:
         k = _kind_from_text(sheet)
         if k:
@@ -1377,7 +1379,7 @@ def compute_main_goal(
     except Exception as exc:  # noqa: BLE001
         return MainGoalResult(
             ok=False,
-            error_fa=f"خطا در خواندن آمار تولید: {exc}",
+            error_fa=user_errors.error_fa("خطا در خواندن آمار تولید", exc),
             period=period,
             period_sources=period_sources,
             production=None,
@@ -1398,7 +1400,7 @@ def compute_main_goal(
         except Exception as exc:  # noqa: BLE001
             return MainGoalResult(
                 ok=False,
-                error_fa=f"خطا در خواندن «{FILE_KINDS[kind]}»: {exc}",
+                error_fa=user_errors.error_fa(f"خطا در خواندن «{FILE_KINDS[kind]}»", exc),
                 period=period,
                 period_sources=period_sources,
                 production=production,

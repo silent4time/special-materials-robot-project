@@ -4,6 +4,8 @@ Thin wrapper over ``services.main_goal_report`` / ``main_goal_history`` / ``main
 """
 from __future__ import annotations
 
+from services import user_errors
+
 import shutil
 from pathlib import Path
 
@@ -316,7 +318,7 @@ async def report_range(
     months = mgh.load_history(db)
     selected, warns = mgp.filter_months_by_range(months, spec)
     if not selected:
-        return _page(request, db, user, error="در این بازه داده‌ای در DB نیست.", status_code=400)
+        return _page(request, db, user, error="در این بازه داده‌ای در سابقهٔ ذخیره‌شده نیست.", status_code=400)
     if warns and confirm_partial not in {"1", "on", "true", "yes"}:
         return _page(
             request, db, user,
@@ -360,7 +362,7 @@ async def upload_month(
     except ValueError as exc:
         return _page(request, db, user, error=str(exc), status_code=400)
     except Exception as exc:  # noqa: BLE001
-        return _page(request, db, user, error=f"ذخیره فایل ناموفق: {exc}", status_code=400)
+        return _page(request, db, user, error=user_errors.error_fa("ذخیره فایل ناموفق", exc), status_code=400)
 
     out = mgh.store_month_set(
         db, files, filenames=filenames, user=user, source="web", inventory=_inventory(db, user)

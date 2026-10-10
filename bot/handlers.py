@@ -816,8 +816,8 @@ class BotApp:
             self._reply(
                 message,
                 "این دستور را داخل گروهی بفرستید که ربات عضو آن است.\n"
-                "ربات همان chat_id را به‌عنوان «گروه گزارش موجودی روزانه» ذخیره می‌کند.\n"
-                f"جایگزین: متغیر محیطی SITE_STOCK_REPORT_GROUP_ID یا «{kb.BTN_BOT_SETTINGS}» ← «{kb.BTN_SET_STOCK_GROUP}».",
+                "ربات شناسهٔ همان گروه را به‌عنوان «گروه گزارش موجودی روزانه» ذخیره می‌کند.\n"
+                f"راهنما: «{kb.BTN_BOT_SETTINGS}» ← «{kb.BTN_SET_STOCK_GROUP}».",
                 kb.main_menu(user),
             )
             return
@@ -1539,7 +1539,7 @@ class BotApp:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("merge clean frames failed: %s", exc)
-                merge_note = f"\n(همسان‌سازی انجام نشد: {exc})"
+                merge_note = "\n(" + user_errors.error_fa("همسان‌سازی انجام نشد", exc) + ")"
 
         # Session slots point at CLEAN file so analytics/PDF use filtered data
         session = self.db.store_file_slot(
@@ -1580,7 +1580,7 @@ class BotApp:
                     inbound_note = "\n\n" + inbound_svc.summary_text_fa(inbound_report)
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("inbound report after stock upload failed")
-                    inbound_note = f"\n(گزارش اقلام ورودی ساخته نشد: {exc})"
+                    inbound_note = "\n(" + user_errors.error_fa("گزارش اقلام ورودی ساخته نشد", exc) + ")"
             elif full_source:
                 inbound_note = (
                     "\nآپلود کامل منبع اصلی — پایه «گزارش اقلام ورودی به انبار» تغییر نکرد."
@@ -3865,7 +3865,7 @@ class BotApp:
             logger.exception("monthly summary failed")
             self._reply(
                 message,
-                f"خطا در تولید خلاصه مصرف ماهیانه: {exc}",
+                user_errors.error_fa("خطا در تولید خلاصه مصرف ماهیانه", exc),
                 kb.analytics_menu(user),
             )
 
@@ -4550,18 +4550,16 @@ class BotApp:
             )
         elif which == "stock_group":
             current = site_stock_notify.resolve_report_group_id(self.db)
-            cur_line = f"شناسه فعلی: {current}" if current else "شناسه فعلی: (تنظیم نشده)"
-            env_note = (
-                f"env SITE_STOCK_REPORT_GROUP_ID={SITE_STOCK_REPORT_GROUP_ID}"
-                if SITE_STOCK_REPORT_GROUP_ID
-                else "env SITE_STOCK_REPORT_GROUP_ID خالی است"
+            cur_line = (
+                f"✅ گروه گزارش موجودی تنظیم شده است (شناسه گروه: {current})."
+                if current
+                else "⚠️ گروه گزارش موجودی هنوز تنظیم نشده است."
             )
             hint = (
                 "\n\n"
                 + cur_line
-                + "\n"
-                + env_note
                 + "\n\n"
+                "روش تنظیم:\n"
                 "ربات را به گروه بله اضافه کنید، سپس داخل همان گروه دستور\n"
                 "/set_stock_group\n"
                 "را بفرستید (فقط مالک/مدیر). شناسه منفی گروه ذخیره می‌شود.\n"
@@ -4736,7 +4734,7 @@ class BotApp:
             logger.exception("save letterhead failed")
             self._reply(
                 message,
-                f"ذخیره سربرگ ناموفق بود: {exc}",
+                user_errors.error_fa("ذخیره سربرگ ناموفق بود", exc),
                 self._settings_item_menu("letterhead"),
             )
             return True
@@ -4757,14 +4755,16 @@ class BotApp:
         lines = [
             "📣 گروه گزارش موجودی روزانه",
             "",
-            f"شناسه فعال: {current or '(تنظیم نشده)'}",
-            f"مقدار ذخیره‌شده در DB: {db_raw or '(خالی)'}",
-            f"env SITE_STOCK_REPORT_GROUP_ID: {SITE_STOCK_REPORT_GROUP_ID or '(خالی)'}",
+            (f"شناسه گروه فعال: {current}" if current else "⚠️ گروه گزارش موجودی هنوز تنظیم نشده است."),
+            (
+                "منبع: تنظیمات ربات" if db_raw
+                else ("منبع: تنظیم پیش‌فرض سرور" if current else "")
+            ),
             "",
-            "برای تنظیم: ربات را به گروه اضافه کنید و داخل گروه بفرستید:",
+            "برای تنظیم: ربات را به گروه بله اضافه کنید و داخل همان گروه (توسط مالک/مدیر) بفرستید:",
             "/set_stock_group",
             "",
-            "اولویت: مقدار DB بر env غلبه دارد. بدون شناسه، گزارش گروهی ارسال نمی‌شود.",
+            "تا وقتی گروهی تنظیم نشده، گزارش گروهی موجودی ارسال نمی‌شود (ثبت موجودی سایت بدون خطا ادامه می‌یابد).",
         ]
         self._reply(message, "\n".join(lines), markup)
 
@@ -4777,7 +4777,7 @@ class BotApp:
         log_activity(self.db, user, "settings_stock_group")
         self._bot_settings_pending[uid] = {"mode": "menu", "which": "stock_group"}
         env_bit = (
-            f"\nتوجه: env SITE_STOCK_REPORT_GROUP_ID={SITE_STOCK_REPORT_GROUP_ID} هنوز فعال است."
+            f"\nتوجه: تنظیم پیش‌فرض سرور (شناسه {SITE_STOCK_REPORT_GROUP_ID}) همچنان فعال است."
             if SITE_STOCK_REPORT_GROUP_ID
             else ""
         )
@@ -4948,7 +4948,7 @@ class BotApp:
             logger.exception("save bot asset failed")
             self._reply(
                 message,
-                f"ذخیره تصویر ناموفق بود: {exc}",
+                user_errors.error_fa("ذخیره تصویر ناموفق بود", exc),
                 self._settings_item_menu(which),
             )
             return True

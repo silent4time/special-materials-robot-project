@@ -1,6 +1,8 @@
 """تنظیم ورود وب + ویرایش منبع اصلی (shared services.main_source)."""
 from __future__ import annotations
 
+from services import user_errors
+
 import shutil
 import tempfile
 from pathlib import Path
@@ -272,7 +274,7 @@ async def main_source_upload(
     except (ExcelValidationError, ValueError, KeyError) as exc:
         error = str(exc)
     except Exception as exc:  # noqa: BLE001
-        error = f"آپلود ناموفق بود: {exc}"
+        error = user_errors.error_fa("آپلود ناموفق بود", exc)
     return render(
         request,
         "settings_main_source.html",

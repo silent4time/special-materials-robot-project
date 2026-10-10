@@ -6,6 +6,8 @@ Expected columns (Persian header row, sometimes 2-row header):
 """
 from __future__ import annotations
 
+from services import user_errors
+
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -144,7 +146,7 @@ def parse_sequence_excel(path: Path | str) -> SequenceParseResult:
     try:
         wb = load_workbook(path, data_only=True, read_only=True)
     except Exception as exc:  # noqa: BLE001
-        return SequenceParseResult(ok=False, error_fa=f"خواندن Excel ناموفق: {exc}")
+        return SequenceParseResult(ok=False, error_fa=user_errors.error_fa("خواندن Excel ناموفق", exc))
     ws = wb[wb.sheetnames[0]]
     grid = [list(r) for r in ws.iter_rows(values_only=True)]
     wb.close()

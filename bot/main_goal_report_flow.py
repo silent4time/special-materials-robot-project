@@ -774,7 +774,7 @@ class MainGoalReportFlow:
                     status += f" | {o['production_note']}"
                 lines.append(f"• {o['label']}: {status}")
         else:
-            lines.append("هنوز ورودی‌ای در DB نیست.")
+            lines.append("هنوز ورودی‌ای ذخیره نشده است.")
         self._reply(message, "\n".join(lines), kb.main_goal_inputs_menu())
 
     def start_prod_photo(self, message: dict) -> None:
@@ -1064,7 +1064,7 @@ class MainGoalReportFlow:
         self.pending[str(user["bale_user_id"])] = {"await": "range_pick"}
         self._reply(
             message,
-            "📊 درخواست گزارش از سابقهٔ DB\n"
+            "📊 درخواست گزارش از سابقهٔ ذخیره‌شده\n"
             f"{mgh.history_count_line(len(months))}\n\n"
             "بازه را انتخاب کنید:\n"
             "• ۳ ماهه / ۶ ماهه / یکساله — آخرین N ماه ذخیره‌شده\n"
@@ -1113,7 +1113,7 @@ class MainGoalReportFlow:
             self.clear(uid)
             self._reply(
                 message,
-                "در این بازه هیچ ماهی در DB نیست. ابتدا ورودی‌ها را ثبت کنید.",
+                "در این بازه هیچ ماهی در سابقهٔ ذخیره‌شده نیست. ابتدا ورودی‌ها را ثبت کنید.",
                 kb.main_goal_menu(),
             )
             return True

@@ -18,7 +18,7 @@
 </div>
 
 <div class="card">
-  <h2>📚 سابقه DB ({{ months|length }} ماه)</h2>
+  <h2>📚 سابقهٔ ذخیره‌شده ({{ months|length }} ماه)</h2>
   <div class="alert ok">{{ history_line }}</div>
   {% if completeness %}
   <table>
@@ -73,7 +73,7 @@
     <label>تصویر screenshot
       <input type="file" name="photo" accept="image/*" required>
     </label>
-    <div class="report-actions"><button type="submit" class="btn">OCR و ذخیره در DB</button></div>
+    <div class="report-actions"><button type="submit" class="btn">خواندن خودکار (OCR) و ذخیره</button></div>
   </form>
   {{ file_guide("mg_production_photo")|safe }}
   <h3>✏️ اصلاح / ورود دستی تولید</h3>
@@ -101,7 +101,7 @@
 </div>
 
 <div class="card">
-  <h2>📊 ب) درخواست گزارش از سابقه DB</h2>
+  <h2>📊 ب) درخواست گزارش از سابقهٔ ذخیره‌شده</h2>
   <form method="post" action="/reports/main-goal/report/range" class="form-grid">
     <label>بازه
       <select name="range_kind">
