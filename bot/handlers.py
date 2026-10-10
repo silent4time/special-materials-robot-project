@@ -365,9 +365,107 @@ class BotApp:
         if not user:
             return
         uid = str(user["bale_user_id"])
+        try:
+            if self._step_back(message, user, uid):
+                return
+        except Exception:  # noqa: BLE001 - never trap the user inside a flow
+            logger.exception("step back failed; leaving flow")
         target = self._nav_target_back(uid)
         self._clear_all_pending(uid)
         self._open_menu(message, user, target)
+
+    def _step_back(self, message: dict, user: dict, uid: str) -> bool:
+        """«⬅️ بازگشت» inside a multi-step flow → one step up (True when handled).
+
+        The first step of every flow returns False, so the caller leaves the flow
+        and opens the menu it was started from.
+        """
+        if uid in self.main_goal_report.pending:
+            return self.main_goal_report.step_back(message)
+        if uid in self.tundish_report.pending:
+            return self.tundish_report.step_back(message)
+        mr = self._material_req_pending.get(uid)
+        if mr:
+            aw = mr.get("await")
+            if aw in {"edit_pick", "edit_qty"}:
+                self.on_material_request_back_review(message)
+                return True
+            if aw == "review":
+                self.on_material_request_start(message)  # back to the days-of-cover prompt
+                return True
+            return False
+        wr = self._warehouse_ret_pending.get(uid)
+        if wr:
+            if wr.get("await") in {"edit_pick", "edit_qty"}:
+                self.on_warehouse_return_back_review(message)
+                return True
+            return False
+        nt_p = self._n_tundish_pending.get(uid)
+        if nt_p:
+            from services import n_tundish_report as nt
+
+            aw = nt_p.get("await")
+            if aw == "count" or (aw == "mode" and not nt_p.get("section")):
+                self.on_n_tundish_start(message)
+                return True
+            if aw == "mode":
+                nt_p["await"] = "count"
+                self._reply(
+                    message,
+                    f"تعداد تاندیش {nt.SECTIONS[nt_p['section']]} (عدد صحیح مثبت) را انتخاب کنید یا بنویسید:",
+                    kb.n_tundish_count_menu(),
+                )
+                return True
+            return False
+        cp = self._critical_pending.get(uid)
+        if cp:
+            from bot.jalali import PERSIAN_MONTH_NAMES
+
+            aw = cp.get("await")
+            if aw == "month":
+                cp["await"] = "year"
+                self._reply(
+                    message,
+                    "سال شمسی مورد نظر برای تعداد تاندیش را انتخاب کنید:",
+                    kb.year_picker_menu(year_choices_around()),
+                )
+                return True
+            if aw == "count_billet":
+                cp["await"] = "month"
+                self._reply(message, f"ماه گزارش برای سال {cp.get('year')} را انتخاب کنید:", kb.month_picker_menu())
+                return True
+            prev = {"count_bloom": ("count_billet", "بیلت"), "count_slab": ("count_bloom", "بلوم")}.get(aw)
+            if prev:
+                cp["await"] = prev[0]
+                name = PERSIAN_MONTH_NAMES.get(int(cp.get("month") or 0), "")
+                self._reply(
+                    message,
+                    f"تعداد تاندیش {prev[1]} در {name} {cp.get('year')} را بفرستید (عدد صحیح ≥ ۰):",
+                    kb.critical_items_menu(),
+                )
+                return True
+            return False
+        ap = self._analysis_pending.get(uid)
+        if ap and ap.get("mode"):
+            aw = ap.get("await")
+            mode = ap["mode"]
+            if aw in {"section", "range", "my_typed", "my_start_year"}:
+                self._ask_month_year_range(message, user, mode)
+                return True
+            if aw == "my_start_month":
+                ap["await"] = "my_start_year"
+                self._reply(message, "سال شروع بازه را انتخاب کنید:", kb.year_picker_menu(year_choices_around()))
+                return True
+            if aw == "my_end_year":
+                ap["await"] = "my_start_month"
+                self._reply(message, "ماه شروع را انتخاب کنید:", kb.month_picker_menu())
+                return True
+            if aw == "my_end_month":
+                ap["await"] = "my_end_year"
+                self._reply(message, "سال پایان بازه را انتخاب کنید:", kb.year_picker_menu(year_choices_around()))
+                return True
+            return False
+        return False
 
     def on_cancel(self, message: dict) -> None:
         """Single «✖️ انصراف» for every multi-step flow (routes to the active one)."""

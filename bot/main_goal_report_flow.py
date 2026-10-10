@@ -245,6 +245,25 @@ class MainGoalReportFlow:
             return self._on_range_confirm(message, p, text)
         return True
 
+    def step_back(self, message: dict) -> bool:
+        """«⬅️ بازگشت» inside a هدف اصلی flow: one step up (False = first step → leave)."""
+        uid = self.app._uid(message)
+        p = self.pending.get(uid)
+        if not p:
+            return False
+        aw = p.get("await")
+        if aw == "scn_section":
+            self.start_target(message)
+            return True
+        if aw in {"scn_tons", "scn_confirm"}:
+            if aw == "scn_tons":
+                p.pop("section", None)
+            return self._on_scn_period(message, p, p.get("period_text") or "")
+        if aw in {"range_custom", "range_confirm"}:
+            self.start_range_report(message)
+            return True
+        return False
+
     def cancel(self, message: dict) -> None:
         """«✖️ انصراف» while a هدف اصلی step is pending (routed by BotApp.on_cancel)."""
         uid = self.app._uid(message)

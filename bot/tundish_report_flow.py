@@ -454,6 +454,20 @@ class TundishReportFlow:
         self._after_answer(message, p)
         return True
 
+    def step_back(self, message: dict) -> bool:
+        """«⬅️ بازگشت» while entering a report: previous question (False = leave)."""
+        p = self.pending.get(self.app._uid(message))
+        if not p:
+            return False
+        aw = p.get("await")
+        if aw == "step" and (p.get("edit_one") or p.get("history")):
+            self._go_prev(message, p)
+            return True
+        if aw == "edit_pick":
+            self._show_confirm(message, p)
+            return True
+        return False
+
     def _go_prev(self, message: dict, p: dict) -> None:
         cur = self._current_step(p)
         if p.get("edit_one"):
