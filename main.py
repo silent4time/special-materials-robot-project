@@ -24,6 +24,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+from log_redact import install_log_redaction  # noqa: E402
+
+install_log_redaction()  # httpx/httpcore → WARNING; token never reaches the log
 logger = logging.getLogger("bale-materials-bot")
 
 

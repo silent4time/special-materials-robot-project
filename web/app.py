@@ -17,6 +17,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from auth.rbac import can_configure_catalog, can_request_materials, require_manager, role_label
 from config import ROLES, SITE_STOCK_GROUPS, WEB_SECRET_KEY
+from log_redact import install_log_redaction
 from web.deps import (
     ForbiddenFa,
     LoginRequired,
@@ -117,4 +118,6 @@ def create_app() -> FastAPI:
     return app
 
 
+# uvicorn has configured its handlers by now (string import) → filter them too.
+install_log_redaction()
 app = create_app()

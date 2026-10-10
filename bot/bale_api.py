@@ -15,12 +15,15 @@ from typing import Any, Optional
 import httpx
 
 from config import BALE_API_BASE, BALE_BOT_TOKEN, POLL_TIMEOUT
+from log_redact import redact
 
 logger = logging.getLogger(__name__)
 
 
 class BaleAPIError(RuntimeError):
     def __init__(self, method: str, description: str, payload: Any = None) -> None:
+        # httpx errors embed the request URL (= token); never surface it to logs/users.
+        description = redact(description)
         super().__init__(f"Bale API {method} failed: {description}")
         self.method = method
         self.description = description
@@ -192,14 +195,17 @@ class BaleClient:
                     return dest
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
-                logger.warning("download attempt failed for %s: %s", url, exc)
+                logger.warning("download attempt failed for %s: %s", redact(url), redact(exc))
 
         # Last resort: if getFile result embeds file bytes (rare) — not available.
         # Try file_path relative to api host again with follow redirects.
         if file_path:
             url = f"https://tapi.bale.ai/file/bot{self.token}/{file_path.lstrip('/')}"
-            r = self._client.get(url, follow_redirects=True, timeout=120.0)
-            r.raise_for_status()
+            try:
+                r = self._client.get(url, follow_redirects=True, timeout=120.0)
+                r.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise BaleAPIError("download_file", str(exc)) from None
             dest.write_bytes(r.content)
             return dest
 

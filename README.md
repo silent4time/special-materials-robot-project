@@ -74,6 +74,8 @@ bash install.sh --no-assistant
 
 ## پیش‌نیاز و اجرا
 
+> امنیت لاگ: `log_redact.install_log_redaction()` (در `main.py` و `web`) لاگرهای httpx/httpcore را روی WARNING می‌گذارد و هر الگوی `bot<digits>:<secret>` / مقدار توکن را در همه رکوردها با `bot[REDACTED]` جایگزین می‌کند. تست: `python scripts/smoke_log_redaction.py`.
+
 ```bash
 cd bale-materials-bot
 python3 -m venv .venv
