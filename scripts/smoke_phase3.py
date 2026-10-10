@@ -109,10 +109,83 @@ def test_cache_and_audit() -> None:
     print("  19a/19b OK (frame cache hits, extract row updated in place, edit audit before→after, snapshots keep 10)")
 
 
+def test_errors_and_expiry() -> None:
+    import logging
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import smoke_phase1 as p1
+    from bot import keyboards as kb
+    from bot.handlers import BotApp
+    from db.models import Database
+    from services import user_errors
+
+    db = Database(TMP / "err.db")
+    db.upsert_user("41", role="owner", display_name="A")
+    client = p1.FakeClient()
+    app = BotApp(client, db)  # type: ignore[arg-type]
+    catcher = p1.ErrCatcher()
+    logging.getLogger().addHandler(catcher)
+
+    def boom(_m):
+        raise RuntimeError("secret internal detail /path/x.py")
+
+    app.on_status = boom  # type: ignore[assignment]
+    n = len(client.sent)
+    app.handle_update({"update_id": 7, "message": {"from": {"id": 41, "first_name": "a"}, "chat": {"id": 41}, "text": "/status"}})
+    txt = client.sent[-1][1]
+    assert len(client.sent) == n + 1 and "کد پیگیری: E-" in txt and "secret" not in txt, txt
+    code = txt.split("کد پیگیری: ")[1].split()[0]
+    assert any(code in r and "secret internal detail" in r for r in catcher.records), catcher.records[-1:]
+    # user-facing validation messages are kept verbatim (no code)
+    m = user_errors.error_fa("ثبت نشد", ValueError("شناسه الزامی است."))
+    assert "کد پیگیری" not in m and "شناسه الزامی است" in m
+    logging.getLogger().removeHandler(catcher)
+
+    # flow open → «restart» (new BotApp) → first typed value gets the expiry notice once
+    def send(a, text):
+        k = len(client.sent)
+        a.handle_message({"from": {"id": 41, "first_name": "a"}, "chat": {"id": 41}, "text": text})
+        return [t for _c, t, _m in client.sent[k:]]
+
+    send(app, kb.BTN_BOT_SETTINGS); send(app, kb.BTN_USERS)
+    send(app, kb.BTN_USERS_ADD)  # role picker = multi-step flow keyboard
+    assert db.get_setting("flow_open:41"), "marker"
+    time.sleep(0.01)
+    app2 = BotApp(client, db)  # type: ignore[arg-type]
+    out = send(app2, kb.BTN_ROLE_TECH)  # answer to the dead flow
+    assert any("منقضی شد" in t for t in out), out
+    assert not db.get_setting("flow_open:41")
+    out = send(app2, kb.BTN_ROLE_TECH)
+    assert not any("منقضی شد" in t for t in out), out
+    # a fresh process where the user just presses a menu button → no notice
+    send(app2, kb.BTN_BOT_SETTINGS); send(app2, kb.BTN_USERS); send(app2, kb.BTN_USERS_ADD)
+    app3 = BotApp(client, db)  # type: ignore[arg-type]
+    out = send(app3, kb.BTN_HOME)
+    assert not any("منقضی شد" in t for t in out), out
+    # web: unexpected error → 500 Persian page with tracking code, no detail
+    from fastapi.testclient import TestClient
+
+    import web.deps as deps
+    from web.app import create_app
+
+    wapp = create_app()
+    wapp.dependency_overrides[deps.get_db] = lambda: db
+    wapp.dependency_overrides[deps.current_user_optional] = lambda: db.get_user("41")
+
+    @wapp.get("/__boom")
+    async def _boom():
+        raise RuntimeError("secret web detail")
+
+    r = TestClient(wapp, raise_server_exceptions=False).get("/__boom")
+    assert r.status_code == 500 and "کد پیگیری" in r.text and "secret" not in r.text, r.text[:300]
+    print("  19d OK (tracking code bot+web, details only in log, expired-flow notice after restart)")
+
+
 def main() -> int:
     print("smoke phase3…")
     test_housekeeping()
     test_cache_and_audit()
+    test_errors_and_expiry()
     print("SMOKE_PHASE3_OK")
     return 0
 

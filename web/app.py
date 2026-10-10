@@ -57,6 +57,23 @@ def create_app() -> FastAPI:
         request.state.templates = TEMPLATES
         return await call_next(request)
 
+    @app.exception_handler(Exception)
+    async def _unexpected(request: Request, exc: Exception):
+        """19d: simple Persian page + tracking code; traceback only in data/web.log."""
+        from fastapi.responses import HTMLResponse as _HTML
+        from html import escape
+
+        from services import user_errors
+
+        text = user_errors.error_fa(f"صفحهٔ «{request.url.path}» باز نشد", exc)
+        body = "<br>".join(escape(line) for line in text.splitlines())
+        return _HTML(
+            f'<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">'
+            f'<body style="font-family:Vazirmatn,Tahoma,sans-serif;padding:2rem">'
+            f'<p>{body}</p><p><a href="/home">بازگشت به خانه</a></p></body></html>',
+            status_code=500,
+        )
+
     @app.exception_handler(LoginRequired)
     async def _login_required(_request: Request, _exc: LoginRequired):
         return RedirectResponse("/login", status_code=303)

@@ -59,6 +59,7 @@ from bot.jalali import (
 )
 from bot.bale_api import BaleAPIError, BaleClient, public_markup
 from services import permissions as perm
+from services import user_errors
 from bot.settings_text import (
     DEFAULT_INVITE_TEXT,
     PLACEHOLDER_HINT_INVITE,
@@ -97,6 +98,12 @@ from services.main_source import FIELD_LABELS_FA, INVENTORY_COLUMNS
 
 logger = logging.getLogger(__name__)
 
+
+def _utc_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
 from bot.help_text import HELP_TEXT, help_text_for  # noqa: E402  (re-exported)
 
 
@@ -105,6 +112,10 @@ class BotApp:
         self.client = client
         self.db = db
         perm.bind(db)  # role-permission overrides come from this DB
+        self._boot_iso = _utc_iso()
+        self._flow_marked: set[str] = set()
+        self._flow_seen: set[str] = set()
+        self._stale_once: set[str] = set()
         # pending analytics: mode + await month_range|my_*|range (day advanced)
         self._analysis_pending: dict[str, dict[str, Any]] = {}
         # uid -> {"key": menu key, "origin": menu that opened a flow} (uniform «⬅️ بازگشت»)
@@ -209,12 +220,53 @@ class BotApp:
             return public_markup(markup)
         key = str(markup.get("_menu"))
         cur = self._nav.get(uid) or {}
+        self._mark_flow(uid, key == "flow")
         if key == "flow":
             origin = cur.get("origin") if cur.get("key") == "flow" else cur.get("key")
             self._nav[uid] = {"key": "flow", "origin": origin or "main"}
         else:
             self._nav[uid] = {"key": key}
         return public_markup(markup)
+
+    # ---------- 19d: «operation expired after restart» ----------
+    _FLOW_KEY = "flow_open:"
+
+    def _mark_flow(self, uid: str, open_: bool) -> None:
+        """Persist «user is inside a multi-step flow» so a restart can tell them."""
+        try:
+            if open_ and uid not in self._flow_marked:
+                self.db.set_setting(self._FLOW_KEY + uid, _utc_iso())
+                self._flow_marked.add(uid)
+            elif not open_ and uid in self._flow_marked:
+                self.db.set_setting(self._FLOW_KEY + uid, None)
+                self._flow_marked.discard(uid)
+        except Exception:  # noqa: BLE001
+            logger.warning("flow marker write failed for %s", uid)
+
+    def _check_stale_flow(self, uid: str) -> None:
+        """First message of a user in this process: was a flow open before restart?"""
+        if uid in self._flow_seen:
+            return
+        self._flow_seen.add(uid)
+        try:
+            ts = self.db.get_setting(self._FLOW_KEY + uid)
+            if ts and ts < self._boot_iso:
+                self.db.set_setting(self._FLOW_KEY + uid, None)
+                self._stale_once.add(uid)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _expired_flow_notice(self, message: dict, user: dict | None) -> bool:
+        """True (and notice sent) when the user's first message after a restart was
+        input for a flow that died with the old process (typed value / ✖️ انصراف)."""
+        if not user:
+            return False
+        uid = str(user["bale_user_id"])
+        if uid not in self._stale_once or self._has_pending(uid):
+            return False
+        self._stale_once.discard(uid)
+        self._reply(message, user_errors.EXPIRED_FA, kb.main_menu(user))
+        return True
 
     def _nav_target_back(self, uid: str) -> str:
         cur = self._nav.get(uid) or {"key": "main"}
@@ -345,6 +397,8 @@ class BotApp:
             self.on_cancel_pending(message)
             return
         if not self._has_pending(uid):
+            if self._expired_flow_notice(message, user):
+                return
             target = (self._nav.get(uid) or {}).get("origin") or (self._nav.get(uid) or {}).get("key") or "main"
             self._reply(message, "عملیاتی برای انصراف نیست.")
             self._open_menu(message, user, target if target != "flow" else "main")
@@ -1326,7 +1380,7 @@ class BotApp:
             self.client.download_file(file_id, dest)
         except Exception as exc:  # noqa: BLE001
             logger.exception("download failed")
-            self._reply(message, f"دانلود فایل از بله ناموفق بود: {exc}")
+            self._reply(message, user_errors.error_fa("دانلود فایل از بله ناموفق بود", exc))
             return
 
         # If a «مصرف ماهیانه / مواد مصرفی» upload actually matches the
@@ -1424,7 +1478,7 @@ class BotApp:
         except Exception as exc:  # noqa: BLE001
             logger.exception("extract failed")
             dest.unlink(missing_ok=True)
-            self._reply(message, f"استخراج داده از فایل ناموفق بود: {exc}", kb.cancel_pending_menu())
+            self._reply(message, user_errors.error_fa("استخراج داده از فایل ناموفق بود", exc), kb.cancel_pending_menu())
             return
 
         new_kept = int(result.kept_row_count)
@@ -1731,7 +1785,7 @@ class BotApp:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("n_tundish report failed")
-            self._reply(message, f"خطا در ساخت گزارش: {exc}", kb.analytics_menu(user))
+            self._reply(message, user_errors.error_fa("خطا در ساخت گزارش", exc), kb.analytics_menu(user))
             return
         if res.error:
             self._reply(message, res.error, kb.analytics_menu(user))
@@ -2054,7 +2108,7 @@ class BotApp:
             frame = load_primary_inventory(self.db, user)
         except Exception as exc:  # noqa: BLE001
             logger.exception("load primary inventory for download failed")
-            self._reply(message, f"خطا در خواندن منبع اصلی: {exc}", menu)
+            self._reply(message, user_errors.error_fa("خطا در خواندن منبع اصلی", exc), menu)
             return
         if frame is None or getattr(frame, "empty", True):
             self._reply(
@@ -2086,7 +2140,7 @@ class BotApp:
             log_activity(self.db, user, "download_primary_inventory")
         except Exception as exc:  # noqa: BLE001
             logger.exception("inv download failed")
-            self._reply(message, f"خطا در ساخت اکسل منبع اصلی: {exc}", menu)
+            self._reply(message, user_errors.error_fa("خطا در ساخت اکسل منبع اصلی", exc), menu)
 
 
     def on_inv_edit_record_start(self, message: dict) -> None:
@@ -2802,7 +2856,7 @@ class BotApp:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("critical items report failed")
-            self._reply(message, f"خطا در تولید گزارش اقلام بحرانی: {exc}", menu)
+            self._reply(message, user_errors.error_fa("خطا در تولید گزارش اقلام بحرانی", exc), menu)
             return
         if res.error:
             text = res.error
@@ -2839,7 +2893,7 @@ class BotApp:
                 )
         except Exception as exc:  # noqa: BLE001
             logger.exception("critical items send failed")
-            self._reply(message, f"خطا در ارسال گزارش اقلام بحرانی: {exc}", menu)
+            self._reply(message, user_errors.error_fa("خطا در ارسال گزارش اقلام بحرانی", exc), menu)
             return
         from services.critical_items_report import critical_items_bot_lines
 
@@ -2910,7 +2964,7 @@ class BotApp:
             pdf_path, xlsx_path = inbound_svc.build_report_files(self.db, report)
         except Exception as exc:  # noqa: BLE001
             logger.exception("inbound report files failed")
-            self._reply(message, f"خطا در تولید فایل گزارش اقلام ورودی: {exc}")
+            self._reply(message, user_errors.error_fa("خطا در تولید فایل گزارش اقلام ورودی", exc))
             return
         label = report.get("upload_label") or ""
         for path, cap in (
@@ -3341,7 +3395,7 @@ class BotApp:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("simple pdf report failed: %s", title)
-            self._reply(message, f"خطا در تولید PDF گزارش: {exc}", markup)
+            self._reply(message, user_errors.error_fa("خطا در تولید PDF گزارش", exc), markup)
             return None
 
         excel_ok = False
@@ -3646,7 +3700,7 @@ class BotApp:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("period consumption failed")
-            self._reply(message, f"خطا در ساخت گزارش: {exc}", kb.analytics_menu(user))
+            self._reply(message, user_errors.error_fa("خطا در ساخت گزارش", exc), kb.analytics_menu(user))
             return
         if res.error:
             self._reply(message, res.error, kb.analytics_menu(user))
@@ -3721,7 +3775,7 @@ class BotApp:
             log_activity(self.db, user, "report_comprehensive")
         except Exception as exc:  # noqa: BLE001
             logger.exception("comprehensive report failed")
-            self._reply(message, f"خطا در تولید گزارش: {exc}", kb.analytics_menu(user))
+            self._reply(message, user_errors.error_fa("خطا در تولید گزارش", exc), kb.analytics_menu(user))
 
     def _resolve_monthly_source(self, user: dict) -> tuple[Path | None, str | None]:
         """Prefer raw monthly upload (plant detail); else cleaned session/latest."""
@@ -5922,6 +5976,19 @@ class BotApp:
     # ---------- dispatcher ----------
 
     def handle_message(self, message: dict) -> None:
+        try:
+            uid = str(((message or {}).get("from") or {}).get("id") or "")
+        except Exception:  # noqa: BLE001
+            uid = ""
+        if uid:
+            self._check_stale_flow(uid)
+        try:
+            self._handle_message(message)
+        finally:
+            if uid:
+                self._stale_once.discard(uid)
+
+    def _handle_message(self, message: dict) -> None:
         if not message:
             return
         raw_text = (message.get("text") or "").strip()
@@ -6128,6 +6195,8 @@ class BotApp:
             return
 
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))
+        if self._expired_flow_notice(message, user):
+            return
         self._reply(
             message,
             "لطفاً از دکمه‌های منو استفاده کنید یا /help را بزنید.",
@@ -6231,5 +6300,16 @@ class BotApp:
                 self.on_my_chat_member(update["my_chat_member"])
             elif "message" in update:
                 self.handle_message(update["message"])
-        except Exception:  # noqa: BLE001
-            logger.exception("update failed: %s", update.get("update_id"))
+        except Exception as exc:  # noqa: BLE001
+            # 19d: simple message + tracking code for the user; traceback only in log
+            msg = (update.get("message") or (update.get("callback_query") or {}).get("message") or {})
+            who = (update.get("message") or update.get("callback_query") or {}).get("from") or {}
+            chat_id = (msg.get("chat") or {}).get("id") or who.get("id")
+            text = user_errors.error_fa(
+                f"درخواست شما انجام نشد (update {update.get('update_id')})", exc, log=logger
+            )
+            if chat_id:
+                try:
+                    self.client.send_message(chat_id, text.replace(f" (update {update.get('update_id')})", ""))
+                except Exception:  # noqa: BLE001
+                    logger.warning("could not send error notice to %s", chat_id)

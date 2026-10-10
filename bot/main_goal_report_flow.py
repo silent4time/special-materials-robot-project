@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from analytics.frames import load_primary_inventory
 from bot import keyboards as kb
 from services import permissions as perm
+from services import user_errors
 from bot.activity import log_activity
 from bot.jalali import tehran_now
 from config import REPORT_DIR, UPLOAD_DIR, ensure_dirs
@@ -430,7 +431,7 @@ class MainGoalReportFlow:
             self.app.client.download_file(file_id, dest)
         except Exception as exc:  # noqa: BLE001
             logger.exception("main_goal download failed")
-            self._reply(message, f"دانلود فایل از بله ناموفق بود: {exc}", kb.main_goal_bulk_menu())
+            self._reply(message, user_errors.error_fa("دانلود فایل از بله ناموفق بود", exc), kb.main_goal_bulk_menu())
             return True
         return self._on_bulk_file(message, user, p, dest, file_name)
 
@@ -491,7 +492,7 @@ class MainGoalReportFlow:
             out, act, kind_fa = self._bulk_store_excel(user, dest, file_name)
         except Exception as exc:  # noqa: BLE001
             logger.exception("main_goal bulk store failed")
-            self._reply(message, f"خطا در پردازش «{file_name}»: {exc}", kb.main_goal_bulk_menu())
+            self._reply(message, user_errors.error_fa(f"خطا در پردازش «{file_name}»", exc), kb.main_goal_bulk_menu())
             return True
         head = f"📄 «{file_name}»" + (f" → {kind_fa}" if kind_fa else "")
         return self._bulk_reply(message, p, head, out, act, user)
@@ -513,7 +514,7 @@ class MainGoalReportFlow:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("main_goal bulk photo failed")
-            self._reply(message, f"خطا در OCR عکس: {exc}", kb.main_goal_bulk_menu())
+            self._reply(message, user_errors.error_fa("خطا در OCR عکس", exc), kb.main_goal_bulk_menu())
             return True
         if out.tab_rejected:
             self._reply(message, "📸 " + (out.error_fa or mgocr.ALARM_UNKNOWN_FA), kb.main_goal_bulk_menu())
@@ -734,7 +735,7 @@ class MainGoalReportFlow:
             self._reply(message, result.summary + "\n\nگزارش PDF و اکسل ارسال شد.", kb.main_goal_menu())
         except Exception as exc:  # noqa: BLE001
             logger.exception("main_goal scenario export failed")
-            self._reply(message, result.summary + f"\n\nخطا در تولید PDF/اکسل: {exc}", kb.main_goal_menu())
+            self._reply(message, result.summary + "\n\n" + user_errors.error_fa("خطا در تولید PDF/اکسل", exc), kb.main_goal_menu())
         log_activity(self.db, user, f"report_{stem_prefix}")
         return True
 
@@ -842,7 +843,7 @@ class MainGoalReportFlow:
             self.app.client.download_file(file_id, dest)
         except Exception as exc:  # noqa: BLE001
             logger.exception("main_goal photo download failed")
-            self._reply(message, f"دانلود عکس ناموفق: {exc}", kb.main_goal_upload_menu())
+            self._reply(message, user_errors.error_fa("دانلود عکس ناموفق", exc), kb.main_goal_upload_menu())
             return True
         self._reply(message, "⏳ در حال OCR عکس تولید…", kb.main_goal_upload_menu())
         try:
@@ -852,7 +853,7 @@ class MainGoalReportFlow:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("main_goal OCR store failed")
-            self._reply(message, f"خطا در OCR/ذخیره: {exc}", kb.main_goal_menu())
+            self._reply(message, user_errors.error_fa("خطا در OCR/ذخیره", exc), kb.main_goal_menu())
             self.clear(uid)
             return True
         if out.tab_rejected:
@@ -917,7 +918,7 @@ class MainGoalReportFlow:
         try:
             self.app.client.download_file(file_id, dest)
         except Exception as exc:  # noqa: BLE001
-            self._reply(message, f"دانلود ناموفق: {exc}", kb.main_goal_upload_menu())
+            self._reply(message, user_errors.error_fa("دانلود ناموفق", exc), kb.main_goal_upload_menu())
             return True
         try:
             if p["await"] == "prod_xlsx":
@@ -954,7 +955,7 @@ class MainGoalReportFlow:
                     act = "main_goal_store_consumption"
         except Exception as exc:  # noqa: BLE001
             logger.exception("input store failed")
-            self._reply(message, f"خطا: {exc}", kb.main_goal_menu())
+            self._reply(message, user_errors.error_fa("خطا", exc), kb.main_goal_menu())
             self.clear(uid)
             return True
         self.clear(uid)
