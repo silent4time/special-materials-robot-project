@@ -582,6 +582,31 @@ def test_qa2_fixes(tmp: Path) -> None:
     print("  QA-2 fixes (forecast basis/settings nav/step back/upload nav/names/units/header) OK")
 
 
+def test_qa3_text(tmp: Path) -> None:
+    """Guide-prep pass 1405-07-19: no internal names in web pages, units in bot text."""
+    import re as _re
+
+    import pandas as pd
+
+    from services import n_tundish_report as ntr
+    from services.units import unit_fa
+
+    tpl = Path(__file__).resolve().parent.parent / "web" / "templates"
+    for p in tpl.glob("*.html"):
+        body = p.read_text(encoding="utf-8")
+        for bad in ("Database.", "site_stock_entries", "users.role", "analytics.", "services.", "screenshot"):
+            assert bad not in body, (p.name, bad)
+    assert "labels.get(c, c)" in (tpl / "settings_main_source.html").read_text(encoding="utf-8")
+    res = ntr.NTundishResult(section="bloom", n=2, reno_mode="with", report_date="1405/07/19")
+    res.rows = [{ntr.COL_ROW: 1, ntr.COL_CODE: "1473", ntr.COL_KEYWORD: "فلت", ntr.COL_SUPPLIER: "پیمانکار",
+                 ntr.COL_NEED: 300, ntr.COL_STOCK: 125, ntr.COL_SHORT: 175, ntr.COL_UNIT: "No"}]
+    res.highlight_rows = [0]
+    txt = res.bot_text()
+    assert "175 عدد" in txt and not _re.search(r"\bNo\b", txt), txt
+    assert unit_fa("Kg") == "کیلوگرم"
+    print("  qa3 web text + N-tundish/critical units OK")
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="smoke_p1_"))
     import config
@@ -594,6 +619,7 @@ def main() -> int:
         test_web(tmp)
         test_qa_fixes(tmp)
         test_qa2_fixes(tmp)
+        test_qa3_text(tmp)
         test_aliases_and_removed(tmp)
         test_nav(tmp)
         test_menu_walk(tmp)
