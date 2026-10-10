@@ -414,6 +414,22 @@ class HistoryModel:
     def n_months(self) -> int:
         return len(self.months)
 
+    @property
+    def tonnage_months(self) -> list[MonthRecord]:
+        return [m for m in self.months if month_has_tonnage(m)]
+
+    @property
+    def skipped_tonnage_months(self) -> list[MonthRecord]:
+        return [m for m in self.months if not month_has_tonnage(m)]
+
+    def tonnage_basis_line(self) -> str:
+        used = "، ".join(m.label for m in self.tonnage_months) or "—"
+        line = f"ماه‌های استفاده‌شده برای تناژ: {used}"
+        skipped = self.skipped_tonnage_months
+        if skipped:
+            line += " | کنار گذاشته (تناژ ثبت نشده): " + "، ".join(m.label for m in skipped)
+        return line
+
     def warnings(self) -> list[str]:
         out: list[str] = []
         gap = consecutive_month_gap_warning(self.months)
@@ -438,6 +454,10 @@ class HistoryModel:
         return None
 
 
+def month_has_tonnage(m: MonthRecord) -> bool:
+    return float(getattr(m.production, "total_tons", 0) or 0) > 0
+
+
 def build_history_model(months: list[MonthRecord], inventory: pd.DataFrame | None = None) -> HistoryModel:
     sections = {sec: SectionModel(section=sec) for sec in SECTIONS}
     mats: dict[str, dict[str, MaterialModel]] = {sec: {} for sec in SECTIONS}
@@ -452,24 +472,28 @@ def build_history_model(months: list[MonthRecord], inventory: pd.DataFrame | Non
     # pass 2: per-month accumulation (absent material in a parsed month = 0 consumption)
     for idx, m in enumerate(months):
         x = float(m.ordinal() if m.ordinal() is not None else idx)
+        # a month without entered tonnage (e.g. only a provisional furnace-tab row) must
+        # not enter the tonnage trend / average / tons-per-tundish as «0 تن»
+        has_tonnage = month_has_tonnage(m)
         for sec in SECTIONS:
             sm = sections[sec]
             tons = m.tons(sec)
             cons = m.consumptions.get(sec)
             tc = float(cons.tundish_count) if cons and cons.tundish_count else None
             mc = float(cons.melt_count) if cons and cons.melt_count else None
-            sm.months += 1
-            sm.tons_series.append(tons)
-            sm.tundish_series.append(tc)
-            sm.melt_series.append(mc)
-            sm.x_series.append(x)
-            sm.total_tons += tons
-            if tc and tc > 0:
-                sm.total_tundish += tc
-                sm.tons_with_tundish += tons
-                if mc and mc > 0:
-                    sm.total_melts += mc
-                    sm.tundish_with_melts += tc
+            if tc and tc > 0 and mc and mc > 0:
+                sm.total_melts += mc
+                sm.tundish_with_melts += tc
+            if has_tonnage:
+                sm.months += 1
+                sm.tons_series.append(tons)
+                sm.tundish_series.append(tc)
+                sm.melt_series.append(mc)
+                sm.x_series.append(x)
+                sm.total_tons += tons
+                if tc and tc > 0:
+                    sm.total_tundish += tc
+                    sm.tons_with_tundish += tons
             if not cons or not cons.materials:
                 continue  # file had no material rows → month excluded from material rates
             qty_by_key: dict[str, float] = {}
@@ -719,6 +743,8 @@ def _base_notes(model: HistoryModel) -> list[str]:
     labels = "، ".join(m.label for m in model.months) or "—"
     return [
         f"ماه‌های سابقه: {labels}",
+        model.tonnage_basis_line()
+        + " (ماه بدون تناژ در روند/میانگین تناژ و تن بر تاندیش لحاظ نمی‌شود؛ دادهٔ تاندیش آن برای نرخ بر تاندیش می‌ماند).",
         "نگاشت CCM: CCM1 و CCM2 → اسلب، CCM3 → بلوم، CCM4 و CCM5 → بیلت.",
         "تن بر تاندیش = Σ تناژ ÷ Σ تاندیش؛ نرخ بر تن = Σ مصرف ÷ Σ تناژ؛ نرخ بر تاندیش = Σ مصرف ÷ Σ تاندیش (روی همهٔ ماه‌ها).",
         "نیاز پیشنهادی = نرخ بر تن × تناژ (اگر نرخ بر تن نباشد: نرخ بر تاندیش × تاندیش لازم).",
@@ -904,6 +930,16 @@ def scenario_forecast(model: HistoryModel, months_ahead: int) -> ScenarioResult:
             ok=False, error_fa=f"تعداد ماه باید بین ۱ و {MAX_FORECAST_MONTHS} باشد.",
             kind="forecast", title="", subtitle="", sections=[], summary="",
         )
+    if not model.tonnage_months:
+        return ScenarioResult(
+            ok=False,
+            error_fa=(
+                "هیچ ماهی در سابقه تناژ ثبت‌شده ندارد؛ پیش‌بینی تناژ ممکن نیست.\n"
+                + model.tonnage_basis_line()
+                + "\nعکس تب ریخته‌گری (آمار تولید) را برای حداقل یک ماه ثبت کنید."
+            ),
+            kind="forecast", title="", subtitle="", sections=[], summary="",
+        )
     future = _future_months(model, n)
     month_rows = []
     tons_total = {s: 0.0 for s in SECTIONS}
@@ -984,7 +1020,7 @@ def scenario_forecast(model: HistoryModel, months_ahead: int) -> ScenarioResult:
         "تاندیش هر ماه = تناژ پیش‌بینی ÷ تن بر تاندیش تاریخی.",
     ] + warns
     sections.append(_notes_section(note_lines))
-    lines = [f"🔮 سناریو ۲ — پیش‌بینی {horizon_fa}", f"سابقه: {model.n_months} ماه"]
+    lines = [f"🔮 سناریو ۲ — پیش‌بینی {horizon_fa}", f"سابقه: {model.n_months} ماه", model.tonnage_basis_line()]
     for sec in SECTIONS:
         tun = tun_total[sec]
         lines.append(
