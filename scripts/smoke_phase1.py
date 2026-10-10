@@ -420,6 +420,92 @@ def test_web(tmp: Path) -> None:
     print("  web n-tundish + period + reports page OK")
 
 
+def test_qa_fixes(tmp: Path) -> None:
+    """Live-QA pass 1405-07-19: period report runs end-to-end, Persian prompts/labels."""
+    import re as _re
+
+    from bot import keyboards as kb
+    from bot.handlers import BotApp
+    from services import inbound_report as inbound_svc, main_goal_history as mgh
+
+    db = _db_copy(tmp)
+    owner = next(u for u in db.list_users() if u.get("role") == "owner" and u.get("active"))
+    uid = str(owner["bale_user_id"])
+    client = FakeClient()
+    app = BotApp(client, db)  # type: ignore[arg-type]
+
+    def send(text: str):
+        n = len(client.sent)
+        app.handle_message({"from": {"id": int(uid), "first_name": "x"}, "chat": {"id": int(uid)}, "text": text})
+        new = client.sent[n:]
+        return "\n".join(t for _c, t, _m in new), _btns(new[-1][2]) if new else []
+
+    # 1: period report — section step must produce files or a Persian «what is missing» message
+    for preset in (kb.BTN_MY_3, kb.BTN_MY_CURRENT):
+        send("/reset")
+        send(kb.BTN_ANALYTICS)
+        txt, btns = send(kb.BTN_PERIOD)
+        assert "Excel تاریخی" not in txt and kb.BTN_MY_3 in btns, txt
+        send(preset)
+        nd = len(client.docs)
+        txt, _ = send(kb.BTN_SEC_ALL)
+        assert "انجام نشد" not in txt and "کد پیگیری" not in txt, txt
+        assert len(client.docs) == nd + 2 or "دادهٔ موجود" in txt, txt
+    # 2: stock update prompt asks for the warehouse stock file (not منبع اصلی)
+    send("/reset")
+    send(kb.BTN_UPLOAD_MENU)
+    txt, btns = send(kb.BTN_WAREHOUSE_STOCK)
+    assert "موجودی انبار" in txt and "۱۸۰۰" in txt and "گزارش اقلام ورودی" in txt, txt
+    assert "مربوط به «منبع اصلی»" not in txt and kb.BTN_FILE_GUIDE in btns
+    send(kb.BTN_CANCEL)
+    # 3: stock-group settings — no env names
+    send("/reset")
+    send(kb.BTN_BOT_SETTINGS)
+    txt, _ = send(kb.BTN_SET_STOCK_GROUP)
+    txt2, _ = send(kb.BTN_SETTINGS_VIEW)
+    for t in (txt, txt2):
+        assert "env" not in t and "SITE_STOCK_REPORT_GROUP_ID" not in t and " DB" not in t, t
+    # 4/5: add-record prompt Persian label; add-category screen has nav row
+    send("/reset")
+    send(kb.BTN_UPLOAD_MENU)
+    send(kb.BTN_MAIN_SOURCE_FILE)
+    txt, _ = send(kb.BTN_INV_ADD_RECORD)
+    assert "(category_code)" not in txt and "کد دسته ۴ رقمی" in txt, txt
+    assert not _re.search(r"\([a-z_]+\)", txt), txt
+    send(kb.BTN_CANCEL)
+    txt, btns = send(kb.BTN_INV_ADD_CATEGORY)
+    assert kb.BTN_BACK in btns and kb.BTN_HOME in btns and "بازگشت به منوی اصلی" not in txt, (txt, btns)
+    send(kb.BTN_BACK)
+    # 7: category list caption separates items from empty codes
+    txt, _ = send(kb.BTN_INV_LIST_CATEGORIES)
+    assert "قلم" in txt, txt
+    # 6: inbound report — both dates labelled + Persian file names
+    rep = inbound_svc.latest_report(db)
+    if rep:
+        summ = inbound_svc.summary_text_fa(rep)
+        assert "تاریخ آپلود فعلی" in summ and ("تاریخ پایهٔ مقایسه" in summ or not rep.get("has_baseline")), summ
+        pdf, xlsx = inbound_svc.build_report_files(db, rep, out_dir=tmp / "inb")
+        assert pdf.name.startswith("گزارش_اقلام_ورودی_") and xlsx.suffix == ".xlsx", pdf.name
+    # 8: warehouse-return review keyboard has standard nav
+    btns = _btns(kb.warehouse_return_review_menu())
+    assert kb.BTN_BACK in btns and kb.BTN_HOME in btns, btns
+    # 9: never «— 0 تن» for a month without tonnage
+    hist = mgh.history_overview_text(mgh.load_history(db))
+    assert "— 0 تن" not in hist, hist
+    # 10: role-permission callbacks bypass the per-user heavy-job queue
+    app.bg.active[uid] = __import__("collections").deque()
+    try:
+        assert not app.bg.try_queue("", {})  # sanity
+        n = len(app.bg.active[uid])
+        app.handle_update({"update_id": 1, "callback_query": {
+            "id": "1", "data": kb.CB_ROLE_PERM_PREFIX + "manager|bogus", "from": {"id": int(uid)},
+            "message": {"message_id": 1, "chat": {"id": int(uid)}}}})
+        assert len(app.bg.active[uid]) == n, "role-perm toggle was queued behind a heavy job"
+    finally:
+        app.bg.active.pop(uid, None)
+    print("  QA fixes (period/stock prompt/env text/labels/nav/inbound/0 تن/perm queue) OK")
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="smoke_p1_"))
     import config
@@ -430,6 +516,7 @@ def main() -> int:
         test_services(tmp)
         test_bot_reports(tmp)
         test_web(tmp)
+        test_qa_fixes(tmp)
         test_aliases_and_removed(tmp)
         test_nav(tmp)
         test_menu_walk(tmp)
