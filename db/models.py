@@ -15,6 +15,7 @@ from config import (
     DEFAULT_CATEGORY_LABELS,
     ROLES,
     SITE_STOCK_GROUP_KEYS,
+    SITE_STOCK_GROUP_SQL,
     SURPLUS_CATEGORY_CODE,
     SURPLUS_CATEGORY_LABEL,
     ensure_dirs,
@@ -118,7 +119,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS catalog_group_assignments (
                     item_id TEXT NOT NULL PRIMARY KEY,
                     tundish_group TEXT NOT NULL
-                        CHECK(tundish_group IN ('slab','bloom','billet')),
+                        CHECK(tundish_group IN ({SITE_GROUP_SQL})),
                     assigned_by TEXT,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(item_id) REFERENCES catalog_items(id)
@@ -128,7 +129,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     bale_user_id TEXT NOT NULL,
                     tundish_group TEXT NOT NULL
-                        CHECK(tundish_group IN ('slab','bloom','billet')),
+                        CHECK(tundish_group IN ({SITE_GROUP_SQL})),
                     item_id TEXT NOT NULL,
                     item_name_snapshot TEXT NOT NULL,
                     quantity REAL NOT NULL,
@@ -514,10 +515,11 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_main_goal_seq_period
                     ON main_goal_tundish_sequences(period_key, section);
-                """
+                """.replace("{SITE_GROUP_SQL}", SITE_STOCK_GROUP_SQL)
             )
             self._migrate_users_role_check(conn)
             self._migrate_add_columns(conn)
+            self._migrate_site_group_check(conn)
             self._ensure_default_category_codes(conn)
             self._ensure_tundish_report_seed(conn)
 
@@ -591,6 +593,46 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_users_bale ON users(bale_user_id);
             """
         )
+
+    def _migrate_site_group_check(self, conn: sqlite3.Connection) -> None:
+        """Widen CHECK(tundish_group IN …) on site-stock tables to all SITE_STOCK_GROUPS
+        (adds the سطح ریخته‌گری groups). Rebuilds the table, keeping rows + indexes."""
+        import re as _re
+
+        want = f"CHECK(tundish_group IN ({SITE_STOCK_GROUP_SQL}))"
+        for table in ("catalog_group_assignments", "site_stock_entries"):
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            if not row or not row[0] or want in row[0]:
+                continue
+            sql = _re.sub(r"CHECK\(tundish_group IN \([^)]*\)\)", want, row[0], count=1)
+            sql = _re.sub(rf"CREATE TABLE\s+\"?{table}\"?", f"CREATE TABLE {table}__new", sql, count=1)
+            idx = [
+                r[0] for r in conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+                    (table,),
+                ).fetchall()
+            ]
+            cols = ", ".join(
+                f'"{r[1]}"' for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            )
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                conn.execute("BEGIN")
+                conn.execute(sql)
+                conn.execute(f"INSERT INTO {table}__new ({cols}) SELECT {cols} FROM {table}")
+                conn.execute(f"DROP TABLE {table}")
+                conn.execute(f"ALTER TABLE {table}__new RENAME TO {table}")
+                for isql in idx:
+                    conn.execute(isql)
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
 
     def _migrate_add_columns(self, conn: sqlite3.Connection) -> None:
         """Safe ALTER TABLE ADD COLUMN for older DBs."""

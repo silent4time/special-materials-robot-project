@@ -12,6 +12,9 @@ Row eligibility (never modifies منبع اصلی):
     surplus section);
   * section by «محل استفاده» (contains بیلت / بلوم / اسلب; «بلوم / بیلت» → both); a
     row with no section word falls back to its section rate columns (> 0);
+  * «سطح ریخته گری …» (casting floor, e.g. شرود 1581) is NOT a tundish item: it goes
+    to the separate groups «موجودی سطح ریخته‌گری اسلب/بلوم/بیلت» (cast_*), never
+    to the slab/bloom/billet lists (user, 1405-07-18);
   * the shared شرکت / پیمانکار rule of :mod:`analytics.section_rules` for codes with
     BOTH sides: billet = company rows, bloom = contractor rows, slab = contractor rows
     + company rows whose محل استفاده has «اسلب».
@@ -28,20 +31,28 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 import pandas as pd
 
-from config import SITE_STOCK_GROUP_KEYS, SITE_STOCK_GROUPS, SURPLUS_CATEGORY_CODE
+from config import (
+    SITE_STOCK_GROUP_KEYS,
+    SITE_STOCK_GROUPS,
+    SURPLUS_CATEGORY_CODE,
+)
 
 logger = logging.getLogger(__name__)
 
 SITE_LINE_PREFIX = "SS:"
 SITE_LINE_ASSIGNED_BY = "system:main_source_keyword"
 SIG_SETTING_KEY = "site_stock_lists_signature"
-SECTION_ORDER = ("slab", "bloom", "billet")
+TUNDISH_SECTIONS = ("slab", "bloom", "billet")
+# Tundish sections first, then the سطح ریخته‌گری (casting floor) groups.
+SECTION_ORDER = (*TUNDISH_SECTIONS, "cast_slab", "cast_bloom", "cast_billet")
 SECTION_TOKENS = {"slab": "اسلب", "bloom": "بلوم", "billet": "بیلت"}
+CASTING_FLOOR_TOKEN = "سطح ریخته گری"  # «محل استفاده» phrase (ZWNJ → space)
 SECTION_RATE_COLS = {
     "billet": ("billet_renovation", "billet_patching"),
     "bloom": ("bloom_renovation", "bloom_patching"),
@@ -123,6 +134,33 @@ def _keyword_series(df: pd.DataFrame) -> pd.Series:
     return pd.Series(out, index=df.index, dtype=object)
 
 
+def location_groups(location: object) -> list[str]:
+    """Daily-stock groups for one «محل استفاده» value.
+
+    Parts are split on «،» / «,» / «+». A part with «سطح ریخته گری» is a casting-floor
+    part → ``cast_<section>`` for every section word in it («سطح ریخته گری اسلب/بلوم»
+    → cast_slab + cast_bloom); it NEVER feeds the tundish list (شرود 1581 is a
+    casting-floor item, not a slab-tundish item). Other parts → tundish sections
+    by word («بلوم / بیلت» → bloom + billet, «بلوم/اسلب» → bloom + slab).
+    """
+    text = _txt(location).replace("\u200c", " ")
+    text = " ".join(text.split())
+    out: list[str] = []
+    for part in re.split(r"[،,+]", text):
+        part = part.strip()
+        if not part:
+            continue
+        secs = [g for g in TUNDISH_SECTIONS if SECTION_TOKENS[g] in part]
+        if CASTING_FLOOR_TOKEN in part:
+            groups = [f"cast_{g}" for g in (secs or ["slab"])]
+        else:
+            groups = secs
+        for g in groups:
+            if g not in out:
+                out.append(g)
+    return sorted(out, key=SECTION_ORDER.index)
+
+
 def build_site_stock_lists(df: pd.DataFrame | None) -> SiteStockLists:
     """Generate the three daily-stock input lists from a منبع اصلی frame (read-only)."""
     from analytics.section_rules import section_row_mask
@@ -141,7 +179,7 @@ def build_site_stock_lists(df: pd.DataFrame | None) -> SiteStockLists:
         else pd.Series(True, index=work.index)
     )
     eligible = live & (work["_code"] != SURPLUS_CATEGORY_CODE) & work["id"].map(lambda v: bool(_txt(v)))
-    masks = {g: section_row_mask(work, g) for g in SECTION_ORDER}
+    masks = {g: section_row_mask(work, g) for g in TUNDISH_SECTIONS}
     loc = work["usage_location"].map(_txt) if "usage_location" in work.columns else pd.Series("", index=work.index)
 
     groups: dict[str, dict[tuple[str, str], dict[str, Any]]] = {g: {} for g in SECTION_ORDER}
@@ -152,10 +190,10 @@ def build_site_stock_lists(df: pd.DataFrame | None) -> SiteStockLists:
         if not kw:
             kw = names.at[i] or iid
             res.fallbacks.append({"id": iid, "category_code": code, "name": kw})
-        sections = [g for g in SECTION_ORDER if SECTION_TOKENS[g] in loc.at[i]]
+        sections = location_groups(loc.at[i])
         if not sections:
             sections = [
-                g for g in SECTION_ORDER
+                g for g in TUNDISH_SECTIONS
                 if any(_num(work.at[i, c]) > 0 for c in SECTION_RATE_COLS[g] if c in work.columns)
             ]
             if sections:
@@ -164,8 +202,8 @@ def build_site_stock_lists(df: pd.DataFrame | None) -> SiteStockLists:
             res.unplaced.append({"id": iid, "category_code": code, "keyword": kw, "usage_location": loc.at[i]})
             continue
         for g in sections:
-            if not bool(masks[g].iat[i]):
-                continue  # شرکت/پیمانکار rule (codes with both sides)
+            if g in masks and not bool(masks[g].iat[i]):
+                continue  # شرکت/پیمانکار rule (codes with both sides; not casting floor)
             key = (code, kw)
             line = groups[g].get(key)
             if line is None:

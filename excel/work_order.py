@@ -5,7 +5,7 @@ from typing import Any, Iterable, Mapping
 
 import pandas as pd
 
-from config import SITE_STOCK_GROUP_KEYS, TUNDISH_TYPES
+from config import SITE_STOCK_TUNDISH_GROUP_KEYS as SITE_STOCK_GROUP_KEYS, TUNDISH_TYPES
 
 # Exact 10-digit plant codes (also tolerate Excel float trailing .0 after normalize).
 WORK_ORDER_TO_GROUP: dict[str, str] = {

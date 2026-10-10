@@ -85,6 +85,9 @@ BTN_SITE_STOCK = BTN_TANK  # «📥 موجودی روزانه سایت»
 BTN_SITE_SLAB = SITE_STOCK_GROUPS["slab"]  # موجودی مواد اسلب
 BTN_SITE_BLOOM = SITE_STOCK_GROUPS["bloom"]  # موجودی مواد بلوم
 BTN_SITE_BILLET = SITE_STOCK_GROUPS["billet"]  # موجودی مواد بیلت
+BTN_SITE_CAST_SLAB = SITE_STOCK_GROUPS["cast_slab"]  # موجودی سطح ریخته‌گری اسلب
+BTN_SITE_CAST_BLOOM = SITE_STOCK_GROUPS["cast_bloom"]
+BTN_SITE_CAST_BILLET = SITE_STOCK_GROUPS["cast_billet"]
 BTN_SITE_SKIP = "⏭ رد کردن این قلم"
 BTN_SITE_CANCEL = "✖️ انصراف از ورود موجودی"
 BTN_SITE_CONFIRM = "تأیید و ثبت"
@@ -200,6 +203,9 @@ SITE_GROUP_BUTTONS = {
     BTN_SITE_SLAB: "slab",
     BTN_SITE_BLOOM: "bloom",
     BTN_SITE_BILLET: "billet",
+    BTN_SITE_CAST_SLAB: "cast_slab",
+    BTN_SITE_CAST_BLOOM: "cast_bloom",
+    BTN_SITE_CAST_BILLET: "cast_billet",
 }
 
 # Reply/nav button labels that must NOT be parsed as quantities while awaiting site-stock entry
@@ -404,12 +410,14 @@ def inventory_edit_menu() -> dict:
 
 
 def site_stock_menu() -> dict:
-    """Submenu: three site-stock groups under موجودی روزانه سایت."""
+    """Submenu: three tundish groups + سطح ریخته‌گری groups under موجودی روزانه سایت."""
     return BaleClient.reply_keyboard(
         [
             [BTN_SITE_SLAB],
             [BTN_SITE_BLOOM],
             [BTN_SITE_BILLET],
+            [BTN_SITE_CAST_SLAB],
+            [BTN_SITE_CAST_BLOOM, BTN_SITE_CAST_BILLET],
             [BTN_BACK_PREV],  # «بازگشت به منوی قبل» → main_menu
         ]
     )

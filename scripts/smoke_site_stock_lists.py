@@ -2,7 +2,7 @@
 """Smoke: daily site-stock input lists generated from منبع اصلی (name = «کلید واژه»).
 
 Self-contained temp DB + synthetic منبع اصلی; never touches data/bot.db.
-Covers: section rule (usage + شرکت/پیمانکار for codes with both sides), priority 0
+Covers: سطح ریخته گری rows (e.g. شرود 1581) only in the separate cast_* groups, section rule (usage + شرکت/پیمانکار for codes with both sides), priority 0
 and 1800 excluded, nozzle codes one line per code in bloom + billet, merged-cell
 keyword forward-fill, empty-keyword fallback to شرح کالا, duplicate keyword → code
 suffix, bot + web show identical lists, saving works, lists follow source changes,
@@ -64,6 +64,11 @@ def source_frame() -> pd.DataFrame:
         _row("1275", CO + "30433T", "آجر کف دیگر", "آجر کف", "بیلت"),
         # no section word → section from rates
         _row("1590", CO + "59001A", "ماده بی‌محل", "ماده بی‌محل", "", slab_renovation=3),
+        # سطح ریخته گری (casting floor) → separate cast_* groups, never tundish lists
+        _row("1581", CO + "07741J", "LADLE SHROUD SOLAR", "شرود", "سطح ریخته گری اسلب"),
+        _row("1581", CO + "07742I", "LADLE SHROUD OCL", "شرود", "سطح ریخته‌گری اسلب", prio=2),
+        _row("1658", CT + "70021E", "جرم ریختنی 60", "بتن پلی 60", "سطح ریخته گری اسلب/بلوم"),
+        _row("1451", CO + "34102X", "RAYA GUN 80", "بتن 80 گان", "سطح ریخته گری بیلت"),
     ])
 
 
@@ -101,6 +106,15 @@ def main() -> int:
         assert [r["id"] for r in res.rate_fallback] == [CO + "59001A"] and not res.unplaced
         all_codes = {ln["category_code"] for g in res.lines.values() for ln in g}
         assert "1800" not in all_codes and "1605" not in all_codes
+        tundish_codes = {ln["category_code"] for g in ssl.TUNDISH_SECTIONS for ln in res.lines[g]}
+        assert not tundish_codes & {"1581", "1658", "1451"}, tundish_codes  # casting floor ≠ tundish
+        assert names["cast_slab"] == ["شرود", "بتن پلی 60"], names["cast_slab"]
+        assert names["cast_bloom"] == ["بتن پلی 60"] and names["cast_billet"] == ["بتن 80 گان"], names
+        shroud = res.lines["cast_slab"][0]
+        assert shroud["member_ids"] == [CO + "07741J", CO + "07742I"]  # ZWNJ variant too
+        assert ssl.location_groups("سطح ریخته گری اسلب/بلوم") == ["cast_slab", "cast_bloom"]
+        assert ssl.location_groups("بلوم / بیلت") == ["bloom", "billet"]
+        assert ssl.location_groups("اسلب، سطح ریخته گری اسلب") == ["slab", "cast_slab"]
         print("build OK", res.counts())
 
         # --- bot: «موجودی مواد بلوم» shows the generated list
@@ -128,6 +142,14 @@ def main() -> int:
 
         ik = kb.site_stock_inline_keyboard(pend["items"], {}, group_key="bloom")
         assert "نازل 16.5" in str(ik) and "SS:" not in str(ik)
+        # «موجودی سطح ریخته‌گری اسلب» button → cast_slab list (shroud there, not in slab)
+        assert kb.SITE_GROUP_BUTTONS[kb.BTN_SITE_CAST_SLAB] == "cast_slab"
+        menu_txt = {b["text"] for row in kb.site_stock_menu()["keyboard"] for b in row}
+        assert kb.BTN_SITE_CAST_SLAB in menu_txt and kb.BTN_SITE_CAST_BILLET in menu_txt
+        app.on_site_stock_group(msg, kb.SITE_GROUP_BUTTONS[kb.BTN_SITE_CAST_SLAB])
+        assert [it["name_desc"] for it in app._site_stock_pending["702"]["items"]] == ["شرود", "بتن پلی 60"]
+        app.on_site_stock_group(msg, "slab")
+        assert "شرود" not in [it["name_desc"] for it in app._site_stock_pending["702"]["items"]]
 
         # --- web: identical list + save
         from fastapi.testclient import TestClient
@@ -154,6 +176,14 @@ def main() -> int:
         assert ent and ent[0]["item_name_snapshot"] == "نازل 16.5" and float(ent[0]["quantity"]) == 12
         rows = db.site_stock_as_remaining_rows("2026-10-10")
         assert rows[0]["product_name"] == "نازل 16.5"
+        # web: casting-floor tab + save (CHECK accepts cast_* groups)
+        r = c.get("/stock", params={"group": "cast_slab"})
+        assert r.status_code == 200 and "شرود" in r.text and "موجودی سطح ریخته گری اسلب" in r.text
+        sh_id = next(it["id"] for it in ssl.items_for_group(db, "cast_slab") if it["name_desc"] == "شرود")
+        r = c.post("/stock/save", data={"group": "cast_slab", "entry_date": "2026-10-10", f"qty_{sh_id}": "7"})
+        assert r.status_code == 200 and "✅ 1 قلم" in r.text, r.text[-800:]
+        ent = db.list_site_stock_entries(entry_date="2026-10-10", tundish_group="cast_slab")
+        assert ent and ent[0]["item_name_snapshot"] == "شرود" and float(ent[0]["quantity"]) == 7
 
         # synthetic lines stay out of warehouse catalog listings
         assert not any(ssl.is_site_line_id(it["id"]) for it in db.list_catalog_items())
@@ -175,7 +205,31 @@ def main() -> int:
         sig = db.get_setting(ssl.SIG_SETTING_KEY)
         out = ssl.sync_site_stock_lists(db, ssl.build_site_stock_lists(load_primary_frame(db)))
         assert out["changed"] is False and db.get_setting(ssl.SIG_SETTING_KEY) == sig
-        print("bot + web lists identical, save, sync-follow, catalog isolation OK")
+        # old DB (CHECK only slab/bloom/billet) is migrated in place, rows kept
+        import sqlite3
+
+        old = tmp / "old.db"
+        con = sqlite3.connect(old)
+        con.executescript("""
+            CREATE TABLE catalog_items (id TEXT PRIMARY KEY, name_desc TEXT NOT NULL, category_code TEXT,
+                active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE catalog_group_assignments (item_id TEXT NOT NULL PRIMARY KEY,
+                tundish_group TEXT NOT NULL CHECK(tundish_group IN ('slab','bloom','billet')),
+                assigned_by TEXT, updated_at TEXT NOT NULL, FOREIGN KEY(item_id) REFERENCES catalog_items(id));
+            CREATE INDEX idx_catalog_assign_group ON catalog_group_assignments(tundish_group);
+            INSERT INTO catalog_items VALUES ('A1','a',NULL,1,'t','t');
+            INSERT INTO catalog_group_assignments VALUES ('A1','slab','x','t');
+        """)
+        con.close()
+        odb = Database(old)
+        odb.upsert_catalog_item("B1", "b")
+        odb.assign_item_to_group("B1", "cast_billet")
+        assert odb.get_item_assignment("A1")["tundish_group"] == "slab"
+        assert odb.get_item_assignment("B1")["tundish_group"] == "cast_billet"
+        with odb.connect() as cc:
+            assert cc.execute("SELECT 1 FROM sqlite_master WHERE name='idx_catalog_assign_group'").fetchone()
+        Database(old)  # idempotent
+        print("bot + web lists identical, casting-floor groups, save, sync-follow, catalog isolation, migration OK")
         print("SMOKE_SITE_STOCK_LISTS_OK")
         return 0
     finally:

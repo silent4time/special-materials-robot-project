@@ -12,6 +12,9 @@ TUNDISH_SHORT_FA = {
     "slab": "اسلب",
     "bloom": "بلوم",
     "billet": "بیلت",
+    "cast_slab": "سطح ریخته‌گری اسلب",
+    "cast_bloom": "سطح ریخته‌گری بلوم",
+    "cast_billet": "سطح ریخته‌گری بیلت",
 }
 
 # action_key → Persian phrase after «کاربر {name} با آیدی {id} »
