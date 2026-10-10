@@ -475,9 +475,9 @@ def list_reports(db: Database, limit: int = 20) -> list[dict[str, Any]]:
 # ── presentation (shared by bot + web) ──────────────────────────────────────
 def header_lines_fa(report: dict[str, Any]) -> list[str]:
     actor = report.get("actor_display_name") or "—"
-    lines = [f"آپلود موجودی انبار: {report.get('upload_label') or '—'} (ثبت‌کننده: {actor})"]
+    lines = [f"تاریخ آپلود فعلی موجودی انبار: {report.get('upload_label') or '—'} (ثبت‌کننده: {actor})"]
     if report.get("has_baseline"):
-        lines.append(f"پایه مقایسه (آپلود موجودی قبلی): {report.get('baseline_label') or '—'}")
+        lines.append(f"تاریخ پایهٔ مقایسه (آپلود موجودی قبلی): {report.get('baseline_label') or '—'}")
     else:
         lines.append("پایه مقایسه: ندارد — این آپلود اولین پایه است (ورودی محاسبه نمی‌شود).")
     lines.append(
@@ -504,7 +504,10 @@ def summary_text_fa(report: dict[str, Any], *, limit: int = 10) -> str:
             + (f"\n⛔ رد شده: {report.get('n_rejected', 0)} ردیف." if report.get("n_rejected") else "")
         )
     lines = [
-        f"{head} نسبت به آپلود موجودی {report.get('baseline_label') or '—'}:",
+        f"{head}",
+        f"• تاریخ آپلود فعلی: {report.get('upload_label') or '—'}",
+        f"• تاریخ پایهٔ مقایسه (آپلود قبلی): {report.get('baseline_label') or '—'}",
+        "نتیجه:",
         f"{report.get('n_inbound', 0)} قلم (افزایش {report.get('n_increase', 0)}، "
         f"شناسه جدید {report.get('n_new_id', 0)})"
         + (f"، ⛔ رد شده {report.get('n_rejected', 0)}" if report.get("n_rejected") else ""),
@@ -562,6 +565,27 @@ def letterhead_path(db: Database) -> Path | None:
     return path if path.is_file() else None
 
 
+def file_stem_fa(report: dict[str, Any]) -> str:
+    """«گزارش_اقلام_ورودی_1405-07-06» (Jalali date of the current upload)."""
+    from bot.jalali import format_date, format_datetime
+
+    raw = report.get("upload_created_at")
+    try:
+        label = format_datetime(raw)[:10] if raw else ""
+    except Exception:  # noqa: BLE001
+        label = format_date(raw) if raw else ""
+    label = (label or "").replace("/", "-").strip() or f"{int(report.get('id') or 0)}"
+    return f"گزارش_اقلام_ورودی_{label}"
+
+
+def caption_fa(report: dict[str, Any], *, excel: bool = False) -> str:
+    """File caption with both dates clearly labelled (same wording as the message)."""
+    base = f"{'نسخه اکسل — ' if excel else ''}{REPORT_TITLE}\nتاریخ آپلود فعلی: {report.get('upload_label') or '—'}"
+    if report.get("has_baseline"):
+        base += f"\nتاریخ پایهٔ مقایسه: {report.get('baseline_label') or '—'}"
+    return base
+
+
 def build_report_files(
     db: Database,
     report: dict[str, Any],
@@ -574,7 +598,10 @@ def build_report_files(
 
     out_dir = Path(out_dir or config.REPORT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"inbound_{int(report['id'])}"
+    stem = file_stem_fa(report)
+    # one sub-folder per stored report so the Persian names never collide
+    out_dir = out_dir / f"inbound_{int(report['id'])}"
+    out_dir.mkdir(parents=True, exist_ok=True)
     subtitle = "\n".join(header_lines_fa(report))
     sections = report_sections(report)
     pdf_path = generate_simple_report_pdf(

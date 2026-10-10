@@ -2959,10 +2959,9 @@ class BotApp:
             logger.exception("inbound report files failed")
             self._reply(message, user_errors.error_fa("خطا در تولید فایل گزارش اقلام ورودی", exc))
             return
-        label = report.get("upload_label") or ""
         for path, cap in (
-            (pdf_path, f"{inbound_svc.REPORT_TITLE} — {label}"),
-            (xlsx_path, f"نسخه اکسل — {inbound_svc.REPORT_TITLE} — {label}"),
+            (pdf_path, inbound_svc.caption_fa(report)),
+            (xlsx_path, inbound_svc.caption_fa(report, excel=True)),
         ):
             try:
                 self.client.send_document(self._chat_id(message), path, caption=cap)
