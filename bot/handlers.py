@@ -917,7 +917,7 @@ class BotApp:
             message,
             self._format_users_list(active_only=True)
             + "\n\nشناسه کاربر را بفرستید:",
-            kb.users_menu(),
+            kb.cancel_pending_menu(nav=True),
         )
 
     def on_users_delete_start(self, message: dict) -> None:
@@ -930,7 +930,7 @@ class BotApp:
             message,
             self._format_users_list(active_only=True)
             + "\n\nشناسه کاربری که باید حذف (غیرفعال) شود را بفرستید:",
-            kb.users_menu(),
+            kb.cancel_pending_menu(nav=True),
         )
 
     def _invite_message_text(self, role: str, scope: str | None = None) -> str:

@@ -238,7 +238,7 @@ def completeness_status_lines(
     elif site_day:
         lines.append(
             f"{marks[True]} {FILE_TYPES['tank_consumption']['label_fa']} "
-            f"(ورود تعاملی — {site_day})"
+            f"(ورود تعاملی — آخرین ثبت {_jalali_day(site_day)})"
         )
     else:
         lines.append(f"{marks[False]} {FILE_TYPES['tank_consumption']['label_fa']}")
@@ -282,3 +282,13 @@ def resolve_primary_inventory_path(
         if Path(path).is_file():
             return path
     return None
+
+
+def _jalali_day(value: object) -> str:
+    """«2026-09-27» → «1405/07/05» for user-facing status lines."""
+    try:
+        from bot.jalali import format_date
+
+        return format_date(value) or str(value)
+    except Exception:  # noqa: BLE001
+        return str(value)
