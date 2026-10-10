@@ -1064,6 +1064,17 @@ def history_overview_text(months: list[MonthRecord]) -> str:
         return "📚 هنوز ماهی ذخیره نشده است."
     lines = [f"📚 ماه‌های ذخیره‌شده ({len(months)}):"]
     for i, m in enumerate(months, 1):
-        lines.append(f"{i}) {m.label} — {m.production.total_tons:,.0f} تن — ثبت {m.jalali_date} ({m.actor})")
+        tons = float(m.production.total_tons or 0)
+        if tons > 0:
+            tons_txt = f"{tons:,.0f} تن"
+        else:
+            # never show «0 تن» for a month whose casting-tab tonnage was not entered
+            tons_txt = "تناژ ثبت نشده"
+            if any("تب کوره" in str(x) for x in (m.production.missing or [])):
+                tons_txt += " (فقط ردیف موقت تب کوره؛ عکس تب ریخته‌گری لازم است)"
+            if m.consumptions:
+                secs = "، ".join(mg.SECTION_LABEL_FA.get(s, s) for s in m.consumptions)
+                tons_txt += f" — دادهٔ تاندیش: {secs}"
+        lines.append(f"{i}) {m.label} — {tons_txt} — ثبت {m.jalali_date} ({m.actor})")
     lines.append(history_count_line(len(months), gap_warning=consecutive_month_gap_warning(months)))
     return "\n".join(lines)
