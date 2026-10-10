@@ -473,6 +473,50 @@ def list_reports(db: Database, limit: int = 20) -> list[dict[str, Any]]:
 
 
 # ── presentation (shared by bot + web) ──────────────────────────────────────
+def _fa_num(n: int) -> str:
+    return str(int(n))  # same Latin digits as the rest of the bot/report text
+
+
+def rejected_breakdown_fa(report: dict[str, Any]) -> list[str]:
+    """Why rows were set aside — one clear line per reason (bot, web, PDF)."""
+    rej = report.get("rejected") or []
+    out: list[str] = []
+    if rej:
+        no_code = [r for r in rej if "کد ۴ رقمی" in str(r.get("دلیل") or "")]
+        new_1800 = [r for r in rej if "1800" in str(r.get("دلیل") or "")]
+        other = len(rej) - len(no_code) - len(new_1800)
+
+        def pos(rows):
+            k = 0
+            for r in rows:
+                try:
+                    k += float(r.get("موجودی") or 0) > 0
+                except (TypeError, ValueError):
+                    pass
+            return k
+
+        if no_code:
+            codes = "، ".join(sorted({str(r.get("کد دسته")) for r in no_code}))
+            out.append(
+                f"⛔ {_fa_num(len(no_code))} ردیف با کد ۴ رقمی ناموجود در منبع اصلی (در زمان آپلود) کنار گذاشته شد"
+                f" ({_fa_num(pos(no_code))} ردیف با موجودی) — کدها: {codes}"
+            )
+        if new_1800:
+            out.append(
+                f"⛔ {_fa_num(len(new_1800))} ردیف جدید کد 1800 (مازاد) کنار گذاشته شد"
+                f" ({_fa_num(pos(new_1800))} ردیف با موجودی) — فقط با «افزودن رکورد» یا جایگزینی کامل منبع اصلی"
+            )
+        if other > 0:
+            out.append(f"⛔ {_fa_num(other)} ردیف دیگر کنار گذاشته شد (جزئیات در PDF/اکسل)")
+    elif report.get("n_rejected"):
+        out.append(f"⛔ {_fa_num(int(report.get('n_rejected') or 0))} ردیف کنار گذاشته شد (جزئیات در PDF/اکسل)")
+    if report.get("n_zero_new"):
+        out.append(f"ℹ️ {_fa_num(int(report['n_zero_new']))} شناسهٔ جدید با موجودی صفر فهرست نشد.")
+    if report.get("n_excluded_1800"):
+        out.append(f"ℹ️ {_fa_num(int(report['n_excluded_1800']))} ردیف کد 1800 موجود لحاظ نشد.")
+    return out
+
+
 def header_lines_fa(report: dict[str, Any]) -> list[str]:
     actor = report.get("actor_display_name") or "—"
     lines = [f"تاریخ آپلود فعلی موجودی انبار: {report.get('upload_label') or '—'} (ثبت‌کننده: {actor})"]
@@ -483,8 +527,8 @@ def header_lines_fa(report: dict[str, Any]) -> list[str]:
     lines.append(
         f"ورودی: {report.get('n_inbound', 0)} قلم "
         f"(افزایش {report.get('n_increase', 0)} + شناسه جدید {report.get('n_new_id', 0)})"
-        f" — رد شده ⛔ {report.get('n_rejected', 0)}"
     )
+    lines.extend(rejected_breakdown_fa(report))
     lines.append(
         "قاعده: کد 1800 لحاظ نمی‌شود؛ شناسه جدید با موجودی صفر فهرست نمی‌شود؛ "
         "تکرار یک شناسه در چند دستور کار یک مقدار حساب می‌شود."
@@ -501,7 +545,7 @@ def summary_text_fa(report: dict[str, Any], *, limit: int = 10) -> str:
         return (
             f"{head}: این آپلود به‌عنوان اولین پایه مقایسه ثبت شد؛ "
             "از آپلود موجودی بعدی ورودی‌ها گزارش می‌شوند."
-            + (f"\n⛔ رد شده: {report.get('n_rejected', 0)} ردیف." if report.get("n_rejected") else "")
+            + "".join("\n" + x for x in rejected_breakdown_fa(report))
         )
     lines = [
         f"{head}",
@@ -509,8 +553,7 @@ def summary_text_fa(report: dict[str, Any], *, limit: int = 10) -> str:
         f"• تاریخ پایهٔ مقایسه (آپلود قبلی): {report.get('baseline_label') or '—'}",
         "نتیجه:",
         f"{report.get('n_inbound', 0)} قلم (افزایش {report.get('n_increase', 0)}، "
-        f"شناسه جدید {report.get('n_new_id', 0)})"
-        + (f"، ⛔ رد شده {report.get('n_rejected', 0)}" if report.get("n_rejected") else ""),
+        f"شناسه جدید {report.get('n_new_id', 0)})",
     ]
     for r in (report.get("lines") or [])[:limit]:
         from services.units import unit_fa
@@ -524,7 +567,11 @@ def summary_text_fa(report: dict[str, Any], *, limit: int = 10) -> str:
     if extra > 0:
         lines.append(f"… و {extra} قلم دیگر (جزئیات در PDF/اکسل)")
     if not report.get("n_inbound"):
-        lines.append("قلم ورودی (افزایش موجودی یا شناسه جدید با موجودی) شناسایی نشد.")
+        lines.append(
+            "قلم ورودی شناسایی نشد: موجودی هیچ شناسهٔ موجودی نسبت به پایه افزایش نیافت و "
+            "شناسهٔ جدیدِ مجاز با موجودی بیشتر از صفر نبود."
+        )
+    lines.extend(rejected_breakdown_fa(report))
     return "\n".join(lines)
 
 

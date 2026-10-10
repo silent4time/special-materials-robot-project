@@ -83,6 +83,7 @@ async def reports_page(
     ctx.update(_critical_context(db, request))
     # t221u: «گزارش اقلام ورودی به انبار» — same stored reports as the bot
     ctx["inbound_latest"] = inbound_svc.latest_report(db)
+    ctx["inbound_notes"] = inbound_svc.rejected_breakdown_fa(ctx["inbound_latest"]) if ctx["inbound_latest"] else []
     ctx["inbound_history"] = inbound_svc.list_reports(db, limit=20)
     try:
         from services import period_consumption as _pc

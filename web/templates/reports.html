@@ -94,7 +94,8 @@
   {% set r = inbound_latest %}
   <p><strong>آخرین گزارش:</strong> آپلود {{ r.upload_label }}
     {% if r.has_baseline %}— پایه {{ r.baseline_label }}{% else %}— اولین پایه (بدون مقایسه){% endif %}
-    — ورودی {{ r.n_inbound }} قلم (افزایش {{ r.n_increase }}، شناسه جدید {{ r.n_new_id }})، ⛔ رد شده {{ r.n_rejected }}</p>
+    — ورودی {{ r.n_inbound }} قلم (افزایش {{ r.n_increase }}، شناسه جدید {{ r.n_new_id }})</p>
+  {% if inbound_notes %}<ul class="muted">{% for n in inbound_notes %}<li>{{ n }}</li>{% endfor %}</ul>{% endif %}
   <div class="report-actions">
     <a class="btn" href="/reports/inbound/{{ r.id }}.pdf">آخرین گزارش (PDF)</a>
     <a class="btn" href="/reports/inbound/{{ r.id }}.xlsx">آخرین گزارش (اکسل)</a>
@@ -113,7 +114,7 @@
   <p class="muted" style="margin-top:1rem">گزارش‌های قبلی (بر اساس تاریخ آپلود):</p>
   <ul class="muted">
     {% for h in inbound_history %}{% if h.id != r.id %}
-    <li>{{ h.upload_label }} — ورودی {{ h.n_inbound }} قلم، ⛔ {{ h.n_rejected }}
+    <li>{{ h.upload_label }} — ورودی {{ h.n_inbound }} قلم، کنار گذاشته {{ h.n_rejected }} ردیف
       — <a href="/reports/inbound/{{ h.id }}.pdf">PDF</a> | <a href="/reports/inbound/{{ h.id }}.xlsx">اکسل</a></li>
     {% endif %}{% endfor %}
   </ul>
