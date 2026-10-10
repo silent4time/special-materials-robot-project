@@ -565,10 +565,10 @@ def full_replace_confirm_menu() -> dict:
     return _kb([[BTN_FULL_REPLACE_CONFIRM], [BTN_CANCEL]], "flow", nav=False)
 
 
-def cancel_pending_menu(*, guide: bool = False, nav: bool = False) -> dict:
+def cancel_pending_menu(*, guide: bool = False, nav: bool = True) -> dict:
     """While waiting for a file / typed value: cancel (+ file guide when relevant).
 
-    ``nav=True`` adds the standard «⬅️ بازگشت / 🏠 منوی اصلی» row.
+    Always carries the standard «⬅️ بازگشت / 🏠 منوی اصلی» row (``nav=False`` to omit).
     """
     rows = [[BTN_CANCEL]]
     if guide:
@@ -672,7 +672,7 @@ def main_goal_partial_confirm_menu() -> dict:
 
 def main_goal_upload_menu() -> dict:
     """While waiting for one main-goal file (photo / Excel)."""
-    return _kb([[BTN_CANCEL, BTN_FILE_GUIDE]], "flow")
+    return _kb([[BTN_CANCEL, BTN_FILE_GUIDE], [BTN_HELP]], "flow")
 
 
 def main_goal_bulk_menu() -> dict:
