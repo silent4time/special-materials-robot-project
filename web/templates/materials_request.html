@@ -3,7 +3,7 @@
 {% block content %}
 <div class="card">
   <h1>درخواست مواد</h1>
-  <p class="muted">ثبت از طریق <code>Database.create_material_request</code> (همان مسیر ربات). دسترسی: مالک / مدیر / کاردان مسئول.</p>
+  <p class="muted">ثبت از همان مسیر «🛒 درخواست مواد» ربات (دادهٔ مشترک). دسترسی طبق «🔐 دسترسی نقش‌ها» (پیش‌فرض: مالک / مدیر / کاردان مسئول).</p>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
   <form method="post" action="/materials/request">

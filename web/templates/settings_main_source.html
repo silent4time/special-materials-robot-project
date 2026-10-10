@@ -5,7 +5,7 @@
   <h1>منبع اصلی</h1>
   <p class="muted">
     فقط شیت «ریز اطلاعات». ستون‌ها:
-    <code>{{ columns|join(', ') }}</code>
+    {% for c in columns %}{{ labels.get(c, c) }}{% if not loop.last %}، {% endif %}{% endfor %}
   </p>
   <p class="muted">
     محل استفاده همان عبارت فایل ذخیره می‌شود (بیلت، اسلب، بلوم / بیلت، بلوم،

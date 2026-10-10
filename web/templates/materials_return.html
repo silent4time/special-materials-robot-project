@@ -3,7 +3,7 @@
 {% block content %}
 <div class="card">
   <h1>برگشت به انبار</h1>
-  <p class="muted">ثبت از طریق <code>Database.create_warehouse_return</code> — همان ledger ربات.</p>
+  <p class="muted">ثبت از همان مسیر «↩️ برگشت به انبار» ربات — مقدار تأییدشده به منبع اصلی افزوده می‌شود.</p>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
   <form method="post" action="/materials/return">
