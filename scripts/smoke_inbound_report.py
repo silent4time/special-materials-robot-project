@@ -12,6 +12,8 @@ denied) and web (/reports latest + history + PDF/XLSX) show the same stored repo
 """
 from __future__ import annotations
 
+import _smoke_env  # noqa: F401,E402  — temp DB/reports/uploads before config import
+
 import io
 import shutil
 import sys

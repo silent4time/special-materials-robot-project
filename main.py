@@ -19,22 +19,35 @@ from db.models import Database
 from services import mandatory_reminders
 
 REMINDER_TICK_SECONDS = 60
+HOUSEKEEPING_SECONDS = 24 * 3600
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
 from log_redact import install_log_redaction  # noqa: E402
 
 install_log_redaction()  # httpx/httpcore → WARNING; token never reaches the log
 logger = logging.getLogger("bale-materials-bot")
 
 
+_TRANSIENT_MARKS = ("timed out", "timeout", "temporarily", "connection reset", "502", "503", "504", "remote protocol")
+
+
+def _is_transient(exc: BaleAPIError) -> bool:
+    text = str(getattr(exc, "description", "") or exc).lower()
+    return any(m in text for m in _TRANSIENT_MARKS)
+
+
 def main() -> int:
+    from services.housekeeping import setup_logging
+
+    # single bot log: data/bot.log, rotating 5×2 MB (stdout file only gets crash output)
+    setup_logging("bot")
+    install_log_redaction()
     if not BALE_BOT_TOKEN:
         logger.error("BALE_BOT_TOKEN در فایل .env تنظیم نشده است.")
         return 1
     ensure_dirs()
+    from services import housekeeping
+
+    housekeeping.run_all()
     db = Database()
     if ADMIN_BALE_USER_ID:
         db.bootstrap_admin(ADMIN_BALE_USER_ID)
@@ -75,6 +88,7 @@ def main() -> int:
 
         logger.info("Polling started…")
         last_reminder_tick = 0.0
+        last_housekeeping = time.monotonic()
         while True:
             try:
                 updates = client.get_updates()
@@ -84,9 +98,17 @@ def main() -> int:
                 if time.monotonic() - last_reminder_tick >= REMINDER_TICK_SECONDS:
                     last_reminder_tick = time.monotonic()
                     mandatory_reminders.tick(client, db)
+                if time.monotonic() - last_housekeeping >= HOUSEKEEPING_SECONDS:
+                    last_housekeeping = time.monotonic()
+                    housekeeping.run_all()
             except BaleAPIError as exc:
-                logger.error("API error: %s", exc)
-                time.sleep(3)
+                if exc.method == "getUpdates" and _is_transient(exc):
+                    # long-poll read timeouts / brief network blips are normal
+                    logger.warning("getUpdates transient: %s", exc.description)
+                    time.sleep(1)
+                else:
+                    logger.error("API error: %s", exc)
+                    time.sleep(3)
             except KeyboardInterrupt:
                 logger.info("Stopped by user")
                 break

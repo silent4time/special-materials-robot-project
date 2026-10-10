@@ -2,6 +2,8 @@
 """Smoke: Bale token never reaches logs (httpx quiet + redaction filter), bot + web."""
 from __future__ import annotations
 
+import _smoke_env  # noqa: F401,E402  — temp DB/reports/uploads before config import
+
 import io
 import logging
 import sys

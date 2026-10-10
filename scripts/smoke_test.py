@@ -2,6 +2,8 @@
 """Offline smoke test: RBAC + warehouse inventory extract + site stock + surplus + PDF."""
 from __future__ import annotations
 
+import _smoke_env  # noqa: F401,E402  — temp DB/reports/uploads before config import
+
 import sys
 from datetime import date
 from pathlib import Path
@@ -96,7 +98,7 @@ def _write_wide_inventory(path: Path) -> None:
 
 def _test_first_owner_claim() -> None:
     """Empty DB: first bare claim wins owner; second user cannot claim."""
-    claim_db_path = ROOT / "data" / "smoke_first_owner.db"
+    claim_db_path = _smoke_env.SMOKE_TMP / "smoke_first_owner.db"
     if claim_db_path.exists():
         claim_db_path.unlink()
     cdb = Database(claim_db_path)
@@ -232,8 +234,8 @@ def _test_merge_and_monthly_summary() -> None:
         assert int(totals["bloom"]["count"]) == 1
         assert int(totals["billet"]["count"]) == 22
         assert int(totals["slab"]["count"]) + int(totals["bloom"]["count"]) + int(totals["billet"]["count"]) == int(data.items["شرح"].nunique())
-        excel_out = ROOT / "reports" / "smoke_monthly_summary.xlsx"
-        pdf_out = ROOT / "reports" / "smoke_monthly_summary.pdf"
+        excel_out = _smoke_env.SMOKE_TMP / "reports" / "smoke_monthly_summary.xlsx"
+        pdf_out = _smoke_env.SMOKE_TMP / "reports" / "smoke_monthly_summary.pdf"
         data2, written = build_monthly_summary(sample, excel_out=excel_out)
         assert written.exists()
         # Excel must contain the WO section title near the end
@@ -411,10 +413,10 @@ def _test_inbound_delta() -> None:
     assert (first["وضعیت"] == STATUS_NEW).all()
     chunks = format_inbound_list_fa(inbound)
     assert chunks and "A1" in chunks[0]
-    out = ROOT / "reports" / "smoke_inbound.xlsx"
+    out = _smoke_env.SMOKE_TMP / "reports" / "smoke_inbound.xlsx"
     write_inbound_excel(inbound, out)
     assert out.exists() and out.stat().st_size > 100
-    pdf_in = ROOT / "reports" / "smoke_inbound.pdf"
+    pdf_in = _smoke_env.SMOKE_TMP / "reports" / "smoke_inbound.pdf"
     generate_simple_report_pdf(
         "گزارش ورودی به انبار",
         subtitle="smoke",
@@ -428,12 +430,12 @@ def _test_inbound_delta() -> None:
     # letterhead stamp
     from reportlab.pdfgen import canvas as _canvas
     from reportlab.lib.pagesizes import A4, landscape as _landscape
-    lh = ROOT / "reports" / "smoke_letterhead.pdf"
+    lh = _smoke_env.SMOKE_TMP / "reports" / "smoke_letterhead.pdf"
     c = _canvas.Canvas(str(lh), pagesize=_landscape(A4))
     c.drawString(50, 50, "LH")
     c.showPage()
     c.save()
-    stamped = apply_letterhead(pdf_in, lh, output_path=ROOT / "reports" / "smoke_inbound_lh.pdf")
+    stamped = apply_letterhead(pdf_in, lh, output_path=_smoke_env.SMOKE_TMP / "reports" / "smoke_inbound_lh.pdf")
     assert stamped.exists() and stamped.stat().st_size > pdf_in.stat().st_size - 1000
     print("inbound_delta OK", list(inbound["کد کالا"]), "pdf+letterhead OK")
 
@@ -446,7 +448,7 @@ def _test_user_activity_log() -> None:
     from bot.jalali import format_datetime
     from pdf.generator import generate_simple_report_pdf
 
-    db_path = ROOT / "data" / "smoke_activity.db"
+    db_path = _smoke_env.SMOKE_TMP / "smoke_activity.db"
     if db_path.exists():
         db_path.unlink()
     db = Database(db_path)
@@ -521,7 +523,7 @@ def _test_user_activity_log() -> None:
         {"زمان": format_datetime(r["created_at"]), "فعالیت": r["message_fa"]}
         for r in rows
     ]
-    out = ROOT / "reports" / "smoke_user_activity.pdf"
+    out = _smoke_env.SMOKE_TMP / "reports" / "smoke_user_activity.pdf"
     generate_simple_report_pdf(
         "گزارش فعالیت کاربران",
         subtitle="smoke",
@@ -545,7 +547,7 @@ def _test_simple_report_xlsx() -> None:
     from openpyxl import load_workbook
     from excel.simple_report import generate_simple_report_xlsx
 
-    out = ROOT / "reports" / "smoke_simple_report.xlsx"
+    out = _smoke_env.SMOKE_TMP / "reports" / "smoke_simple_report.xlsx"
     if out.exists():
         out.unlink()
     path = generate_simple_report_xlsx(
@@ -864,7 +866,7 @@ def main() -> int:
     _test_user_activity_log()
     _test_first_owner_claim()
     _test_install_help_soft_seed()
-    db_path = ROOT / "data" / "smoke.db"
+    db_path = _smoke_env.SMOKE_TMP / "smoke.db"
     if db_path.exists():
         db_path.unlink()
     db = Database(db_path)
@@ -1103,7 +1105,7 @@ def main() -> int:
         sample_inv_raw,
         "product_inventory",
         category_allowlist=db.active_category_code_set(),
-        clean_dir=ROOT / "uploads" / "_smoke_extract" / "samples_clean",
+        clean_dir=_smoke_env.SMOKE_TMP / "uploads" / "_smoke_extract" / "samples_clean",
     )
     assert sample_clean.kept_row_count == 5
     assert all(c in sample_clean.columns for c in ("id", "priority", "category_code", "keyword", "product_name"))
@@ -1160,7 +1162,7 @@ def main() -> int:
             "suggest": sug,
             "surplus": surplus,
         }
-        out = ROOT / "reports" / f"smoke_{label}.pdf"
+        out = _smoke_env.SMOKE_TMP / "reports" / f"smoke_{label}.pdf"
         generate_report(frames, metas, user, out, analytics=analytics)
         visible = {k: metas[k]["visible_rows"] for k in metas}
         print(label, "visible", visible, "crit", len(crit), "surplus", len(surplus), "->", out)
@@ -1211,7 +1213,7 @@ def main() -> int:
     assert "روغن صنعتی" in surplus_names
 
     # --- extract pipeline: allowlist filter + id + priority ---
-    wide_dir = ROOT / "uploads" / "_smoke_extract" / "1"
+    wide_dir = _smoke_env.SMOKE_TMP / "uploads" / "_smoke_extract" / "1"
     wide_path = wide_dir / "product_inventory.xlsx"
     _write_wide_inventory(wide_path)
 
@@ -1323,7 +1325,7 @@ def main() -> int:
     inv_rows = inventory_table_rows(clean_df)
     assert inv_rows and inv_rows[0]["کد دسته"] == "1201"
     assert any(r["شرح کالا"].startswith("ACID01") for r in inv_rows)
-    pdf_cat = ROOT / "reports" / "smoke_category_inventory.pdf"
+    pdf_cat = _smoke_env.SMOKE_TMP / "reports" / "smoke_category_inventory.pdf"
     generate_simple_report_pdf(
         "لیست کد دسته‌بندی و موجودی",
         subtitle="smoke",
@@ -1345,7 +1347,7 @@ def main() -> int:
         }
         for i, r in enumerate(inv_rows, 1)
     ]
-    pdf_catalog = ROOT / "reports" / "smoke_catalog_list.pdf"
+    pdf_catalog = _smoke_env.SMOKE_TMP / "reports" / "smoke_catalog_list.pdf"
     generate_simple_report_pdf(
         "لیست اقلام و تخصیص‌ها",
         subtitle="smoke",

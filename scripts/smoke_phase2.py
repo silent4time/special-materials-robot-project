@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import _smoke_env  # noqa: F401,E402  — temp DB/reports/uploads before config import
+
 import os
 import shutil
 import sys

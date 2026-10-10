@@ -12,6 +12,8 @@ Runs on a temp copy of data/bot.db (never the live DB) + a fresh temp DB.
 """
 from __future__ import annotations
 
+import _smoke_env  # noqa: F401,E402  — temp DB/reports/uploads before config import
+
 import logging
 import shutil
 import sys

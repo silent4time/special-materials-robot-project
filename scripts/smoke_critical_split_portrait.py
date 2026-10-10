@@ -8,6 +8,8 @@ Page-1 PNGs are written to reports/smoke_portrait/ for visual checks.
 """
 from __future__ import annotations
 
+import _smoke_env  # noqa: F401,E402  — temp DB/reports/uploads before config import
+
 import shutil
 import subprocess
 import sys
@@ -20,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 import pandas as pd  # noqa: E402
 
-PNG_DIR = ROOT / "reports" / "smoke_portrait"
+PNG_DIR = _smoke_env.SMOKE_TMP / "reports" / "smoke_portrait"
 
 COMPANY_ID = "378112341302R"
 CONTRACTOR_ID = "378700009002G"

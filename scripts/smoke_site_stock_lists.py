@@ -11,6 +11,8 @@ synthetic lines stay out of the warehouse catalog, منبع اصلی is not modi
 """
 from __future__ import annotations
 
+import _smoke_env  # noqa: F401,E402  — temp DB/reports/uploads before config import
+
 import hashlib
 import shutil
 import sys

@@ -2,6 +2,8 @@
 """Offline smoke: گزارش تاندیش بعد از ریخته‌گری — parser, DB, bot flow, settings CRUD, web."""
 from __future__ import annotations
 
+import _smoke_env  # noqa: F401,E402  — temp DB/reports/uploads before config import
+
 import sys
 import tempfile
 from pathlib import Path

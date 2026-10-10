@@ -2,6 +2,8 @@
 """Offline smoke: گزارش هدف اصلی — period detect, parse, compute, PDF/xlsx, DB."""
 from __future__ import annotations
 
+import _smoke_env  # noqa: F401,E402  — temp DB/reports/uploads before config import
+
 import sys
 import tempfile
 from pathlib import Path

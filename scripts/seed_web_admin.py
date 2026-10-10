@@ -31,7 +31,7 @@ def main() -> int:
     parser.add_argument("--password", default=WEB_ADMIN_PASSWORD or "")
     parser.add_argument(
         "--write-file",
-        default=str(ROOT / "data" / "web_admin_credentials.txt"),
+        default=str(ROOT / "data" / "backups" / "web_admin_credentials.txt"),
         help="Write username/password here (mode 600); do not commit",
     )
     parser.add_argument("--force", action="store_true", help="Overwrite existing owner web login")

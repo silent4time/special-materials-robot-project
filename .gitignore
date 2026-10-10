@@ -27,3 +27,6 @@ data/web_admin_credentials.txt
 
 data/web.pid
 data/web.log
+
+# phase 3: DB backups + archived credentials (never commit)
+data/backups/

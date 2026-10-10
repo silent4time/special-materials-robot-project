@@ -7,6 +7,8 @@ missing files are reported and skipped. Every furnace image MUST be rejected wit
 """
 from __future__ import annotations
 
+import _smoke_env  # noqa: F401,E402  — temp DB/reports/uploads before config import
+
 import os
 import sys
 import tempfile

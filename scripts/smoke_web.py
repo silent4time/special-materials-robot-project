@@ -2,6 +2,8 @@
 """Smoke: import web app, hit routes with TestClient (no BALE token)."""
 from __future__ import annotations
 
+import _smoke_env  # noqa: F401,E402  — temp DB/reports/uploads before config import
+
 import sys
 from pathlib import Path
 
