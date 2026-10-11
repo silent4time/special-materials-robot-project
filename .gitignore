@@ -30,3 +30,4 @@ data/web.log
 
 # phase 3: DB backups + archived credentials (never commit)
 data/backups/
+docs/guide_src/private_names.txt
