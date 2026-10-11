@@ -538,7 +538,7 @@ def test_qa2_fixes(tmp: Path) -> None:
         tot = sum(float(r["تناژ_پیش‌بینی_کل"]) for r in res.sections[0]["rows"][:-1])
         assert tot > 0, res.summary
         if model.skipped_tonnage_months:
-            assert "کنار گذاشته (تناژ ثبت نشده)" in res.summary
+            assert "کنار گذاشته (تناژ ریخته‌گری ثبت نشده)" in res.summary and "ماه با تناژ ریخته‌گری)" in res.summary
         assert mgh.file_stem_fa(res).startswith("هدف_اصلی_سناریو_۲_پیش‌بینی_۳_ماه")
     # BUG 2: user activity report keeps the ⚙️ تنظیمات keyboard
     send("/reset")

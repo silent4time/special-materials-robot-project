@@ -422,12 +422,17 @@ class HistoryModel:
     def skipped_tonnage_months(self) -> list[MonthRecord]:
         return [m for m in self.months if not month_has_tonnage(m)]
 
+    def history_label(self) -> str:
+        """«سابقه: 3 ماه (2 ماه با تناژ ریخته‌گری)» — never implies all months gave tonnage."""
+        n, t = self.n_months, len(self.tonnage_months)
+        return f"سابقه: {n} ماه" + (f" ({t} ماه با تناژ ریخته‌گری)" if t != n else "")
+
     def tonnage_basis_line(self) -> str:
         used = "، ".join(m.label for m in self.tonnage_months) or "—"
         line = f"ماه‌های استفاده‌شده برای تناژ: {used}"
         skipped = self.skipped_tonnage_months
         if skipped:
-            line += " | کنار گذاشته (تناژ ثبت نشده): " + "، ".join(m.label for m in skipped)
+            line += " | کنار گذاشته (تناژ ریخته‌گری ثبت نشده): " + "، ".join(m.label for m in skipped)
         return line
 
     def warnings(self) -> list[str]:
@@ -876,7 +881,7 @@ def scenario_target(
     note_lines += warns
     sections.append(_notes_section(note_lines))
 
-    lines = [f"🎯 سناریو ۱ — تناژ هدف ({period_label})", f"سابقه: {model.n_months} ماه"]
+    lines = [f"🎯 سناریو ۱ — تناژ هدف ({period_label})", model.history_label()]
     for sec in SECTIONS:
         if sec in tons_by_sec:
             tun = tundish_by_sec.get(sec)
@@ -893,7 +898,7 @@ def scenario_target(
         error_fa=None,
         kind="target",
         title=f"{mg.TITLE_FA} — سناریو تناژ هدف",
-        subtitle=f"بازه: {period_label} | سابقه: {model.n_months} ماه",
+        subtitle=f"بازه: {period_label} | {model.history_label()}",
         sections=sections,
         summary="\n".join(lines),
         warnings=warns,
@@ -1038,7 +1043,7 @@ def scenario_forecast(model: HistoryModel, months_ahead: int) -> ScenarioResult:
         "تاندیش هر ماه = تناژ پیش‌بینی ÷ تن بر تاندیش تاریخی.",
     ] + warns
     sections.append(_notes_section(note_lines))
-    lines = [f"🔮 سناریو ۲ — پیش‌بینی {horizon_fa}", f"سابقه: {model.n_months} ماه", model.tonnage_basis_line()]
+    lines = [f"🔮 سناریو ۲ — پیش‌بینی {horizon_fa}", model.history_label(), model.tonnage_basis_line()]
     for sec in SECTIONS:
         tun = tun_total[sec]
         lines.append(
@@ -1051,7 +1056,7 @@ def scenario_forecast(model: HistoryModel, months_ahead: int) -> ScenarioResult:
         error_fa=None,
         kind="forecast",
         title=f"{mg.TITLE_FA} — پیش‌بینی {n} ماه آینده",
-        subtitle=f"{horizon_fa} | سابقه: {model.n_months} ماه",
+        subtitle=f"{horizon_fa} | {model.history_label()}",
         sections=sections,
         summary="\n".join(lines),
         warnings=warns,
