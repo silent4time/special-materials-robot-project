@@ -91,6 +91,25 @@ def main() -> int:
     cfg = dict(rem.load_config(db), enabled=False)
     st = rem.compute_status(db, cfg)
     assert rem.status_label_fa(st, cfg).startswith("⏸ غیرفعال")
+    # QA5: one provisional wording; history label counts tonnage months
+    from services import main_goal_persist as mgp
+    assert mgp.provisional_text_fa(150310.8).startswith("موقت از تب کوره: 150,311 تن — تناژ ریخته‌گری ثبت نشده")
+    assert mgp.section_not_produced({"total_tons": 10, "bloom_tons": 0, "report_tab": "casting"}, "bloom")
+    assert not mgp.section_not_produced({"total_tons": 10, "bloom_tons": 0, "report_tab": "furnace"}, "bloom")
+    # web home: tiles for reminders + user activity (permission-driven)
+    import web.deps as deps
+    from fastapi.testclient import TestClient
+    from web.app import create_app
+    from web.auth_web import set_credential
+    set_credential(db, bale_user_id="9901", username="own9901", password="pw9901x")
+    deps._db = db
+    wapp = create_app()
+    wapp.dependency_overrides[deps.get_db] = lambda: db
+    wc = TestClient(wapp)
+    assert wc.post("/login", data={"username": "own9901", "password": "pw9901x"}, follow_redirects=False).status_code == 303
+    home = wc.get("/home").text
+    grid = home[home.index('class="grid-links"'):]
+    assert 'href="/settings/reminders"' in grid and 'href="/reports/user-activity"' in grid
     print("SMOKE_BOT_NAV_QA4_OK")
     return 0
 

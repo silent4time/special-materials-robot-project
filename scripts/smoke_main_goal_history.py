@@ -207,13 +207,19 @@ def test_reminders(tmp: Path) -> None:
     assert "تیر 1405" in client.sent[0][1]
     # same day → no repeat
     assert rem.tick(client, db, now=now) is None
-    # mark tir+mordad present → only shahrivar missing, before lead window → upcoming
-    with db.connect() as conn:
-        for k in ("m:1405-04", "m:1405-05"):
-            conn.execute(
-                "INSERT INTO main_goal_months (period_key, period_label, sort_key, files_json, stats_json, bale_user_id, created_at, updated_at, created_at_tehran, jalali_date) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (k, k, k[2:], "{}", "{}", "1", "x", "x", "x", "x"),
-            )
+    # mark tir+mordad present (normalized production + tundish rows — the same source
+    # as the main-goal status table) → only shahrivar missing → upcoming
+    for mo in (4, 5):
+        k = f"m:1405-{mo:02d}"
+        base = dict(period_key=k, period_label=k, year=1405, month=mo, sort_key=k[2:], bale_user_id="1",
+                    created_at_tehran="x", jalali_date="x", source="smoke")
+        db.upsert_main_goal_production(**base, slab_tons=100, bloom_tons=0 if mo == 5 else 10,
+                                       billet_tons=50, total_tons=150 if mo == 5 else 160, report_tab="casting",
+                                       source_type="manual")
+        for sec in (("slab", "billet") if mo == 5 else ("slab", "bloom", "billet")):
+            db.upsert_main_goal_consumption(**base, section=sec, tundish_count=5)
+    # mordad: bloom cast 0 t → no bloom file needed; legacy main_goal_months not consulted
+    assert [r["complete"] for r in __import__("services.main_goal_persist", fromlist=["x"]).month_completeness(db)] == [True, True]
     st = rem.compute_status(db, rem.load_config(db), today=today)
     assert st.phase == "upcoming", st.phase
     st = rem.compute_status(db, rem.load_config(db), today=jdatetime.date(1405, 7, 18))
