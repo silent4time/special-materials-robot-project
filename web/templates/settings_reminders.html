@@ -15,6 +15,8 @@
     ماه‌های الزامی:
     {% for r in required %}{{ r.label }} {{ "✅" if r.ok else "❌" }}{% if not loop.last %}، {% endif %}{% endfor %}
   </p>
+  {% set incomplete = required|rejectattr("ok")|list %}
+  {% if incomplete %}<ul class="muted">{% for r in incomplete %}<li>{{ r.label }}: {{ r.parts|join("، ") }}</li>{% endfor %}</ul>{% endif %}
   {% if last_result %}
   <p class="muted">آخرین ارسال: <bdi>{{ last_result.at_fa or (last_result.at|jdt) }}</bdi> — موفق {{ last_result.sent }}، ناموفق {{ (last_result.failed or [])|length }}{% if last_result.forced %} (دستی){% endif %}</p>
   {% endif %}

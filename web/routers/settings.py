@@ -305,7 +305,8 @@ def _reminder_context(
         "recipients": rem.resolve_recipients(db, cfg),
         "status": status,
         "required": [
-            {"label": format_month_year(y, m), "ok": ok} for y, m, ok in status.required
+            {"label": format_month_year(y, m), "ok": ok, "parts": [] if ok else status.parts_for(y, m)}
+            for y, m, ok in status.required
         ],
         "preview": rem.build_reminder_text(status),
         "field_labels": rem.FIELD_LABELS_FA,

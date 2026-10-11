@@ -177,6 +177,10 @@ class ReminderStatus:
     days_to_due: int
     phase: str  # ok | upcoming | due_soon | overdue
     missing: list[tuple[int, int]] = field(default_factory=list)
+    missing_parts: dict[str, list[str]] = field(default_factory=dict)  # period_key → parts
+
+    def parts_for(self, y: int, m: int) -> list[str]:
+        return self.missing_parts.get(month_key(y, m)) or ["هیچ ورودی ثبت نشده"]
 
     @property
     def missing_labels(self) -> list[str]:
@@ -201,7 +205,17 @@ def status_label_fa(status: "ReminderStatus", cfg: dict[str, Any]) -> str:
 
 def compute_status(db: Any, cfg: dict[str, Any], *, today: jdatetime.date | None = None) -> ReminderStatus:
     today = today or jdatetime.date.fromgregorian(date=tehran_now().date())
-    present_keys = set(db.main_goal_month_keys())
+    # same source as the main-goal status table: normalized production + tundish rows
+    try:
+        from services import main_goal_persist as mgp
+
+        rows = mgp.month_completeness(db)
+        present_keys = {r["period_key"] for r in rows if r["complete"]}
+        missing_parts = {r["period_key"]: list(r["missing"]) for r in rows}
+    except Exception:  # noqa: BLE001 - legacy DB without normalized tables
+        logger.exception("reminder completeness from normalized tables failed")
+        present_keys = set(db.main_goal_month_keys())
+        missing_parts = {}
     window = int(cfg.get("window_months") or DEFAULTS["window_months"])
     required: list[tuple[int, int, bool]] = []
     for k in range(window, 0, -1):
@@ -232,6 +246,7 @@ def compute_status(db: Any, cfg: dict[str, Any], *, today: jdatetime.date | None
         days_to_due=days_to_due,
         phase=phase,
         missing=missing,
+        missing_parts=missing_parts,
     )
 
 
@@ -249,8 +264,10 @@ def build_reminder_text(status: ReminderStatus, *, forced: bool = False) -> str:
             lines.append(f"مهلت ارسال فایل‌های «{prev_label}» ({due_s}) {-status.days_to_due} روز گذشته است.")
     if status.missing:
         lines.append("")
-        lines.append("ماه‌های ثبت‌نشده:")
-        lines.extend(f"• {label}" for label in status.missing_labels)
+        lines.append("ماه‌های ناقص:")
+        lines.extend(
+            f"• {format_month_year(y, m)} — {'، '.join(status.parts_for(y, m))}" for y, m in status.missing
+        )
         lines.append("")
         lines.append(f"ورودی‌های هر ماه: {FILES_FA}.")
         lines.append("مسیر ربات: 🎯 هدف اصلی → 📥 ثبت ورودی ماه (تکی یا 📦 آپلود گروهی)")
@@ -286,6 +303,7 @@ def status_text(db: Any, cfg: dict[str, Any] | None = None) -> str:
         "",
         f"ماه‌های الزامی: "
         + "، ".join(f"{format_month_year(y, m)} {'✅' if ok else '❌'}" for y, m, ok in st.required),
+        *[f"  ❌ {format_month_year(y, m)}: {'، '.join(st.parts_for(y, m))}" for y, m, ok in st.required if not ok],
         f"وضعیت فعلی: {status_label_fa(st, cfg)}",
     ]
     last = state.get("last_result")
