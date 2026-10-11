@@ -294,7 +294,7 @@ class MainGoalReportFlow:
             return
         self.clear(str(user["bale_user_id"]))
         months = mgh.load_history(self.db)
-        hist = mgh.history_overview_text(months)
+        hist = mgh.history_overview_text(months, mgp.provisional_tons_by_key(self.db))
         self._reply(
             message,
             f"🎯 {mg.TITLE_FA}\n{mg.SUBTITLE_FA}\n\n"
@@ -311,7 +311,7 @@ class MainGoalReportFlow:
             return
         self.clear(str(user["bale_user_id"]))
         months = mgh.load_history(self.db)
-        text = mgh.history_overview_text(months)
+        text = mgh.history_overview_text(months, mgp.provisional_tons_by_key(self.db))
         missing = [o for o in mgp.month_completeness(self.db) if o["missing"]]
         if missing:
             text += "\n\nبخش‌های باقی‌مانده:\n" + "\n".join(
@@ -342,7 +342,7 @@ class MainGoalReportFlow:
         }
         self._reply(
             message,
-            mgh.history_overview_text(months) + "\n\nشمارهٔ ردیف ماهی که باید حذف شود را بفرستید:",
+            mgh.history_overview_text(months, mgp.provisional_tons_by_key(self.db)) + "\n\nشمارهٔ ردیف ماهی که باید حذف شود را بفرستید:",
             kb.main_goal_cancel_menu(),
         )
 
@@ -367,7 +367,7 @@ class MainGoalReportFlow:
         months = mgh.load_history(self.db)
         self._reply(
             message,
-            f"🗑 ماه «{label}» از سابقه حذف شد.\n\n" + mgh.history_overview_text(months),
+            f"🗑 ماه «{label}» از سابقه حذف شد.\n\n" + mgh.history_overview_text(months, mgp.provisional_tons_by_key(self.db)),
             kb.main_goal_history_menu(can_delete=bool(months)),
         )
         return True
@@ -790,7 +790,9 @@ class MainGoalReportFlow:
             for o in overview[-8:]:
                 status = "✅ کامل" if o["complete"] else ("⚠ ناقص: " + "، ".join(o["missing"]))
                 if o.get("production_provisional"):
-                    status += " (ردیف تب کوره موقت است و در محاسبه استفاده نمی‌شود)"
+                    status += " | " + mgp.provisional_text_fa(o.get("provisional_total_tons"))
+                if o.get("not_produced"):
+                    status += " | بدون تولید: " + "، ".join(mg.SECTION_LABEL_FA.get(x, x) for x in o["not_produced"])
                 elif o.get("production_note"):
                     status += f" | {o['production_note']}"
                 lines.append(f"• {o['label']}: {status}")

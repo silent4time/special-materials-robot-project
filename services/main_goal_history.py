@@ -1118,9 +1118,10 @@ def persist_scenario(db: Any, result: ScenarioResult, model: HistoryModel, *, us
     )
 
 
-def history_overview_text(months: list[MonthRecord]) -> str:
+def history_overview_text(months: list[MonthRecord], provisional: dict[str, float] | None = None) -> str:
     if not months:
         return "📚 هنوز ماهی ذخیره نشده است."
+    provisional = provisional or {}
     lines = [f"📚 ماه‌های ذخیره‌شده ({len(months)}):"]
     for i, m in enumerate(months, 1):
         tons = float(m.production.total_tons or 0)
@@ -1128,9 +1129,11 @@ def history_overview_text(months: list[MonthRecord]) -> str:
             tons_txt = f"{tons:,.0f} تن"
         else:
             # never show «0 تن» for a month whose casting-tab tonnage was not entered
-            tons_txt = "تناژ ثبت نشده"
-            if any("تب کوره" in str(x) for x in (m.production.missing or [])):
-                tons_txt += " (فقط ردیف موقت تب کوره؛ عکس تب ریخته‌گری لازم است)"
+            tons_txt = "تناژ ریخته‌گری ثبت نشده"
+            if provisional.get(m.period_key) or any("تب کوره" in str(x) for x in (m.production.missing or [])):
+                from services.main_goal_persist import provisional_text_fa
+
+                tons_txt = provisional_text_fa(provisional.get(m.period_key))
             if m.consumptions:
                 secs = "، ".join(mg.SECTION_LABEL_FA.get(s, s) for s in m.consumptions)
                 tons_txt += f" — دادهٔ تاندیش: {secs}"

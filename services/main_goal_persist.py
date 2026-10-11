@@ -420,9 +420,41 @@ def _missing_parts(db: Any, period_key: str) -> list[str]:
         missing.append(f"آمار تولید ({NEEDS_CASTING_NOTE_FA})")
     have = {c["section"] for c in db.list_main_goal_consumption(period_key=period_key)}
     for sec in SECTIONS:
-        if sec not in have:
+        if sec not in have and not section_not_produced(prod, sec):
             missing.append(f"مصرف تاندیش {mg.SECTION_LABEL_FA[sec]}")
     return missing
+
+
+def provisional_text_fa(tons: float | None) -> str:
+    """One wording everywhere (bot + web) for a furnace-tab-only month."""
+    t = f"{float(tons):,.0f} تن" if tons else "—"
+    return f"موقت از تب کوره: {t} — تناژ ریخته‌گری ثبت نشده (فقط مرجع؛ در محاسبه استفاده نمی‌شود)"
+
+
+def provisional_tons_by_key(db: Any) -> dict[str, float]:
+    return {
+        r["period_key"]: float(r.get("provisional_total_tons") or 0)
+        for r in month_completeness(db) if r.get("production_provisional")
+    }
+
+
+def section_not_produced(prod: dict | None, section: str) -> bool:
+    """True when the confirmed casting-tab production says the section cast 0 t that
+    month — then no tundish file exists/is needed for it (e.g. مرداد 1405 بلوم)."""
+    if not prod or is_provisional_production(prod):
+        return False
+    total = float(prod.get("total_tons") or 0)
+    tons = prod.get(f"{section}_tons")
+    try:
+        return total > 0 and tons is not None and float(tons) == 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def complete_period_keys(db: Any) -> set[str]:
+    """Months whose required inputs are all present — the ONE source used by the
+    main-goal status table and the mandatory-reminder screens (bot + web)."""
+    return {r["period_key"] for r in month_completeness(db) if r["complete"]}
 
 
 def month_completeness(db: Any) -> list[dict[str, Any]]:
@@ -459,6 +491,7 @@ def month_completeness(db: Any) -> list[dict[str, Any]]:
                     float((prod or {}).get("total_tons") or 0) if is_provisional_production(prod) else None
                 ),
                 "sections": {s: s in cons for s in SECTIONS},
+                "not_produced": [s for s in SECTIONS if s not in cons and section_not_produced(prod, s)],
                 "missing": missing,
                 "complete": not missing,
             }

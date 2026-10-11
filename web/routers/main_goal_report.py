@@ -92,6 +92,9 @@ def _ctx(
         "max_forecast": mgh.MAX_FORECAST_MONTHS,
         "ccm_note": "ماشین ریخته‌گری ۱ و ۲ = اسلب، ۳ = بلوم، ۴ و ۵ = بیلت",
         "sections_fa": mg.SECTION_LABEL_FA,
+        "provisional": {c["period_key"]: float(c.get("provisional_total_tons") or 0)
+                        for c in completeness if c.get("production_provisional")},
+        "provisional_text": mgp.provisional_text_fa,
     }
 
 

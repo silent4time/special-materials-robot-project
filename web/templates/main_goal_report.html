@@ -27,10 +27,10 @@
     {% for c in completeness %}
       <tr>
         <td>{{ c.label }}</td>
-        <td>{% if c.production_provisional %}<span class="muted" title="ردیف تب کوره — در محاسبه تناژ بخش‌ها استفاده نمی‌شود">⚠ موقت (تب کوره) — نیاز به عکس تب ریخته‌گری{% if c.provisional_total_tons %}<br>{{ "{:,.0f}".format(c.provisional_total_tons) }} تن (فقط مرجع){% endif %}</span>{% elif c.has_production %}✅{% if c.production_note %} <span class="muted">{{ c.production_note }}</span>{% endif %}{% else %}—{% endif %}</td>
-        <td>{{ "✅" if c.sections.billet else "—" }}</td>
-        <td>{{ "✅" if c.sections.bloom else "—" }}</td>
-        <td>{{ "✅" if c.sections.slab else "—" }}</td>
+        <td>{% if c.production_provisional %}<span class="muted">⚠ {{ provisional_text(c.provisional_total_tons) }}</span>{% elif c.has_production %}✅{% if c.production_note %} <span class="muted">{{ c.production_note }}</span>{% endif %}{% else %}—{% endif %}</td>
+        <td>{% if c.sections.billet %}✅{% elif "billet" in c.not_produced %}<span class="muted">بدون تولید</span>{% else %}—{% endif %}</td>
+        <td>{% if c.sections.bloom %}✅{% elif "bloom" in c.not_produced %}<span class="muted">بدون تولید</span>{% else %}—{% endif %}</td>
+        <td>{% if c.sections.slab %}✅{% elif "slab" in c.not_produced %}<span class="muted">بدون تولید</span>{% else %}—{% endif %}</td>
         <td>{% if c.complete %}کامل{% else %}ناقص: {{ c.missing|join("، ") }}{% endif %}</td>
       </tr>
     {% endfor %}
@@ -51,7 +51,7 @@
         <td>{{ "{:,.0f}".format(m.production.slab_tons) }}</td>
         <td>{{ "{:,.0f}".format(m.production.total_tons) }}</td>
         {% else %}
-        <td colspan="4" class="muted">تناژ ثبت نشده{% if m.consumptions %} — فقط دادهٔ تاندیش{% endif %}</td>
+        <td colspan="4" class="muted">{% if provisional.get(m.period_key) %}{{ provisional_text(provisional[m.period_key]) }}{% else %}تناژ ریخته‌گری ثبت نشده{% endif %}{% if m.consumptions %} — دادهٔ تاندیش موجود{% endif %}</td>
         {% endif %}
         <td>{{ m.jalali_date }} — {{ m.actor }}</td>
         {% if can_delete %}
