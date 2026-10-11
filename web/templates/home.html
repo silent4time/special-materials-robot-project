@@ -18,6 +18,8 @@
     {% if can(user, "file_inputs") or can(user, "main_source_edit") %}<a href="/settings/main-source">📤 ورود فایل‌ها / منبع اصلی</a>{% endif %}
     {% if can(user, "role_permissions") %}<a href="/settings/permissions">🔐 دسترسی نقش‌ها</a>{% endif %}
     {% if show_web_settings %}<a href="/settings/web-login">⚙️ تنظیم ورود وب</a>{% endif %}
+    {% if can(user, "reminders") %}<a href="/settings/reminders">🔔 یادآورها</a>{% endif %}
+    {% if can(user, "user_activity") %}<a href="/reports/user-activity">📋 فعالیت کاربران</a>{% endif %}
   </div>
 </div>
 {% endblock %}
