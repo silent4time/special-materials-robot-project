@@ -2072,6 +2072,29 @@ class BotApp:
                 logger.warning("role perm keyboard refresh failed: %s", exc)
 
     # ---------- آپلود فایل / فایل منبع اصلی ----------
+
+    def on_sequence_report_upload(self, message: dict) -> None:
+        """شروع آپلود گزارش جامع تاندیش در سکوئنس از منوی ورود فایل‌ها."""
+        user = ensure_registered(self.db, self._uid(message), self._display_name(message))
+        if not user or not perm.can(user, perm.FILE_INPUTS):
+            self._reply(message, "دسترسی آپلود فایل ندارید.", kb.main_menu(user) if user else None)
+            return
+        uid = self._uid(message)
+        self._file_guide_kind[uid] = "sequence_report"
+        # Route to main goal flow for processing
+        self.main_goal_report.start_sequence_xlsx(message)
+
+    def on_production_photos_upload(self, message: dict) -> None:
+        """شروع آپلود عکس‌های آمار تولید از منوی ورود فایل‌ها."""
+        user = ensure_registered(self.db, self._uid(message), self._display_name(message))
+        if not user or not perm.can(user, perm.FILE_INPUTS):
+            self._reply(message, "دسترسی آپلود فایل ندارید.", kb.main_menu(user) if user else None)
+            return
+        uid = self._uid(message)
+        self._file_guide_kind[uid] = "production_photos"
+        # Route to main goal flow for processing
+        self.main_goal_report.start_prod_photo(message)
+
     def on_upload_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
@@ -4692,6 +4715,31 @@ class BotApp:
             return f"تصویر: ✅ تنظیم شده ({Path(raw).name})"
         return "تصویر: ❌ تنظیم نشده"
 
+
+    def on_assistant_settings(self, message: dict) -> None:
+        """فقط مالک: تنظیمات دستیار هوشمند صوتی."""
+        user = ensure_registered(self.db, self._uid(message), self._display_name(message))
+        if not user or user.get("role") != "owner":
+            self._reply(message, "این تنظیمات فقط برای مالک در دسترس است.", kb.main_menu(user) if user else None)
+            return
+        enabled = self.db.get_setting("assistant_enabled") == "1"
+        model = self.db.get_setting("assistant_model") or "qwen2.5:3b"
+        status = "فعال" if enabled else "غیرفعال"
+        self._reply(
+            message,
+            f"🤖 دستیار هوشمند صوتی\nوضعیت: {status}\nمدل فعلی: {model}\n\n"
+            "فقط مالک می‌تواند این تنظیمات را تغییر دهد.",
+            kb.assistant_settings_menu(),
+        )
+
+    def on_assistant_toggle(self, message: dict, enable: bool) -> None:
+        user = ensure_registered(self.db, self._uid(message), self._display_name(message))
+        if not user or user.get("role") != "owner":
+            return
+        self.db.set_setting("assistant_enabled", "1" if enable else "0")
+        state = "فعال شد" if enable else "غیرفعال شد"
+        self._reply(message, f"دستیار هوشمند {state}.", kb.assistant_settings_menu())
+
     def on_bot_settings_menu(self, message: dict) -> None:
         user = self._require_bot_settings_user(message)
         if not user:
@@ -6392,6 +6440,7 @@ class BotApp:
             kb.BTN_SET_LOGO: lambda m: self.on_bot_settings_section(m, "logo"),
             kb.BTN_SET_LETTERHEAD: lambda m: self.on_bot_settings_section(m, "letterhead"),
             kb.BTN_SET_STOCK_GROUP: lambda m: self.on_bot_settings_section(m, "stock_group"),
+            kb.BTN_ASSISTANT: self.on_assistant_settings,
             kb.BTN_SETTINGS_CLEAR_STOCK_GROUP: self.on_bot_settings_clear_stock_group,
             kb.BTN_SETTINGS_UPLOAD_LETTERHEAD: self.on_bot_settings_upload_letterhead_start,
             kb.BTN_SETTINGS_CLEAR_LETTERHEAD: self.on_bot_settings_clear_letterhead,
@@ -6433,6 +6482,8 @@ class BotApp:
             kb.BTN_INV_DOWNLOAD: self.on_inv_download,
             kb.BTN_WAREHOUSE_STOCK: lambda m: self.on_pick_file_type(m, "product_inventory", return_menu="upload"),
             kb.BTN_MONTHLY: lambda m: self.on_pick_file_type(m, "monthly_consumption", return_menu="upload"),
+            kb.BTN_SEQUENCE_REPORT: self.on_sequence_report_upload,
+            kb.BTN_PRODUCTION_PHOTOS: self.on_production_photos_upload,
             # موجودی روزانه سایت
             kb.BTN_SITE_STOCK: self.on_site_stock_menu,
             kb.BTN_SITE_SKIP: self.on_site_stock_skip,
@@ -6527,3 +6578,4 @@ class BotApp:
                     self.client.send_message(chat_id, text.replace(f" (update {update.get('update_id')})", ""))
                 except Exception:  # noqa: BLE001
                     logger.warning("could not send error notice to %s", chat_id)
+
