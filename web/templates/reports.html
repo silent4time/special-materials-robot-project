@@ -56,6 +56,17 @@
       <button type="submit" class="btn" formaction="/reports/n-tundish.xlsx">اکسل</button>
     </div>
   </form>
+  <p class="muted" style="margin-top:1rem">ترکیب چند بخش (مثلاً ۷۰ بیلت + ۲۰ بلوم + ۱۰۰ اسلب): مصرف هر تاندیش هر نوع از منبع اصلی و نیاز کل.</p>
+  <form method="get" action="/reports/n-tundish-mix" class="form-grid">
+    <label>تاندیش بیلت<input type="number" name="billet" min="0" max="500" value="70"></label>
+    <label>تاندیش بلوم<input type="number" name="bloom" min="0" max="500" value="20"></label>
+    <label>تاندیش اسلب<input type="number" name="slab" min="0" max="500" value="100"></label>
+    <label>حالت<select name="renovation"><option value="with">با نوسازی</option><option value="without">بدون نوسازی</option></select></label>
+    <div class="report-actions">
+      <button type="submit" class="btn">PDF</button>
+      <button type="submit" class="btn" formaction="/reports/n-tundish-mix.xlsx">اکسل</button>
+    </div>
+  </form>
 </div>
 {% endif %}
 
@@ -144,7 +155,7 @@
 <div class="card" id="critical-items">
   <h2>🚨 اقلام بحرانی (نیاز ۳/۶ ماه)</h2>
   <p class="muted">
-    همان منطق ربات: «میانگین مصرف ماهانه بر اساس ۳ ماه گذشته» = میانگین تعداد تاندیش ۳ ماه کامل قبل از امروز
+    همان منطق ربات: مصرف ماهانه = مصرف هر تاندیش هر نوع (منبع اصلی) × میانگین تعداد تاندیش ۳ ماه کامل قبل از امروز
     (لاگ توالی تاندیش؛ ماهی که لاگ ندارد از ثبت دستی زیر) ×
     (نوسازی+پچینگ یا فقط پچینگ) + سطح ریخته‌گری؛ «مصرف پیش‌بینی‌شده در افق» = میانگین ماهانه × افق
     (داخلی ۳ ماه، وارداتی ۶ ماه)؛ «نیاز» = مصرف پیش‌بینی‌شده − موجودی، فقط اقلام با نیاز مثبت.
@@ -180,7 +191,7 @@
     </div>
   </form>
   <p class="muted" style="margin-top:.75rem">گزارش با تاریخ امروز و بدون انتخاب ماه تولید می‌شود — {{ basis_note }}</p>
-  <form method="get" class="report-actions" style="margin-top:1rem">
+  <form method="post" action="/reports/critical-items/draft" class="report-actions" style="margin-top:1rem">
     <fieldset class="reno-mode" style="border:0;padding:0;margin:0 0 .5rem 0">
       <legend class="muted">حالت محاسبه نیاز:</legend>
       {% for val, label in reno_modes %}
@@ -190,10 +201,32 @@
       </label>
       {% endfor %}
     </fieldset>
-    <button class="btn" formaction="/reports/critical-items" name="segment" value="company">گزارش اصلی — اقلام شرکت (PDF)</button>
-    <button class="btn" formaction="/reports/critical-items" name="segment" value="contractor">گزارش جداگانه — اقلام پیمانکار (PDF)</button>
-    <button class="btn" formaction="/reports/critical-items.xlsx">اکسل (شیت شرکت + شیت پیمانکار)</button>
+    <button class="btn" type="submit">📄 تولید پیش‌نویس گزارش (PDF شرکت، PDF پیمانکار، اکسل)</button>
   </form>
+  <p class="muted">مراحل (مثل ربات): پیش‌نویس → (اختیاری) نوشتن توضیحات → «تأیید» → نسخهٔ نهایی ذخیره و بایگانی می‌شود. ستون‌ها و ظاهر دقیقاً مثل قالب «140506».</p>
+  {% if critical_drafts %}
+  <p class="muted" style="margin-top:.75rem">پیش‌نویس‌های باز:</p>
+  <ul>
+    {% for d in critical_drafts %}
+    <li><a href="/reports/critical-items/report/{{ d.id }}">#{{ d.id }} — <bdi>{{ d.report_date }}</bdi> — {{ d.reno_label }} — شرکت {{ d.company_count }} / پیمانکار {{ d.contractor_count }} قلم</a></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <p class="muted" style="margin-top:.75rem">🗂 گزارش‌های تأییدشده:</p>
+  {% if critical_approved %}
+  <ul>
+    {% for r in critical_approved %}
+    <li>#{{ r.id }} — <bdi>{{ r.report_date }}</bdi> — {{ r.reno_label }} — تأیید <bdi>{{ (r.approved_at or "")[:16]|replace("T", " ") }}</bdi>{% if r.approved_by_name %} ({{ r.approved_by_name }}){% endif %}:
+      <a href="/reports/critical-items/report/{{ r.id }}/file/xlsx">اکسل</a>
+      {% if r.company_count %}| <a href="/reports/critical-items/report/{{ r.id }}/file/company">PDF شرکت</a>{% endif %}
+      {% if r.contractor_count %}| <a href="/reports/critical-items/report/{{ r.id }}/file/contractor">PDF پیمانکار</a>{% endif %}
+      | <a href="/reports/critical-items/report/{{ r.id }}">مشاهده</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">هنوز گزارشی تأیید نشده است.</p>
+  {% endif %}
   <p class="muted">تفکیک بر اساس ستون «تأمین‌کننده» منبع اصلی (شرکت/پیمانکار، از روی شناسه مواد)؛ گزارش اصلی فقط اقلام شرکت است و اقلام پیمانکار جدا می‌آید.
     «با نوسازی» = نرخ نوسازی + پچینگ (+ سطح ریخته‌گری)؛ «بدون نوسازی» = فقط پچینگ (+ سطح ریخته‌گری) — اقلامی که فقط نرخ نوسازی دارند حذف می‌شوند.</p>
   {% if recent_counts %}

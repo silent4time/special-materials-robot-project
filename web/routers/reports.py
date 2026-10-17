@@ -81,6 +81,10 @@ async def reports_page(
         "error": request.query_params.get("err"),
     }
     ctx.update(_critical_context(db, request))
+    from services import critical_report_archive as _cra
+
+    ctx["critical_approved"] = _cra.list_approved(db, limit=20)
+    ctx["critical_drafts"] = _cra.list_drafts(db, limit=10)
     # t221u: «گزارش اقلام ورودی به انبار» — same stored reports as the bot
     ctx["inbound_latest"] = inbound_svc.latest_report(db)
     ctx["inbound_table"] = inbound_svc.preview_table(ctx["inbound_latest"]) if ctx["inbound_latest"] else None
@@ -227,6 +231,127 @@ async def critical_items_xlsx(
         )
     log_activity(db, user, "report_critical_items_xlsx", renovation=reno)
     return FileResponse(path, media_type=_XLSX, filename=path.name)
+
+
+# ------------------------------------------- 🚨 اقلام بحرانی: draft → توضیحات → تأیید → بایگانی
+# Same workflow/storage as the bot (services.critical_report_archive): a draft started
+# in the bot can be finished here and vice versa. Permission: report.critical.
+def _crit_page(report_id: int, *, msg: str | None = None, err: str | None = None) -> RedirectResponse:
+    q = f"?msg={quote(msg)}" if msg else (f"?err={quote(err)}" if err else "")
+    return RedirectResponse(f"/reports/critical-items/report/{int(report_id)}{q}", status_code=303)
+
+
+@router.post("/critical-items/draft")
+async def critical_items_draft(
+    renovation: str = Form("with"),
+    user=Depends(require_feature(perm.REPORT_CRITICAL)),
+    db: Database = Depends(get_db),
+):
+    from services import critical_report_archive as cra
+    from web.services.reports import letterhead_path
+
+    reno = normalize_reno_mode(renovation)
+    try:
+        report, res = cra.create_draft(db, user, reno_mode=reno, source="web",
+                                       letterhead_path=letterhead_path(db))
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(
+            f"/reports?err={quote(user_errors.error_fa('خطا در تولید گزارش اقلام بحرانی', exc))}"
+            f"&renovation={reno}#critical-items", status_code=303)
+    if report is None:
+        return RedirectResponse(f"/reports?err={quote(res.error or 'خطا')}&renovation={reno}#critical-items",
+                                status_code=303)
+    log_activity(db, user, "report_critical_items_draft", report_id=int(report["id"]), renovation=reno,
+                 source="web")
+    return _crit_page(report["id"], msg="پیش‌نویس ساخته شد. توضیحات را بنویسید (اختیاری) و تأیید کنید.")
+
+
+@router.get("/critical-items/report/{report_id}")
+async def critical_items_report_page(
+    report_id: int,
+    request: Request,
+    user=Depends(require_feature(perm.REPORT_CRITICAL)),
+    db: Database = Depends(get_db),
+):
+    from services import critical_report_archive as cra
+
+    report = cra.get_report(db, report_id)
+    if report is None or report["status"] == cra.STATUS_CANCELLED:
+        return RedirectResponse(f"/reports?err={quote('گزارش اقلام بحرانی یافت نشد.')}#critical-items",
+                                status_code=303)
+    return render(request, "critical_report.html", {
+        "user": user,
+        "report": report,
+        "sheets": cra.preview_rows(report),
+        "is_draft": report["status"] == cra.STATUS_DRAFT,
+        "kinds": [(k, cra.KIND_FA[k]) for k in cra.KINDS
+                  if k == "xlsx" or any(sh.get("segment") == k and sh.get("rows") for sh in cra.sheets_of(report))],
+        "max_lines": cra.MAX_NOTE_LINES,
+        "message": request.query_params.get("msg"),
+        "error": request.query_params.get("err"),
+    })
+
+
+@router.post("/critical-items/report/{report_id}/notes")
+async def critical_items_report_notes(
+    report_id: int,
+    notes: str = Form(""),
+    action: str = Form("save"),
+    user=Depends(require_feature(perm.REPORT_CRITICAL)),
+    db: Database = Depends(get_db),
+):
+    """«ذخیرهٔ توضیحات» (action=save) or «تأیید و ذخیرهٔ نهایی» (action=approve; the
+    textarea is saved first, so typed notes are never lost)."""
+    from services import critical_report_archive as cra
+    from web.services.reports import letterhead_path
+
+    lh = letterhead_path(db)
+    report = cra.get_report(db, report_id)
+    if report and report["status"] == cra.STATUS_DRAFT and cra.clean_notes(notes) != (report.get("user_notes") or ""):
+        _r, err = cra.set_notes(db, report_id, notes, user, letterhead_path=lh)
+        if err:
+            return _crit_page(report_id, err=err)
+        log_activity(db, user, "report_critical_items_notes", report_id=int(report_id), source="web")
+    if action == "approve":
+        _r, err = cra.approve(db, report_id, user, letterhead_path=lh)
+        if err:
+            return _crit_page(report_id, err=err)
+        log_activity(db, user, "report_critical_items_approved", report_id=int(report_id), source="web")
+        return _crit_page(report_id, msg="گزارش تأیید و ذخیره شد؛ از فهرست «گزارش‌های تأییدشده» هم قابل دریافت است.")
+    if action == "clear":
+        _r, err = cra.set_notes(db, report_id, "", user, letterhead_path=lh)
+        return _crit_page(report_id, err=err) if err else _crit_page(report_id, msg="توضیحات حذف شد.")
+    if action == "cancel":
+        _r, err = cra.cancel(db, report_id, user)
+        if err:
+            return _crit_page(report_id, err=err)
+        log_activity(db, user, "report_critical_items_cancelled", report_id=int(report_id), source="web")
+        return RedirectResponse(f"/reports?msg={quote(f'پیش‌نویس #{int(report_id)} لغو شد.')}#critical-items",
+                                status_code=303)
+    return _crit_page(report_id, msg="توضیحات ذخیره شد؛ پیش‌نویس به‌روز شد.")
+
+
+@router.get("/critical-items/report/{report_id}/file/{kind}")
+async def critical_items_report_file(
+    report_id: int,
+    kind: str,
+    user=Depends(require_feature(perm.REPORT_CRITICAL)),
+    db: Database = Depends(get_db),
+):
+    from services import critical_report_archive as cra
+    from web.services.reports import letterhead_path
+
+    report = cra.get_report(db, report_id)
+    if report is None or report["status"] == cra.STATUS_CANCELLED or kind not in cra.KINDS:
+        return RedirectResponse(f"/reports?err={quote('گزارش اقلام بحرانی یافت نشد.')}#critical-items",
+                                status_code=303)
+    path = cra.report_files(db, report, letterhead_path=letterhead_path(db)).get(kind)
+    if path is None:
+        return _crit_page(report_id, err="این بخش قلمی ندارد.")
+    if report["status"] == cra.STATUS_APPROVED:
+        log_activity(db, user, "report_critical_items_archive", report_id=int(report_id), source="web")
+    media = _XLSX if kind == "xlsx" else "application/pdf"
+    return FileResponse(path, media_type=media, filename=path.name)
 
 
 @router.get("/remaining-critical")
@@ -383,6 +508,44 @@ async def n_tundish_xlsx(request: Request, user=Depends(require_feature(perm.REP
     if err or not res or not res.xlsx:
         return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#n-tundish", status_code=303)
     log_activity(db, user, "report_n_tundish_xlsx", section=res.section, n=res.n, renovation=res.reno_mode)
+    return FileResponse(res.xlsx, media_type=_XLSX, filename=res.xlsx.name)
+
+
+def _n_tundish_mix(request: Request, db: Database, user: dict):
+    from services import n_tundish_report as nt
+    from web.services.reports import letterhead_path
+
+    q = request.query_params
+    mix = {}
+    for k in nt.MIX_ORDER:
+        raw = nt.to_ascii_digits(q.get(k) or "0").strip() or "0"
+        if not raw.isdigit():
+            return None, "تعداد تاندیش هر بخش باید عدد صحیح (۰ یا بیشتر) باشد."
+        mix[k] = int(raw)
+    reno = normalize_reno_mode(q.get("renovation") or "with")
+    res = nt.generate_mix_files(db, user, mix, reno, letterhead_path=letterhead_path(db))
+    return res, res.error
+
+
+@router.get("/n-tundish-mix")
+async def n_tundish_mix_pdf(request: Request, user=Depends(require_feature(perm.REPORT_N_TUNDISH)), db: Database = Depends(get_db)):
+    from services import n_tundish_report as nt
+
+    res, err = _n_tundish_mix(request, db, user)
+    if err or not res or not res.pdf:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#n-tundish", status_code=303)
+    log_activity(db, user, "report_n_tundish_mix", mix=nt.mix_label(res.mix), renovation=res.reno_mode)
+    return FileResponse(res.pdf, media_type="application/pdf", filename=res.pdf.name)
+
+
+@router.get("/n-tundish-mix.xlsx")
+async def n_tundish_mix_xlsx(request: Request, user=Depends(require_feature(perm.REPORT_N_TUNDISH)), db: Database = Depends(get_db)):
+    from services import n_tundish_report as nt
+
+    res, err = _n_tundish_mix(request, db, user)
+    if err or not res or not res.xlsx:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#n-tundish", status_code=303)
+    log_activity(db, user, "report_n_tundish_mix_xlsx", mix=nt.mix_label(res.mix), renovation=res.reno_mode)
     return FileResponse(res.xlsx, media_type=_XLSX, filename=res.xlsx.name)
 
 

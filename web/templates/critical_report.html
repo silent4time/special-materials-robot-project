@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}اقلام بحرانی #{{ report.id }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>🚨 {{ report.title }} — {% if is_draft %}📝 پیش‌نویس{% else %}✅ تأییدشده{% endif %} #{{ report.id }}</h1>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  <p class="muted">
+    حالت: {{ report.reno_label }} | تاریخ گزارش: <bdi>{{ report.report_date }}</bdi> |
+    شرکت: {{ report.company_count }} قلم | پیمانکار: {{ report.contractor_count }} قلم |
+    ساخته‌شده {% if report.source == "web" %}در وب{% else %}در ربات{% endif %}{% if report.created_by_name %} توسط {{ report.created_by_name }}{% endif %}
+    {% if not is_draft %}| تأیید: <bdi>{{ (report.approved_at or "")[:16]|replace("T", " ") }}</bdi>{% if report.approved_by_name %} توسط {{ report.approved_by_name }}{% endif %}{% endif %}
+  </p>
+  <div class="report-actions">
+    {% for kind, label in kinds %}
+    <a class="btn" href="/reports/critical-items/report/{{ report.id }}/file/{{ kind }}">{% if is_draft %}پیش‌نویس {% endif %}{{ label }}</a>
+    {% endfor %}
+    <a class="btn" href="/reports#critical-items">بازگشت به گزارش‌ها</a>
+  </div>
+  {% if is_draft %}
+  <form method="post" action="/reports/critical-items/report/{{ report.id }}/notes" style="margin-top:1rem">
+    <label>توضیحات شما (هر خط یک سطر بلوک «توضیحات» زیر جدول؛ حداکثر {{ max_lines }} سطر؛ اختیاری)
+      <textarea name="notes" rows="5" style="width:100%">{{ report.user_notes or "" }}</textarea>
+    </label>
+    <div class="report-actions">
+      <button class="btn" name="action" value="save">ذخیرهٔ توضیحات و به‌روزرسانی پیش‌نویس</button>
+      <button class="btn" name="action" value="approve">✅ تأیید و ذخیرهٔ نسخهٔ نهایی</button>
+      {% if report.user_notes %}<button class="btn" name="action" value="clear">🧹 حذف توضیحات</button>{% endif %}
+      <button class="btn" name="action" value="cancel" onclick="return confirm('پیش‌نویس لغو شود؟')">🗑 لغو پیش‌نویس</button>
+    </div>
+    <p class="muted">«تأیید» متن داخل کادر را هم ذخیره می‌کند؛ بدون نوشتن توضیحات هم می‌توانید تأیید کنید. بعد از تأیید، گزارش قابل ویرایش نیست و در فهرست «گزارش‌های تأییدشده» (وب و ربات) می‌ماند.</p>
+  </form>
+  {% endif %}
+</div>
+{% for sh in sheets %}
+<div class="card">
+  <h2>{{ sh.title }} <span class="muted">(شیت «{{ sh.name }}»)</span></h2>
+  {% if sh.rows %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr>{% for c in sh.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for r in sh.rows %}
+    <tr>{% for c in sh.columns %}<td>{% set v = r[c] %}{% if v is number %}{{ "{:,.0f}".format(v) if v == v|round(0) else v }}{% else %}{{ v if v is not none else "" }}{% endif %}</td>{% endfor %}</tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="muted">{{ sh.empty_message }}</p>
+  {% endif %}
+  <p><strong>توضیحات</strong></p>
+  <ul>{% for n in sh.notes if n %}<li>{{ n }}</li>{% endfor %}</ul>
+</div>
+{% endfor %}
+{% endblock %}
