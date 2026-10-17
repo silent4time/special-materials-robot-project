@@ -62,7 +62,7 @@ log()  { printf '%s\n' "$*" >&2; }
 ok()   { printf '%s✓ %s\n' "$IND" "$*" >&2; }
 warn() { printf '%s⚠ %s\n' "$IND" "$*" >&2; }
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
-fa_digits() { printf '%s' "$1" | sed 'y/0123456789/۰۱۲۳۴۵۶۷۸۹/'; }
+fa_digits() { printf '%s' "$1" | LC_ALL=C.UTF-8 sed 'y/0123456789/۰۱۲۳۴۵۶۷۸۹/'; }
 if [[ -t 2 ]]; then PROGRESS_TTY=1; else PROGRESS_TTY=0; fi
 if (( PROGRESS_TTY )) && [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb ]]; then
   C_B=$'\033[1m'; C_G=$'\033[32m'; C_R=$'\033[31m'; C_Y=$'\033[33m'; C_0=$'\033[0m'
@@ -384,17 +384,16 @@ start_ollama() {
       if wait_ollama 40; then ok "سرویس systemd ollama فعال شد (برای بوت هم فعال است)"; return 0; fi
       warn "سرویس systemd ollama بالا نیامد (journalctl -u ollama)؛ اجرای مستقیم..."
     fi
-    if id ollama >/dev/null 2>&1 && need_cmd runuser; then
-      nohup runuser -u ollama -- env HOME=/usr/share/ollama OLLAMA_HOST=127.0.0.1:11434 "$PREFIX/bin/ollama" serve \
-        >>/var/log/nasoz-ollama.log 2>&1 </dev/null &
-      echo $! > /run/nasoz-ollama.pid 2>/dev/null || true
-    else
-      nohup env OLLAMA_HOST=127.0.0.1:11434 "$PREFIX/bin/ollama" serve >>/var/log/nasoz-ollama.log 2>&1 </dev/null &
-    fi
+  fi
+  # no systemd (container/sandbox): detached supervisor via setsid nohup (restarts ollama if it exits)
+  local ens="$WORKDIR/scripts/ollama_ensure.sh"
+  [[ -f "$ens" ]] || ens="$(dirname "$0")/ollama_ensure.sh"
+  if [[ -f "$ens" ]]; then
+    OLLAMA_BIN="$( (( IS_ROOT )) && echo "$PREFIX/bin/ollama" || command -v ollama)" bash "$ens" >>"$INSTALL_LOG" 2>&1
   else
     nohup env OLLAMA_HOST=127.0.0.1:11434 "$(command -v ollama)" serve >>"$CACHE/ollama-serve.log" 2>&1 </dev/null &
   fi
-  if wait_ollama 40; then ok "Ollama با nohup اجرا شد (بعد از ریبوت: ollama serve را دوباره اجرا کنید)"; return 0; fi
+  if wait_ollama 40; then ok "Ollama با setsid nohup اجرا شد (بدون systemd؛ بعد از ریبوت: bash scripts/ollama_ensure.sh)"; return 0; fi
   FAIL_REASON="سرویس Ollama بالا نیامد"; return 1
 }
 

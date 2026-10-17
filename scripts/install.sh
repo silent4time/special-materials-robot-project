@@ -162,7 +162,7 @@ ${s}  ════════════════════════�
    ربات مدیریت مواد نسوز تاندیش   |   نسخه: ${ver}
 LOGO
 }
-fa_digits() { printf '%s' "$1" | sed 'y/0123456789/۰۱۲۳۴۵۶۷۸۹/'; }
+fa_digits() { printf '%s' "$1" | LC_ALL=C.UTF-8 sed 'y/0123456789/۰۱۲۳۴۵۶۷۸۹/'; }
 step() {  # step "نام مرحله" → «[۳/۱۰] ۳۰٪ ███░░░░░░░ نام...»
   STEP_N=$((STEP_N + 1)); STEP_NAME="$1"
   local total=$(( STEP_TOTAL > 0 ? STEP_TOTAL : STEP_N )) pct filled bar="" i
@@ -1119,7 +1119,7 @@ MENU
     printf 'گزینه را وارد کنید: ' >&2
     if ! IFS= read -r -u "$TTY_FD" choice; then log ""; log "پایان ورودی — خروج."; break; fi
     choice="$(printf '%s' "$choice" | tr -d '[:space:]')"
-    choice="$(printf '%s' "$choice" | sed 'y/۰۱۲۳۴۵۶۷۸۹/0123456789/')"
+    choice="$(printf '%s' "$choice" | LC_ALL=C.UTF-8 sed 'y/۰۱۲۳۴۵۶۷۸۹/0123456789/')"
     case "$choice" in
       1) menu_install ;;
       2) menu_update ;;

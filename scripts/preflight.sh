@@ -23,4 +23,12 @@ if ! "$ROOT/.venv/bin/python" -c 'import uvicorn, httpx, pytesseract, dotenv' >/
   if ! "$ROOT/.venv/bin/python" -m pip --version >/dev/null 2>&1; then rm -rf "$ROOT/.venv"; run python3 -m venv "$ROOT/.venv"; fi
   run "$ROOT/.venv/bin/python" -m pip install -q -r "$ROOT/requirements.txt" || true
 fi
+# assistant: if Ollama is installed but not answering, bring it up (systemd unit, else setsid supervisor)
+if command -v ollama >/dev/null 2>&1 && ! curl -fsS -m 3 http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+  if [[ -d /run/systemd/system ]] && systemctl cat ollama >/dev/null 2>&1; then
+    [[ $EUID -eq 0 ]] && systemctl start ollama >/dev/null 2>&1 || true
+  else
+    timeout 60 bash "$ROOT/scripts/ollama_ensure.sh" || true
+  fi
+fi
 exit 0
