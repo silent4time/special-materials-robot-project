@@ -52,6 +52,7 @@ cat > "$B/install_offline.sh" <<'INNER'
 # نصب تازه:   bash install_offline.sh            (ویزارد، سرویس ها، تست سلامت)
 # به روزرسانی: bash install_offline.sh --update   (پوشه نصب موجود: INSTALL_DIR یا /opt/nasoz)
 # بدون پرچم در ترمینال: منوی اصلی (نصب، به روزرسانی، وضعیت، بک آپ، ...)؛ نصب مستقیم بدون منو: --install
+# دستیار هوشمند (روی نصب موجود هم): bash install_offline.sh --assistant-offline /root/nasoz_assistant_….tar
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 (cd "$HERE" && sha256sum -c --quiet SHA256SUMS) || { echo "✗ SHA256SUMS نامعتبر — بسته خراب است" >&2; exit 1; }
@@ -64,7 +65,13 @@ if [[ $# -eq 0 || "${1:-}" == "--menu" ]] && [[ "${NONINTERACTIVE:-0}" != 1 ]]; 
   fi
 fi
 if [[ "${1:-}" == "--menu" ]]; then shift; fi
-for a in "$@"; do [[ "$a" == "--update" || "$a" == "--full-update" ]] && UPD=1; [[ "$a" == "--dry-run" ]] && DRY=1; done
+for a in "$@"; do
+  [[ "$a" == "--update" || "$a" == "--full-update" ]] && UPD=1; [[ "$a" == "--dry-run" ]] && DRY=1
+  [[ "$a" == "--with-assistant" || "$a" == --assistant-offline* ]] && AST=1
+done
+if [[ "${AST:-0}" == 1 && "${UPD:-0}" != 1 && -f "$DEST/.env" ]]; then   # installed: only the voice assistant
+  INSTALL_DIR="$DEST" exec bash "$HERE/app/scripts/install.sh" "$@"
+fi
 if [[ "${UPD:-0}" == 1 ]]; then
   [[ -f "$DEST/.env" ]] || { echo "هیچ نصب موجودی در $DEST پیدا نشد (مسیر نصب را با INSTALL_DIR=... بدهید)" >&2; exit 1; }
   INSTALL_DIR="$DEST" exec bash "$HERE/app/scripts/install.sh" "$@" --offline "$HERE"

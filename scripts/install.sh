@@ -42,7 +42,9 @@ Usage: bash install.sh [options]
   --web-login        ساخت/بازنشانی ورود پنل وب برای مالک (بعد از اولین /start)
   --systemd          نصب سرویس های systemd بدون پرسش      --no-systemd   اجرا با nohup
   --start            فقط (دوباره) استارت ربات و وب
-  --with-assistant / --no-assistant   دستیار هوشمند Ollama (پیش فرض: نصب نشود)
+  --with-assistant / --no-assistant   دستیار هوشمند صوتی (Ollama از GitHub + مدل از hf-mirror/HF + Whisper/Piper
+                     از PyPI)؛ روی سرور نصب شده فقط دستیار را نصب می کند. پیش فرض: نصب نشود
+  --assistant-offline FILE.tar|DIR  نصب دستیار از بسته آفلاین (ساخت: bash scripts/build_assistant_bundle.sh)
   --seed-admin       (قدیمی) — ساخت ورود وب برای مالک ADMIN_BALE_USER_ID
   --dry-run          هیچ چیز نصب/استارت نمی شود؛ بسته ها و فایل های systemd فقط چاپ می شوند
   -h, --help
@@ -57,8 +59,9 @@ Usage: bash install.sh [options]
 HELP
 }
 
-_want_restore=0; _want_offline=0; WANT_MENU=0; NASOZ_ARGC=$#
+_want_restore=0; _want_offline=0; _want_abundle=0; ASSISTANT_BUNDLE_ARG=""; WANT_MENU=0; NASOZ_ARGC=$#; EXPLICIT_INSTALL=0
 for arg in "$@"; do
+  if (( _want_abundle )); then ASSISTANT_BUNDLE_ARG="$arg"; _want_abundle=0; continue; fi
   if (( _want_restore )); then RESTORE_FILE="$arg"; _want_restore=0; continue; fi
   if (( _want_offline )); then OFFLINE_SRC="$arg"; _want_offline=0; continue; fi
   case "$arg" in
@@ -66,7 +69,7 @@ for arg in "$@"; do
     --restore=*) RESTORE_FILE="${arg#--restore=}" ;;
     --offline) _want_offline=1 ;;
     --offline=*) OFFLINE_SRC="${arg#--offline=}" ;;
-    --install) ;;                      # explicit fresh install (skips the menu)
+    --install) EXPLICIT_INSTALL=1 ;;   # explicit fresh install (skips the menu)
     --menu) WANT_MENU=1 ;;
     --seed-admin) DO_SEED=1 ;;
     --systemd) SYSTEMD_CHOICE=y ;;
@@ -81,11 +84,19 @@ for arg in "$@"; do
     --web-login) DO_WEB_LOGIN=1 ;;
     --dry-run|--print-units) DRY_RUN=1 ;;
     --with-assistant) DO_ASSISTANT=1 ;;
+    --assistant-offline) DO_ASSISTANT=1; _want_abundle=1 ;;
+    --assistant-offline=*) DO_ASSISTANT=1; ASSISTANT_BUNDLE_ARG="${arg#--assistant-offline=}" ;;
     --no-assistant) DO_ASSISTANT=2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "پرچم ناشناخته: $arg (bash install.sh --help)" >&2; exit 2 ;;
   esac
 done
+
+if (( _want_abundle )); then echo "مسیر بسته دستیار را بدهید: --assistant-offline nasoz_assistant_….tar" >&2; exit 2; fi
+if [[ -n "$ASSISTANT_BUNDLE_ARG" ]]; then
+  [[ -e "$ASSISTANT_BUNDLE_ARG" ]] || { echo "بسته دستیار پیدا نشد: $ASSISTANT_BUNDLE_ARG" >&2; exit 2; }
+  ASSISTANT_BUNDLE_ARG="$(cd "$(dirname "$ASSISTANT_BUNDLE_ARG")" && pwd)/$(basename "$ASSISTANT_BUNDLE_ARG")"
+fi
 
 # ---------- output helpers (logs → stderr so $(...) captures stay clean) ----------
 log()  { printf '%s\n' "$*" >&2; }
@@ -554,7 +565,7 @@ WIZ
     if yes_no Y "۹) سرویس دائمی systemd (روشن شدن خودکار بعد از ریبوت) نصب شود؟"; then SYSTEMD_CHOICE=y; else SYSTEMD_CHOICE=n; fi
   fi
   if (( DO_ASSISTANT == 0 )); then
-    if yes_no N "۱۰) دستیار هوشمند محلی (Ollama، چند گیگ دانلود) هم نصب شود؟"; then DO_ASSISTANT=1; else DO_ASSISTANT=2; fi
+    if yes_no N "۱۰) دستیار هوشمند صوتی (Ollama + Whisper، حدود ۳ گیگ دانلود) هم نصب شود؟"; then DO_ASSISTANT=1; else DO_ASSISTANT=2; fi
   fi
   ok ".env نوشته شد (chmod 600؛ توکن …${token: -4})"
 }
@@ -722,26 +733,10 @@ $svc
 SUM
 }
 
-# --- دستیار هوشمند (Ollama محلی) ---
-DEFAULT_OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:3b}"
-DEFAULT_OLLAMA_URL="http://127.0.0.1:11434"
-DEFAULT_OLLAMA_TIMEOUT="60"
-
-
-write_ollama_env() {
-  local root="$1"
-  local model="${2:-$DEFAULT_OLLAMA_MODEL}"
-  upsert_env_var "$root" "OLLAMA_BASE_URL" "$DEFAULT_OLLAMA_URL"
-  upsert_env_var "$root" "OLLAMA_MODEL" "$model"
-  upsert_env_var "$root" "OLLAMA_TIMEOUT" "$DEFAULT_OLLAMA_TIMEOUT"
-  log "✓ متغیرهای OLLAMA_* در .env نوشته شد (مدل: $model)"
-}
-
-# Optional assistant: EVERY failure here is non-fatal (e.g. ollama.com answers 403 to Iranian IPs).
-# Functions return 1 + set ASSISTANT_FAIL; maybe_assistant warns, logs, writes ASSISTANT_ENABLED=0 and continues.
-OLLAMA_INSTALL_URL="${OLLAMA_INSTALL_URL:-https://ollama.com/install.sh}"
-OLLAMA_REGISTRY_URL="${OLLAMA_REGISTRY_URL:-https://registry.ollama.ai/v2/}"
-ASSISTANT_FAIL=""
+# --- دستیار هوشمند صوتی (اختیاری): scripts/install_assistant.sh ---
+# بدون ollama.com: Ollama از GitHub releases، مدل GGUF از hf-mirror.com/huggingface.co، Whisper/Piper از PyPI + HF.
+# Every failure is non-fatal: warn in Persian, log, keep ASSISTANT_ENABLED=0 and continue the main install.
+ASSISTANT_BUNDLE="$ASSISTANT_BUNDLE_ARG"   # --assistant-offline FILE.tar|DIR
 
 http_code() {  # http_code URL → HTTP status after redirects ("000" = no connection / DNS / timeout); fails fast
   local code
@@ -749,114 +744,43 @@ http_code() {  # http_code URL → HTTP status after redirects ("000" = no conne
   printf '%s' "${code:-000}"
 }
 
-assistant_reachable() {  # quick check before any big download
-  local code
-  if ! need_cmd curl; then ASSISTANT_FAIL="curl نصب نیست"; return 1; fi
-  code="$(http_code "$OLLAMA_INSTALL_URL")"
-  printf 'reachability %s → %s\n' "$OLLAMA_INSTALL_URL" "$code" >>"$INSTALL_LOG" 2>/dev/null || true
-  if [[ "$code" == 403 ]]; then ASSISTANT_FAIL="دسترسی به سایت Ollama ممکن نیست، کد 403: آی پی این سرور مسدود است"; return 1; fi
-  if [[ ! "$code" =~ ^2 ]]; then ASSISTANT_FAIL="دسترسی به سایت Ollama ممکن نیست، کد ${code}"; return 1; fi
-  return 0
-}
-
-install_ollama_binary() {
-  local tmp rc=0
-  if need_cmd ollama; then
-    log "✓ Ollama از قبل نصب است: $(command -v ollama)"
-    return 0
-  fi
-  assistant_reachable || return 1
-  tmp="$(mktemp "${TMPDIR:-/tmp}/ollama_install.XXXXXX")"
-  if ! run_long "دریافت نصب کننده Ollama" curl -fsSL --connect-timeout 10 --max-time 120 -o "$tmp" "$OLLAMA_INSTALL_URL"; then
-    rm -f "$tmp"; ASSISTANT_FAIL="دریافت نصب کننده از سایت Ollama ناموفق بود؛ دسترسی به سایت Ollama ممکن نیست"; return 1
-  fi
-  run_long "نصب Ollama (ممکن است چند دقیقه طول بکشد)" timeout 1800 sh "$tmp" || rc=$?
-  rm -f "$tmp"
-  if (( rc != 0 )) || ! need_cmd ollama; then
-    ASSISTANT_FAIL="نصب Ollama ناموفق بود، کد ${rc}؛ احتمالا دانلود از سایت Ollama یا GitHub ممکن نیست"; return 1
-  fi
-  ok "Ollama نصب شد"
-}
-
-ensure_ollama_running() {
-  # Best-effort: if API answers, ok; else try serve in background
-  if curl -fsS --max-time 3 "$DEFAULT_OLLAMA_URL/api/tags" >/dev/null 2>&1; then
-    log "✓ سرویس Ollama پاسخ می دهد ($DEFAULT_OLLAMA_URL)"
-    return 0
-  fi
-  if need_cmd systemctl && systemctl is-active --quiet ollama 2>/dev/null; then
-    sleep 2
-    if curl -fsS --max-time 3 "$DEFAULT_OLLAMA_URL/api/tags" >/dev/null 2>&1; then
-      log "✓ سرویس systemd ollama فعال است"
-      return 0
-    fi
-  fi
-  warn "Ollama روی $DEFAULT_OLLAMA_URL پاسخ نداد — تلاش برای ollama serve در پس زمینه..."
-  nohup ollama serve >/tmp/ollama-serve-install.log 2>&1 &
-  sleep 3
-  if curl -fsS --max-time 5 "$DEFAULT_OLLAMA_URL/api/tags" >/dev/null 2>&1; then
-    log "✓ ollama serve شروع شد"
-    return 0
-  fi
-  ASSISTANT_FAIL="سرویس Ollama روی این سرور بالا نیامد"
-  return 1
-}
-
-pull_ollama_model() {
-  local model="${1:-$DEFAULT_OLLAMA_MODEL}" code
-  if ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qx -e "$model" -e "$model:latest"; then
-    ok "مدل $model از قبل موجود است"; return 0
-  fi
-  code="$(http_code "$OLLAMA_REGISTRY_URL")"   # registry answers 404 on /v2/ when reachable
-  printf 'reachability %s → %s\n' "$OLLAMA_REGISTRY_URL" "$code" >>"$INSTALL_LOG" 2>/dev/null || true
-  if [[ "$code" == 000 || "$code" == 403 || "$code" =~ ^5 ]]; then
-    ASSISTANT_FAIL="دسترسی به مخزن مدل های Ollama ممکن نیست، کد ${code}"; return 1
-  fi
-  if run_long "دریافت مدل $model (چند گیگابایت)" timeout 3600 ollama pull "$model"; then
-    ok "مدل $model آماده است"; return 0
-  fi
-  ASSISTANT_FAIL="دریافت مدل $model ناموفق بود"
-  return 1
-}
-
-setup_assistant() {
-  local root="$1"
-  local model="${OLLAMA_MODEL:-$DEFAULT_OLLAMA_MODEL}"
-  log "━━━━━━━━ نصب دستیار هوشمند (Ollama محلی) ━━━━━━━━"
-  install_ollama_binary || return 1
-  ensure_ollama_running || return 1
-  pull_ollama_model "$model" || return 1
-  write_ollama_env "$root" "$model"
-  log "راهنما: docs/راهنمای_نصب_دستیار_هوشمند.pdf"
-}
-
-# Ollama helpers write through env_set (keeps chmod 600)
-upsert_env_var() { env_set "$2" "$3"; }
-
 assistant_failed() {  # never aborts the install
   local reason="${1:-نامشخص}"
-  warn "دستیار هوشمند نصب نشد (${reason}). ربات بدون دستیار کار می کند. بعدا می توانید دوباره امتحان کنید: bash install.sh --with-assistant"
-  warn "از سرور داخل ایران، نصب Ollama و مدل فقط با پروکسی (HTTPS_PROXY=...) یا نصب دستی ممکن است."
+  warn "دستیار هوشمند کامل نصب نشد (${reason}). ربات بدون دستیار کار می کند."
+  warn "دوباره امتحان (دانلودها ادامه پیدا می کنند): cd $WORKDIR && sudo bash install.sh --with-assistant"
+  warn "یا با بسته آفلاین: sudo bash install.sh --assistant-offline /root/nasoz_assistant_….tar"
+  warn "بررسی دسترسی منابع: bash scripts/install_assistant.sh --check"
   printf 'ASSISTANT FAILED (non-fatal): %s\n' "$reason" >>"$INSTALL_LOG" 2>/dev/null || true
   env_set ASSISTANT_ENABLED 0 || true
 }
 
+run_assistant_installer() {  # → 0 ready, 3 partial, other = unexpected; never exits the caller
+  local script args=() rc=0
+  script="$(dirname "$SELF_SCRIPT")/install_assistant.sh"   # the copy next to this installer (offline bundle: newer)
+  [[ -f "$script" ]] || script="$WORKDIR/scripts/install_assistant.sh"
+  [[ -f "$script" ]] || { assistant_failed "فایل scripts/install_assistant.sh پیدا نشد"; return 0; }
+  [[ -n "$ASSISTANT_BUNDLE" ]] && args+=(--offline "$ASSISTANT_BUNDLE")
+  (( DRY_RUN )) && args+=(--dry-run)
+  local -a envs=(WORKDIR="$WORKDIR" _NASOZ_INSTALL_LOG="$INSTALL_LOG" _NASOZ_ASSIST_NESTED=1) v
+  for v in $(compgen -e); do   # sources/paths/proxy survive sudo (sudo resets the environment)
+    case "$v" in ASSISTANT_*|HTTPS_PROXY|HTTP_PROXY|NO_PROXY|https_proxy|http_proxy|no_proxy|ALL_PROXY|NO_COLOR|TERM) envs+=("$v=${!v}") ;; esac
+  done
+  if (( EUID == 0 )) || ! have_root; then   # root, or no sudo: per-user install (~/.local, no systemd)
+    env "${envs[@]}" bash "$script" "${args[@]}" || rc=$?
+  else
+    maybe_sudo env "${envs[@]}" bash "$script" "${args[@]}" || rc=$?
+  fi
+  case "$rc" in
+    0) ;;
+    3) assistant_failed "بعضی بخش ها نصب نشدند؛ خلاصه بالا را ببینید" ;;
+    *) assistant_failed "خطای غیرمنتظره در نصب کننده دستیار (کد $rc)" ;;
+  esac
+  return 0
+}
+
 maybe_assistant() {
   if (( DO_ASSISTANT != 1 )); then log "دستیار هوشمند نصب نشد (بعدا: bash install.sh --with-assistant)"; return 0; fi
-  if (( DRY_RUN )); then
-    if need_cmd ollama || assistant_reachable; then log "[dry-run] نصب Ollama و دریافت مدل ${OLLAMA_MODEL:-$DEFAULT_OLLAMA_MODEL} رد شد (سایت Ollama در دسترس است)"
-    else assistant_failed "$ASSISTANT_FAIL"; fi
-    return 0
-  fi
-  ASSISTANT_FAIL=""
-  # subshell: even an unexpected die/exit inside cannot stop the main install (EXIT trap is not inherited)
-  if ( set +e; setup_assistant "$WORKDIR" || { printf '%s' "$ASSISTANT_FAIL" >"$WORKDIR/data/.assistant_fail" 2>/dev/null; exit 1; } ); then
-    rm -f "$WORKDIR/data/.assistant_fail"
-    return 0
-  fi
-  local reason; reason="$(cat "$WORKDIR/data/.assistant_fail" 2>/dev/null || true)"; rm -f "$WORKDIR/data/.assistant_fail"
-  assistant_failed "${reason:-خطای غیرمنتظره در نصب}"
-  return 0
+  run_assistant_installer
 }
 
 # ========== interactive main menu (no flags + terminal; flags always skip it) ==========
@@ -965,6 +889,15 @@ menu_status() {
     log ""; log "سرویس ها:"
     svc_line "$BOT_SERVICE" "ربات" bot main.py
     svc_line "$WEB_SERVICE" "پنل وب" web web_main.py
+    log ""; log "دستیار هوشمند (اختیاری؛ نصب: گزینه 10):"
+    local om; om="$(WORKDIR="$d" env_get OLLAMA_MODEL)"
+    if need_cmd ollama; then log "  ✓ Ollama:       $(command -v ollama)"; else log "  ✗ Ollama:       نصب نیست"; fi
+    if curl -fsS --max-time 3 http://127.0.0.1:11434/api/tags 2>/dev/null | grep -q "\"${om:-qwen2.5:3b}\""; then
+      log "  ✓ مدل زبانی:    ${om:-qwen2.5:3b} (سرویس 127.0.0.1:11434 فعال)"
+    else log "  ✗ مدل زبانی:    ${om:-qwen2.5:3b} آماده نیست"; fi
+    if [[ -d "$d/.venv/lib" ]] && compgen -G "$d/.venv/lib/python3*/site-packages/faster_whisper" >/dev/null; then
+      log "  ✓ Whisper:      faster-whisper نصب است"; else log "  ✗ Whisper:      faster-whisper نصب نیست"; fi
+    if need_cmd piper; then log "  ✓ Piper:        $(command -v piper)"; else log "  - Piper:        نصب نیست (اختیاری)"; fi
   fi
   log ""; log "اتصال ها:"
   url_check "tapi.bale.ai" "https://tapi.bale.ai/"
@@ -1114,6 +1047,24 @@ menu_install() {
   fi
 }
 
+# ---- 10) voice assistant (optional) ----
+menu_assistant() {
+  menu_need_install || return 0
+  local def="" src="" f
+  for f in "${OFFLINE_SRC:+$(dirname "$OFFLINE_SRC")}"/nasoz_assistant_*.tar /root/nasoz_assistant_*.tar "$PWD"/nasoz_assistant_*.tar; do
+    [[ -e "$f" ]] && { def="$f"; break; }
+  done
+  log "دستیار هوشمند صوتی: Ollama (از GitHub) + مدل زبانی (از hf-mirror.com / huggingface.co) + Whisper و Piper (از PyPI)."
+  log "  حدود ۳ گیگ دانلود و ۴ گیگ حافظه لازم است؛ هر خطا فقط هشدار است و ربات بدون دستیار کار می کند."
+  src="$(ask "مسیر بسته آفلاین دستیار (nasoz_assistant_….tar)؛ خالی = دانلود آنلاین" "$def")"
+  if [[ -n "$src" ]]; then
+    [[ -e "$src" ]] || { warn "بسته پیدا نشد: $src"; return 0; }
+    menu_run "$MENU_DIR/scripts/install.sh" --assistant-offline "$src" "${MENU_DRY[@]}"
+  else
+    menu_run "$MENU_DIR/scripts/install.sh" --with-assistant "${MENU_DRY[@]}"
+  fi
+}
+
 main_menu() {
   local choice
   while :; do
@@ -1133,6 +1084,7 @@ main_menu() {
   7) مدیریت سرویس ها
   8) مشاهده لاگ ها
   9) تغییر تنظیمات (.env)
+ 10) نصب دستیار هوشمند (اختیاری)
   0) خروج
 
 MENU
@@ -1150,9 +1102,10 @@ MENU
       7) menu_services ;;
       8) menu_logs ;;
       9) if menu_need_install; then menu_run "$MENU_DIR/scripts/install.sh" --reconfigure "${MENU_DRY[@]}"; fi ;;
+      10) menu_assistant ;;
       0|q|Q|exit) log "خروج."; break ;;
       "") continue ;;
-      *) warn "گزینه نامعتبر: $choice (0 تا 9)"; continue ;;
+      *) warn "گزینه نامعتبر: $choice (0 تا 10)"; continue ;;
     esac
     menu_pause
   done
@@ -1222,6 +1175,21 @@ fi
 if (( DO_WEB_LOGIN )); then
   seed_web_login 0
   if (( WEB_LOGIN_READY )); then log "نام کاربری: $(env_get WEB_ADMIN_USERNAME) — رمز: grep WEB_ADMIN_PASSWORD $WORKDIR/.env"; fi
+  trap - EXIT; exit 0
+fi
+# --with-assistant / --assistant-offline on an installed server (no other action) → only the assistant
+if (( DO_ASSISTANT == 1 && ! EXPLICIT_INSTALL && ! DO_UPDATE && ! DO_REPAIR && ! DO_START_ONLY && ! DO_SYSUP_ONLY && ! RECONFIGURE && ! _want_restore )) \
+   && [[ -z "$RESTORE_FILE" ]] && env_configured; then
+  STEP_TOTAL=2; STEP_N=0
+  step "دستیار هوشمند صوتی"; run_assistant_installer
+  step "ری استارت ربات (خواندن .env جدید)"
+  if (( DRY_RUN )); then log "[dry-run] ری استارت ربات رد شد"
+  elif systemd_installed && have_systemd && systemctl is-active --quiet "$BOT_SERVICE" 2>/dev/null; then
+    maybe_sudo systemctl restart "$BOT_SERVICE" && ok "سرویس $BOT_SERVICE ری استارت شد"
+  elif pid_alive "$WORKDIR/data/bot.pid"; then nohup_restart bot main.py; ok "ربات (nohup) ری استارت شد"
+  else log "ربات در حال اجرا نیست؛ بعدا استارت کنید: bash install.sh --start"
+  fi
+  log "لاگ کامل: $INSTALL_LOG"
   trap - EXIT; exit 0
 fi
 if (( _want_restore )); then die "مسیر فایل بک آپ را بدهید: bash install.sh --restore nasoz_backup_….zip"; fi
