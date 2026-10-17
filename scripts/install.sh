@@ -697,23 +697,45 @@ write_ollama_env() {
   log "✓ متغیرهای OLLAMA_* در .env نوشته شد (مدل: $model)"
 }
 
+# Optional assistant: EVERY failure here is non-fatal (e.g. ollama.com answers 403 to Iranian IPs).
+# Functions return 1 + set ASSISTANT_FAIL; maybe_assistant warns, logs, writes ASSISTANT_ENABLED=0 and continues.
+OLLAMA_INSTALL_URL="${OLLAMA_INSTALL_URL:-https://ollama.com/install.sh}"
+OLLAMA_REGISTRY_URL="${OLLAMA_REGISTRY_URL:-https://registry.ollama.ai/v2/}"
+ASSISTANT_FAIL=""
+
+http_code() {  # http_code URL → HTTP status after redirects ("000" = no connection / DNS / timeout); fails fast
+  local code
+  code="$(curl -sSL -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 "$1" 2>/dev/null)" || true
+  printf '%s' "${code:-000}"
+}
+
+assistant_reachable() {  # quick check before any big download
+  local code
+  if ! need_cmd curl; then ASSISTANT_FAIL="curl نصب نیست"; return 1; fi
+  code="$(http_code "$OLLAMA_INSTALL_URL")"
+  printf 'reachability %s → %s\n' "$OLLAMA_INSTALL_URL" "$code" >>"$INSTALL_LOG" 2>/dev/null || true
+  if [[ "$code" == 403 ]]; then ASSISTANT_FAIL="دسترسی به سایت Ollama ممکن نیست، کد 403: آی پی این سرور مسدود است"; return 1; fi
+  if [[ ! "$code" =~ ^2 ]]; then ASSISTANT_FAIL="دسترسی به سایت Ollama ممکن نیست، کد ${code}"; return 1; fi
+  return 0
+}
+
 install_ollama_binary() {
+  local tmp rc=0
   if need_cmd ollama; then
     log "✓ Ollama از قبل نصب است: $(command -v ollama)"
     return 0
   fi
-  log "نصب Ollama ..."
-  if ! need_cmd curl; then
-    if need_cmd apt-get; then
-      maybe_sudo apt-get update -y
-      maybe_sudo apt-get install -y curl
-    else
-      die "curl برای نصب Ollama لازم است."
-    fi
+  assistant_reachable || return 1
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ollama_install.XXXXXX")"
+  if ! run_long "دریافت نصب کننده Ollama" curl -fsSL --connect-timeout 10 --max-time 120 -o "$tmp" "$OLLAMA_INSTALL_URL"; then
+    rm -f "$tmp"; ASSISTANT_FAIL="دریافت نصب کننده از سایت Ollama ناموفق بود؛ دسترسی به سایت Ollama ممکن نیست"; return 1
   fi
-  curl -fsSL https://ollama.com/install.sh | sh
-  need_cmd ollama || die "نصب Ollama ناموفق بود (دستور ollama پیدا نشد)."
-  log "✓ Ollama نصب شد"
+  run_long "نصب Ollama (ممکن است چند دقیقه طول بکشد)" timeout 1800 sh "$tmp" || rc=$?
+  rm -f "$tmp"
+  if (( rc != 0 )) || ! need_cmd ollama; then
+    ASSISTANT_FAIL="نصب Ollama ناموفق بود، کد ${rc}؛ احتمالا دانلود از سایت Ollama یا GitHub ممکن نیست"; return 1
+  fi
+  ok "Ollama نصب شد"
 }
 
 ensure_ollama_running() {
@@ -736,19 +758,24 @@ ensure_ollama_running() {
     log "✓ ollama serve شروع شد"
     return 0
   fi
-  warn "سرویس Ollama هنوز آماده نیست؛ بعدا «ollama serve» یا systemctl را بررسی کنید."
+  ASSISTANT_FAIL="سرویس Ollama روی این سرور بالا نیامد"
   return 1
 }
 
 pull_ollama_model() {
-  local model="${1:-$DEFAULT_OLLAMA_MODEL}"
-  log "کشیدن مدل Ollama: $model ..."
-  if ollama pull "$model"; then
-    log "✓ مدل $model آماده است"
-    ollama list || true
-    return 0
+  local model="${1:-$DEFAULT_OLLAMA_MODEL}" code
+  if ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qx -e "$model" -e "$model:latest"; then
+    ok "مدل $model از قبل موجود است"; return 0
   fi
-  warn "کشیدن مدل $model ناموفق بود — دستی: ollama pull $model"
+  code="$(http_code "$OLLAMA_REGISTRY_URL")"   # registry answers 404 on /v2/ when reachable
+  printf 'reachability %s → %s\n' "$OLLAMA_REGISTRY_URL" "$code" >>"$INSTALL_LOG" 2>/dev/null || true
+  if [[ "$code" == 000 || "$code" == 403 || "$code" =~ ^5 ]]; then
+    ASSISTANT_FAIL="دسترسی به مخزن مدل های Ollama ممکن نیست، کد ${code}"; return 1
+  fi
+  if run_long "دریافت مدل $model (چند گیگابایت)" timeout 3600 ollama pull "$model"; then
+    ok "مدل $model آماده است"; return 0
+  fi
+  ASSISTANT_FAIL="دریافت مدل $model ناموفق بود"
   return 1
 }
 
@@ -756,9 +783,9 @@ setup_assistant() {
   local root="$1"
   local model="${OLLAMA_MODEL:-$DEFAULT_OLLAMA_MODEL}"
   log "━━━━━━━━ نصب دستیار هوشمند (Ollama محلی) ━━━━━━━━"
-  install_ollama_binary
-  ensure_ollama_running || true
-  pull_ollama_model "$model" || true
+  install_ollama_binary || return 1
+  ensure_ollama_running || return 1
+  pull_ollama_model "$model" || return 1
   write_ollama_env "$root" "$model"
   log "راهنما: docs/راهنمای_نصب_دستیار_هوشمند.pdf"
 }
@@ -766,9 +793,30 @@ setup_assistant() {
 # Ollama helpers write through env_set (keeps chmod 600)
 upsert_env_var() { env_set "$2" "$3"; }
 
+assistant_failed() {  # never aborts the install
+  local reason="${1:-نامشخص}"
+  warn "دستیار هوشمند نصب نشد (${reason}). ربات بدون دستیار کار می کند. بعدا می توانید دوباره امتحان کنید: bash install.sh --with-assistant"
+  warn "از سرور داخل ایران، نصب Ollama و مدل فقط با پروکسی (HTTPS_PROXY=...) یا نصب دستی ممکن است."
+  printf 'ASSISTANT FAILED (non-fatal): %s\n' "$reason" >>"$INSTALL_LOG" 2>/dev/null || true
+  env_set ASSISTANT_ENABLED 0 || true
+}
+
 maybe_assistant() {
-  if (( DO_ASSISTANT == 1 )) && (( ! DRY_RUN )); then setup_assistant "$WORKDIR"
-  else log "دستیار هوشمند نصب نشد (بعدا: bash install.sh --with-assistant)"; fi
+  if (( DO_ASSISTANT != 1 )); then log "دستیار هوشمند نصب نشد (بعدا: bash install.sh --with-assistant)"; return 0; fi
+  if (( DRY_RUN )); then
+    if need_cmd ollama || assistant_reachable; then log "[dry-run] نصب Ollama و دریافت مدل ${OLLAMA_MODEL:-$DEFAULT_OLLAMA_MODEL} رد شد (سایت Ollama در دسترس است)"
+    else assistant_failed "$ASSISTANT_FAIL"; fi
+    return 0
+  fi
+  ASSISTANT_FAIL=""
+  # subshell: even an unexpected die/exit inside cannot stop the main install (EXIT trap is not inherited)
+  if ( set +e; setup_assistant "$WORKDIR" || { printf '%s' "$ASSISTANT_FAIL" >"$WORKDIR/data/.assistant_fail" 2>/dev/null; exit 1; } ); then
+    rm -f "$WORKDIR/data/.assistant_fail"
+    return 0
+  fi
+  local reason; reason="$(cat "$WORKDIR/data/.assistant_fail" 2>/dev/null || true)"; rm -f "$WORKDIR/data/.assistant_fail"
+  assistant_failed "${reason:-خطای غیرمنتظره در نصب}"
+  return 0
 }
 
 # ========== main ==========
