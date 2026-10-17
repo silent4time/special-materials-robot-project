@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bootstrap نصب بازوی مواد (بله) → scripts/install.sh
-# نصب یک‌خطی (پیشنهادی):
+# نصب یک خطی (پیشنهادی):
 #   bash <(curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh)
 # یا:
 #   curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash
@@ -13,7 +13,7 @@ REPO_NAME="special-materials-robot-project"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 
 # اگر stdin ترمینال نیست (curl | bash) ولی ترمینال کنترلی داریم، ورودی را از /dev/tty بخوان
-# تا ویزارد بتواند سؤال بپرسد. (اسکریپت قبلاً کامل در bash بارگذاری شده چون همه‌چیز داخل main است.)
+# تا ویزارد بتواند سؤال بپرسد. (اسکریپت قبلا کامل در bash بارگذاری شده چون همه چیز داخل main است.)
 reattach_tty() {
   if [[ ! -t 0 ]] && [[ "${NONINTERACTIVE:-0}" != "1" ]] && (exec </dev/tty) 2>/dev/null; then
     exec </dev/tty
@@ -48,8 +48,8 @@ main() {
 
   local dest="${INSTALL_DIR:-$PWD/$REPO_NAME}"
   if [[ -f "$dest/scripts/install.sh" ]]; then
-    echo "ریپو موجود است: $dest (به‌روزرسانی امن با git pull --ff-only)"
-    git -C "$dest" pull --ff-only || echo "⚠ git pull ناموفق بود؛ با نسخهٔ موجود ادامه می‌دهیم." >&2
+    echo "ریپو موجود است: $dest (به روزرسانی امن با git pull --ff-only)"
+    git -C "$dest" pull --ff-only || echo "⚠ git pull ناموفق بود؛ با نسخه موجود ادامه می دهیم." >&2
   else
     echo "کلون $REPO_URL → $dest ..."
     git clone --branch "$REPO_BRANCH" "$REPO_URL" "$dest"

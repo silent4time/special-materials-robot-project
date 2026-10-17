@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# نصب و راه‌اندازی کامل بازوی مواد (بله) + پنل وب روی سرور لینوکس (Ubuntu 22.04/24.04، Debian 12)
+# نصب و راه اندازی کامل بازوی مواد (بله) + پنل وب روی سرور لینوکس (Ubuntu 22.04/24.04، Debian 12)
 # Usage: bash install.sh [options]   (--help)
 set -euo pipefail
 
@@ -23,34 +23,34 @@ usage() {
   cat <<'HELP'
 Usage: bash install.sh [options]
 
-  (بدون پرچم)        نصب کامل: بسته‌های سیستم + venv + ویزارد .env + سرویس‌ها + تست سلامت
-  --update           به‌روزرسانی برنامه: پشتیبان DB + git pull + pip install -r requirements + migrate
-                     + restart سرویس‌ها + تست سلامت (.env و data حفظ می‌شود)
-  --system-upgrade   ارتقای سیستم‌عامل: apt-get update && apt-get upgrade -y (غیرتعاملی، فایل‌های
-                     پیکربندی موجود حفظ می‌شوند) + restart سرویس‌ها
+  (بدون پرچم)        نصب کامل: بسته های سیستم + venv + ویزارد .env + سرویس ها + تست سلامت
+  --update           به روزرسانی برنامه: پشتیبان DB + git pull + pip install -r requirements + migrate
+                     + restart سرویس ها + تست سلامت (.env و data حفظ می شود)
+  --system-upgrade   ارتقای سیستم عامل: apt-get update && apt-get upgrade -y (غیرتعاملی، فایل های
+                     پیکربندی موجود حفظ می شوند) + restart سرویس ها
   --full-update      هر دو: --system-upgrade و سپس --update
   --no-system-upgrade  در نصب تازه ارتقای سیستم را نپرس/انجام نده
-  --offline DIR|FILE.tar.gz  نصب/به‌روزرسانی بدون GitHub/PyPI از بستهٔ آفلاین (wheels/ و کد)؛
-                     با --update کد جایگزین می‌شود (.env و data/ می‌ماند). ساخت بسته: bash scripts/build_offline_bundle.sh
-  --restore FILE.zip بازگردانی بک‌آپ (فقط سرور): توقف سرویس‌ها ← بک‌آپ خودکار «پیش از بازگردانی» ←
+  --offline DIR|FILE.tar.gz  نصب/به روزرسانی بدون GitHub/PyPI از بسته آفلاین (wheels/ و کد)؛
+                     با --update کد جایگزین می شود (.env و data/ می ماند). ساخت بسته: bash scripts/build_offline_bundle.sh
+  --restore FILE.zip بازگردانی بک آپ (فقط سرور): توقف سرویس ها ← بک آپ خودکار «پیش از بازگردانی» ←
                      بررسی manifest/sha256 ← بازگردانی DB + uploads + bot_assets ← migrate ← استارت ← تست سلامت
-  --repair           فقط خودترمیم: بسته‌های apt (tesseract و ...) + venv + restart
-  --reconfigure      ویزارد .env را دوباره اجرا کن (مقادیر فعلی پیش‌فرض‌اند)
+  --repair           فقط خودترمیم: بسته های apt (tesseract و ...) + venv + restart
+  --reconfigure      ویزارد .env را دوباره اجرا کن (مقادیر فعلی پیش فرض اند)
   --web-login        ساخت/بازنشانی ورود پنل وب برای مالک (بعد از اولین /start)
-  --systemd          نصب سرویس‌های systemd بدون پرسش      --no-systemd   اجرا با nohup
+  --systemd          نصب سرویس های systemd بدون پرسش      --no-systemd   اجرا با nohup
   --start            فقط (دوباره) استارت ربات و وب
-  --with-assistant / --no-assistant   دستیار هوشمند Ollama (پیش‌فرض: نصب نشود)
-  --seed-admin       (قدیمی) — ساخت ورود وب برای مالکِ ADMIN_BALE_USER_ID
-  --dry-run          هیچ چیز نصب/استارت نمی‌شود؛ بسته‌ها و فایل‌های systemd فقط چاپ می‌شوند
+  --with-assistant / --no-assistant   دستیار هوشمند Ollama (پیش فرض: نصب نشود)
+  --seed-admin       (قدیمی) — ساخت ورود وب برای مالک ADMIN_BALE_USER_ID
+  --dry-run          هیچ چیز نصب/استارت نمی شود؛ بسته ها و فایل های systemd فقط چاپ می شوند
   -h, --help
 
 متغیرهای محیطی برای نصب خودکار (بدون ترمینال):
   BALE_BOT_TOKEN  BOT_USERNAME  ADMIN_BALE_USER_ID  WEB_PORT(8000)  WEB_HOST(0.0.0.0)
   WEB_ADMIN_USERNAME(admin)  WEB_ADMIN_PASSWORD(خودکار)  CRITICAL_DAYS(3)
   INSTALL_SYSTEMD=y|n  NONINTERACTIVE=1  SKIP_GETME=1  SKIP_APT=1  INSTALL_DIR=/path
-  SERVICE_USER=کاربر‌سرویس (پیش‌فرض: SUDO_USER یا کاربر فعلی)
+  SERVICE_USER=کاربر سرویس (پیش فرض: SUDO_USER یا کاربر فعلی)
 
-مالک با اولین /start: اگر ADMIN_BALE_USER_ID خالی باشد، اولین کسی که در بله به ربات /start بزند مالک می‌شود.
+مالک با اولین /start: اگر ADMIN_BALE_USER_ID خالی باشد، اولین کسی که در بله به ربات /start بزند مالک می شود.
 HELP
 }
 
@@ -146,7 +146,7 @@ on_exit() {
   local rc=$?
   if (( rc != 0 )); then
     printf '\n%s✗ نصب با خطا متوقف شد (کد %s)%s\n' "$C_R" "$(fa_digits "$rc")" "$C_0" >&2
-    [[ -n "$STEP_NAME" ]] && printf '  مرحلهٔ ناموفق: [%s/%s] %s\n' "$(fa_digits "$STEP_N")" "$(fa_digits "$STEP_TOTAL")" "$STEP_NAME" >&2
+    [[ -n "$STEP_NAME" ]] && printf '  مرحله ناموفق: [%s/%s] %s\n' "$(fa_digits "$STEP_N")" "$(fa_digits "$STEP_TOTAL")" "$STEP_NAME" >&2
     printf '  لاگ کامل: %s\n  اجرای دوباره امن است: bash install.sh\n' "$INSTALL_LOG" >&2
   fi
 }
@@ -188,9 +188,9 @@ no_tty_die() {
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✗ نصب متوقف شد: ترمینال تعاملی پیدا نشد و توکن بازو هم داده نشده است.
-  (نصب بدون توکن یک ربات خراب می‌سازد؛ برای همین ادامه نمی‌دهیم.)
+  (نصب بدون توکن یک ربات خراب می سازد؛ برای همین ادامه نمی دهیم.)
 
-یکی از این راه‌ها را در یک ترمینال SSH واقعی اجرا کنید:
+یکی از این راه ها را در یک ترمینال SSH واقعی اجرا کنید:
 
   1) $ONE_LINER
 
@@ -231,22 +231,22 @@ missing_apt_pkgs() {
   return 0
 }
 ensure_system_packages() {
-  if [[ "${SKIP_APT:-0}" == "1" ]]; then warn "SKIP_APT=1 — نصب بسته‌های سیستم رد شد."; return 0; fi
+  if [[ "${SKIP_APT:-0}" == "1" ]]; then warn "SKIP_APT=1 — نصب بسته های سیستم رد شد."; return 0; fi
   if ! need_cmd apt-get || ! need_cmd dpkg; then
-    warn "apt-get پیدا نشد؛ این بسته‌ها را دستی نصب کنید: ${APT_PKGS[*]}"
+    warn "apt-get پیدا نشد؛ این بسته ها را دستی نصب کنید: ${APT_PKGS[*]}"
     return 0
   fi
   local missing=()
   mapfile -t missing < <(missing_apt_pkgs)
-  if ((${#missing[@]} == 0)); then ok "بسته‌های سیستم کامل است (python3-venv، tesseract fas/eng، ...)"; return 0; fi
+  if ((${#missing[@]} == 0)); then ok "بسته های سیستم کامل است (python3-venv، tesseract fas/eng، ...)"; return 0; fi
   if (( DRY_RUN )); then log "[dry-run] apt-get install -y ${missing[*]}"; return 0; fi
-  log "نصب بسته‌های سیستم: ${missing[*]}"
+  log "نصب بسته های سیستم: ${missing[*]}"
   if [[ -n "$OFFLINE_DIR" ]]; then
     if run_long "apt-get update (حداکثر ۹۰ ثانیه)" maybe_sudo env DEBIAN_FRONTEND=noninteractive timeout 90 apt-get update -y -o Acquire::http::Timeout=20 \
-       && run_long "نصب ${#missing[@]} بستهٔ سیستمی" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"; then
-      ok "بسته‌های سیستم نصب شد"; return 0
+       && run_long "نصب ${#missing[@]} بسته سیستمی" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"; then
+      ok "بسته های سیستم نصب شد"; return 0
     fi
-    [[ -f "$OFFLINE_DIR/debs/Packages" ]] || die "apt به mirror نرسید و بستهٔ آفلاین .deb ندارد. یک mirror ایرانی در /etc/apt/sources.list تنظیم کنید."
+    [[ -f "$OFFLINE_DIR/debs/Packages" ]] || die "apt به mirror نرسید و بسته آفلاین .deb ندارد. یک mirror ایرانی در /etc/apt/sources.list تنظیم کنید."
     warn "apt به mirror نرسید — نصب از .deb های بسته"
     local lists src; lists="$(mktemp -d)"; mkdir -p "$lists/partial"; src="$lists/offline.list"
     echo "deb [trusted=yes] file:$OFFLINE_DIR/debs ./" > "$src"
@@ -254,12 +254,12 @@ ensure_system_packages() {
     run_long "فهرست .deb های بسته" maybe_sudo apt-get "${o[@]}" update || die "خواندن .deb های بسته ناموفق بود."
     run_long "نصب از .deb های بسته" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get "${o[@]}" install -y --no-install-recommends "${missing[@]}" \
       || die "نصب از .deb های بسته ناموفق بود."
-    ok "بسته‌های سیستم از بستهٔ آفلاین نصب شد"; return 0
+    ok "بسته های سیستم از بسته آفلاین نصب شد"; return 0
   fi
-  run_long "apt-get update" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y || die "به‌روزرسانی فهرست بسته‌ها ناموفق بود."
-  run_long "نصب ${#missing[@]} بستهٔ سیستمی" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}" \
-    || die "نصب بسته‌های سیستمی ناموفق بود."
-  ok "بسته‌های سیستم نصب شد"
+  run_long "apt-get update" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y || die "به روزرسانی فهرست بسته ها ناموفق بود."
+  run_long "نصب ${#missing[@]} بسته سیستمی" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}" \
+    || die "نصب بسته های سیستمی ناموفق بود."
+  ok "بسته های سیستم نصب شد"
 }
 # ---------- system upgrade (apt-get update && apt-get upgrade -y) ----------
 SYSUP_CMD_UPDATE=(env DEBIAN_FRONTEND=noninteractive apt-get update -y)
@@ -272,18 +272,18 @@ system_upgrade() {
     log "[dry-run] ${SYSUP_CMD_UPGRADE[*]}"
     return 0
   fi
-  log "ارتقای سیستم‌عامل (apt-get update && apt-get upgrade -y) ..."
+  log "ارتقای سیستم عامل (apt-get update && apt-get upgrade -y) ..."
   run_long "apt-get update" maybe_sudo "${SYSUP_CMD_UPDATE[@]}" || die "apt-get update ناموفق بود."
   run_long "apt-get upgrade (ممکن است چند دقیقه طول بکشد)" maybe_sudo "${SYSUP_CMD_UPGRADE[@]}" || die "apt-get upgrade ناموفق بود."
-  ok "سیستم‌عامل ارتقا یافت (فایل‌های پیکربندی موجود حفظ شد)"
-  if [[ -f /var/run/reboot-required ]]; then warn "سیستم به ریبوت نیاز دارد (کرنل/کتابخانه‌ها) — در زمان مناسب: sudo reboot"; fi
+  ok "سیستم عامل ارتقا یافت (فایل های پیکربندی موجود حفظ شد)"
+  if [[ -f /var/run/reboot-required ]]; then warn "سیستم به ریبوت نیاز دارد (کرنل/کتابخانه ها) — در زمان مناسب: sudo reboot"; fi
 }
 maybe_system_upgrade() {  # fresh install: offered in the wizard, default yes
   case "$DO_SYSUP" in
     1) system_upgrade ;;
     2) log "ارتقای سیستم رد شد (--no-system-upgrade)" ;;
-    *) if ! interactive || yes_no Y "ارتقای سیستم‌عامل (apt-get update && apt-get upgrade -y) هم انجام شود؟"; then system_upgrade
-       else log "ارتقای سیستم رد شد (بعداً: bash install.sh --system-upgrade)"; fi ;;
+    *) if ! interactive || yes_no Y "ارتقای سیستم عامل (apt-get update && apt-get upgrade -y) هم انجام شود؟"; then system_upgrade
+       else log "ارتقای سیستم رد شد (بعدا: bash install.sh --system-upgrade)"; fi ;;
   esac
 }
 backup_db() {
@@ -306,7 +306,7 @@ check_python() {
   ok "$(python3 -V)"
 }
 check_tesseract() {
-  if ! need_cmd tesseract; then warn "tesseract نصب نیست — OCR عکس‌های تولید کار نمی‌کند (bash install.sh --repair)"; return 0; fi
+  if ! need_cmd tesseract; then warn "tesseract نصب نیست — OCR عکس های تولید کار نمی کند (bash install.sh --repair)"; return 0; fi
   local langs; langs="$(tesseract --list-langs 2>/dev/null | tail -n +2 | tr '\n' ' ')"
   [[ " $langs " == *" fas "* ]] || warn "زبان fas برای tesseract نصب نیست (tesseract-ocr-fas)"
   ok "tesseract: $langs"
@@ -337,22 +337,22 @@ setup_venv() {
   [[ -n "$OFFLINE_DIR" ]] && pipx=(--no-index --find-links "$OFFLINE_DIR/wheels")
   if (( DRY_RUN )); then log "[dry-run] python3 -m venv .venv && pip install ${pipx[*]} -r requirements.txt"; return 0; fi
   if [[ -d "$root/.venv" ]] && ! venv_healthy "$root"; then
-    warn ".venv خراب است (مثلاً بعد از ارتقای python) — ساخت دوباره"
+    warn ".venv خراب است (مثلا بعد از ارتقای python) — ساخت دوباره"
     rm -rf "$root/.venv"
   fi
   if [[ ! -d "$root/.venv" ]]; then
     log "ساخت محیط مجازی .venv ..."
     run_long "ساخت .venv" python3 -m venv "$root/.venv" || { rm -rf "$root/.venv"; die "ساخت venv ناموفق بود. بسته python3-venv را نصب کنید: sudo apt install python3-venv"; }
   fi
-  run_long "به‌روزرسانی pip" "$VENV_PY" -m pip install "${pipx[@]}" -U pip wheel || die "به‌روزرسانی pip ناموفق بود."
-  run_long "نصب وابستگی‌های Python (چند دقیقه)" "$VENV_PY" -m pip install "${pipx[@]}" -r "$root/requirements.txt" \
-    || die "نصب وابستگی‌های Python ناموفق بود."
-  ok "وابستگی‌های Python نصب شد"
+  run_long "به روزرسانی pip" "$VENV_PY" -m pip install "${pipx[@]}" -U pip wheel || die "به روزرسانی pip ناموفق بود."
+  run_long "نصب وابستگی های Python (چند دقیقه)" "$VENV_PY" -m pip install "${pipx[@]}" -r "$root/requirements.txt" \
+    || die "نصب وابستگی های Python ناموفق بود."
+  ok "وابستگی های Python نصب شد"
 }
 verify_imports() {
   local root="$1"
   (( DRY_RUN )) && return 0
-  (cd "$root" && "$VENV_PY" - <<'PY') || die "import ماژول‌های برنامه ناموفق بود (خروجی بالا). bash install.sh --repair"
+  (cd "$root" && "$VENV_PY" - <<'PY') || die "import ماژول های برنامه ناموفق بود (خروجی بالا). bash install.sh --repair"
 import importlib, sys
 mods = ["config", "db.models", "bot", "web.app", "pytesseract", "PIL", "reportlab", "pandas", "openpyxl", "uvicorn", "fastapi"]
 bad = []
@@ -364,7 +364,7 @@ for m in mods:
 if bad:
     print("\n".join(bad), file=sys.stderr); sys.exit(1)
 PY
-  ok "import ماژول‌های اصلی موفق (bot, web, db, OCR, PDF)"
+  ok "import ماژول های اصلی موفق (bot, web, db, OCR, PDF)"
 }
 init_db() {
   local root="$1"
@@ -451,7 +451,7 @@ run_wizard() {
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ویزارد پیکربندی بازوی مواد (بله) + پنل وب
-(Enter = مقدار داخل [ ] پذیرفته می‌شود)
+(Enter = مقدار داخل [ ] پذیرفته می شود)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WIZ
   cur="$(env_get BALE_BOT_TOKEN)"
@@ -460,7 +460,7 @@ WIZ
       token="$(ask_secret "۱) توکن بازو از @botfather (Enter = توکن فعلی …${cur: -4})")"
       token="${token:-$cur}"
     else
-      token="$(ask_secret "۱) توکن بازو از @botfather در بله (مخفی تایپ می‌شود)")"
+      token="$(ask_secret "۱) توکن بازو از @botfather در بله (مخفی تایپ می شود)")"
     fi
     if ! token_format_ok "$token"; then warn "فرمت توکن نامعتبر است (مثل 123456789:AbC-dEf…)."; continue; fi
     if [[ "${SKIP_GETME:-0}" == "1" ]]; then warn "SKIP_GETME=1 — بررسی getMe رد شد."; break; fi
@@ -480,7 +480,7 @@ WIZ
   env_set BOT_USERNAME "$bot_user"
 
   while true; do
-    admin_id="$(ask "۳) شناسه عددی مالک در بله (اختیاری؛ خالی = اولین /start مالک می‌شود)" "$(env_get ADMIN_BALE_USER_ID)")"
+    admin_id="$(ask "۳) شناسه عددی مالک در بله (اختیاری؛ خالی = اولین /start مالک می شود)" "$(env_get ADMIN_BALE_USER_ID)")"
     [[ -z "$admin_id" || "$admin_id" =~ ^[0-9]+$ ]] && break
     warn "فقط عدد."
   done
@@ -497,7 +497,7 @@ WIZ
   done
   env_set WEB_PORT "$port"
   def="$(env_get WEB_HOST)"
-  host="$(ask "۵) آدرس گوش‌دادن وب (0.0.0.0 = از بیرون، 127.0.0.1 = فقط پشت nginx)" "${def:-0.0.0.0}")"
+  host="$(ask "۵) آدرس گوش دادن وب (0.0.0.0 = از بیرون، 127.0.0.1 = فقط پشت nginx)" "${def:-0.0.0.0}")"
   env_set WEB_HOST "$host"
   def="$(env_get WEB_ADMIN_USERNAME)"
   wuser="$(ask "۶) نام کاربری ورود پنل وب" "${def:-admin}")"
@@ -511,7 +511,7 @@ WIZ
   env_set CRITICAL_DAYS "$crit"
 
   if [[ -z "$SYSTEMD_CHOICE" ]] && have_systemd && have_root; then
-    if yes_no Y "۹) سرویس دائمی systemd (روشن‌شدن خودکار بعد از ریبوت) نصب شود؟"; then SYSTEMD_CHOICE=y; else SYSTEMD_CHOICE=n; fi
+    if yes_no Y "۹) سرویس دائمی systemd (روشن شدن خودکار بعد از ریبوت) نصب شود؟"; then SYSTEMD_CHOICE=y; else SYSTEMD_CHOICE=n; fi
   fi
   if (( DO_ASSISTANT == 0 )); then
     if yes_no N "۱۰) دستیار هوشمند محلی (Ollama، چند گیگ دانلود) هم نصب شود؟"; then DO_ASSISTANT=1; else DO_ASSISTANT=2; fi
@@ -523,7 +523,7 @@ ensure_env() {
   if (( DRY_RUN )); then log "[dry-run] ویزارد .env رد شد"; return 0; fi
   if env_configured && (( ! RECONFIGURE )); then
     ok ".env از قبل پیکربندی شده است — حفظ شد"
-    if interactive && [[ -z "${BALE_BOT_TOKEN:-}" ]] && yes_no N "می‌خواهید تنظیمات (.env) را دوباره وارد کنید؟"; then run_wizard; fi
+    if interactive && [[ -z "${BALE_BOT_TOKEN:-}" ]] && yes_no N "می خواهید تنظیمات (.env) را دوباره وارد کنید؟"; then run_wizard; fi
   elif [[ -n "${BALE_BOT_TOKEN:-}" ]]; then
     env_from_vars
   elif interactive; then
@@ -557,7 +557,7 @@ install_units() {
   (( DRY_RUN )) && return 0
   maybe_sudo systemctl daemon-reload
   maybe_sudo systemctl enable "$BOT_SERVICE" "$WEB_SERVICE" >/dev/null 2>&1
-  ok "سرویس‌های $BOT_SERVICE و $WEB_SERVICE نصب و برای بوت فعال شدند"
+  ok "سرویس های $BOT_SERVICE و $WEB_SERVICE نصب و برای بوت فعال شدند"
 }
 
 # ---------- nohup fallback ----------
@@ -578,11 +578,11 @@ nohup_restart() {  # nohup_restart name script
   )
 }
 start_services() {
-  if (( DRY_RUN )); then log "[dry-run] استارت سرویس‌ها رد شد"; return 0; fi
+  if (( DRY_RUN )); then log "[dry-run] استارت سرویس ها رد شد"; return 0; fi
   if [[ "$SYSTEMD_CHOICE" == y ]] || systemd_installed; then
     if have_systemd; then
       maybe_sudo systemctl restart "$BOT_SERVICE" "$WEB_SERVICE"
-      ok "سرویس‌ها (re)start شدند"
+      ok "سرویس ها (re)start شدند"
       return 0
     fi
     warn "systemd روی این سیستم فعال نیست — اجرا با nohup"
@@ -643,7 +643,7 @@ print_summary() {
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   if systemd_installed && have_systemd; then
     svc="  وضعیت:      sudo systemctl status $BOT_SERVICE $WEB_SERVICE
-  ری‌استارت:   sudo systemctl restart $BOT_SERVICE $WEB_SERVICE
+  ری استارت:   sudo systemctl restart $BOT_SERVICE $WEB_SERVICE
   توقف:       sudo systemctl stop $BOT_SERVICE $WEB_SERVICE
   لاگ زنده:   journalctl -u $BOT_SERVICE -f    |    journalctl -u $WEB_SERVICE -f
   لاگ برنامه: tail -f $WORKDIR/data/bot.log"
@@ -652,8 +652,8 @@ print_summary() {
   توقف:  kill \$(cat $WORKDIR/data/bot.pid) \$(cat $WORKDIR/data/web.pid)
   لاگ:   tail -f $WORKDIR/data/bot.log $WORKDIR/data/web.log"
   fi
-  if [[ -n "$(env_get ADMIN_BALE_USER_ID)" ]]; then owner_line="شناسه $(env_get ADMIN_BALE_USER_ID) مالک است."; else owner_line="اولین کسی که /start بزند مالک می‌شود."; fi
-  if (( WEB_LOGIN_READY )); then login_line="  ✓ ورود وب فعال است."; else login_line="  ورود وب بعد از اولین /start فعال می‌شود:  cd $WORKDIR && bash install.sh --web-login"; fi
+  if [[ -n "$(env_get ADMIN_BALE_USER_ID)" ]]; then owner_line="شناسه $(env_get ADMIN_BALE_USER_ID) مالک است."; else owner_line="اولین کسی که /start بزند مالک می شود."; fi
+  if (( WEB_LOGIN_READY )); then login_line="  ✓ ورود وب فعال است."; else login_line="  ورود وب بعد از اولین /start فعال می شود:  cd $WORKDIR && bash install.sh --web-login"; fi
   if (( HEALTH_OK )); then status_line="✅ نصب کامل شد؛ ربات و پنل وب در حال اجرا هستند."; else status_line="⚠ نصب انجام شد ولی تست سلامت کامل نبود (هشدارهای بالا را ببینید)."; fi
   cat >&2 <<SUM
 
@@ -664,20 +664,20 @@ $status_line
 ربات بله: @$(env_get BOT_USERNAME)
   در بله به ربات /start بزنید — $owner_line
 
-پنل وب:   http://${ip:-IP-سرور}:${port}/login   (گوش‌دادن روی ${host}:${port})
+پنل وب:   http://${ip:-IP-سرور}:${port}/login   (گوش دادن روی ${host}:${port})
   نام کاربری: ${user}
   رمز:       grep WEB_ADMIN_PASSWORD $WORKDIR/.env
 $login_line
   فایروال: اگر ufw فعال است: sudo ufw allow ${port}/tcp
 
-سرویس‌ها:
+سرویس ها:
 $svc
 
-به‌روزرسانی:  cd $WORKDIR && bash install.sh --update
+به روزرسانی:  cd $WORKDIR && bash install.sh --update
 خودترمیم:    cd $WORKDIR && bash install.sh --repair
 تنظیم دوباره: cd $WORKDIR && bash install.sh --reconfigure
 
-هشدار: فقط یک نمونه از ربات با یک توکن باید اجرا شود؛ نسخه‌های دیگر را خاموش کنید.
+هشدار: فقط یک نمونه از ربات با یک توکن باید اجرا شود؛ نسخه های دیگر را خاموش کنید.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SUM
 }
@@ -719,7 +719,7 @@ install_ollama_binary() {
 ensure_ollama_running() {
   # Best-effort: if API answers, ok; else try serve in background
   if curl -fsS --max-time 3 "$DEFAULT_OLLAMA_URL/api/tags" >/dev/null 2>&1; then
-    log "✓ سرویس Ollama پاسخ می‌دهد ($DEFAULT_OLLAMA_URL)"
+    log "✓ سرویس Ollama پاسخ می دهد ($DEFAULT_OLLAMA_URL)"
     return 0
   fi
   if need_cmd systemctl && systemctl is-active --quiet ollama 2>/dev/null; then
@@ -729,14 +729,14 @@ ensure_ollama_running() {
       return 0
     fi
   fi
-  warn "Ollama روی $DEFAULT_OLLAMA_URL پاسخ نداد — تلاش برای ollama serve در پس‌زمینه..."
+  warn "Ollama روی $DEFAULT_OLLAMA_URL پاسخ نداد — تلاش برای ollama serve در پس زمینه..."
   nohup ollama serve >/tmp/ollama-serve-install.log 2>&1 &
   sleep 3
   if curl -fsS --max-time 5 "$DEFAULT_OLLAMA_URL/api/tags" >/dev/null 2>&1; then
     log "✓ ollama serve شروع شد"
     return 0
   fi
-  warn "سرویس Ollama هنوز آماده نیست؛ بعداً «ollama serve» یا systemctl را بررسی کنید."
+  warn "سرویس Ollama هنوز آماده نیست؛ بعدا «ollama serve» یا systemctl را بررسی کنید."
   return 1
 }
 
@@ -768,7 +768,7 @@ upsert_env_var() { env_set "$2" "$3"; }
 
 maybe_assistant() {
   if (( DO_ASSISTANT == 1 )) && (( ! DRY_RUN )); then setup_assistant "$WORKDIR"
-  else log "دستیار هوشمند نصب نشد (بعداً: bash install.sh --with-assistant)"; fi
+  else log "دستیار هوشمند نصب نشد (بعدا: bash install.sh --with-assistant)"; fi
 }
 
 # ========== main ==========
@@ -797,13 +797,13 @@ if [[ -n "${_NASOZ_REEXEC:-}" && -n "${_NASOZ_OFFLINE_DIR:-}" ]]; then OFFLINE_S
 if [[ -n "$OFFLINE_SRC" ]]; then
   if [[ -f "$OFFLINE_SRC" ]]; then   # bundle.tar.gz → extract next to it
     _x="$(mktemp -d "${TMPDIR:-/tmp}/nasoz_offline.XXXXXX")"
-    tar -xzf "$OFFLINE_SRC" -C "$_x" || die "باز کردن بستهٔ آفلاین ناموفق بود: $OFFLINE_SRC"
+    tar -xzf "$OFFLINE_SRC" -C "$_x" || die "باز کردن بسته آفلاین ناموفق بود: $OFFLINE_SRC"
     OFFLINE_SRC="$(find "$_x" -mindepth 1 -maxdepth 1 -type d | head -n1)"
   fi
-  [[ -d "$OFFLINE_SRC/wheels" && -d "$OFFLINE_SRC/app" ]] || die "بستهٔ آفلاین نامعتبر است (wheels/ و app/ لازم است): $OFFLINE_SRC"
+  [[ -d "$OFFLINE_SRC/wheels" && -d "$OFFLINE_SRC/app" ]] || die "بسته آفلاین نامعتبر است (wheels/ و app/ لازم است): $OFFLINE_SRC"
   OFFLINE_DIR="$(cd "$OFFLINE_SRC" && pwd)"
   if [[ -z "${_NASOZ_REEXEC:-}" && -f "$OFFLINE_DIR/SHA256SUMS" ]]; then
-    (cd "$OFFLINE_DIR" && sha256sum -c --quiet SHA256SUMS) || die "SHA256SUMS بستهٔ آفلاین مطابقت ندارد — فایل خراب است."
+    (cd "$OFFLINE_DIR" && sha256sum -c --quiet SHA256SUMS) || die "SHA256SUMS بسته آفلاین مطابقت ندارد — فایل خراب است."
   fi
   export _NASOZ_OFFLINE_DIR="$OFFLINE_DIR"
   if (( DO_SYSUP == 0 )); then DO_SYSUP=2; fi   # offline: no OS upgrade unless asked (--system-upgrade/--full-update)
@@ -830,37 +830,37 @@ if (( DO_WEB_LOGIN )); then
   if (( WEB_LOGIN_READY )); then log "نام کاربری: $(env_get WEB_ADMIN_USERNAME) — رمز: grep WEB_ADMIN_PASSWORD $WORKDIR/.env"; fi
   trap - EXIT; exit 0
 fi
-if (( _want_restore )); then die "مسیر فایل بک‌آپ را بدهید: bash install.sh --restore nasoz_backup_….zip"; fi
+if (( _want_restore )); then die "مسیر فایل بک آپ را بدهید: bash install.sh --restore nasoz_backup_….zip"; fi
 if [[ -n "$RESTORE_FILE" ]]; then
-  [[ -f "$RESTORE_FILE" ]] || die "فایل بک‌آپ پیدا نشد: $RESTORE_FILE"
+  [[ -f "$RESTORE_FILE" ]] || die "فایل بک آپ پیدا نشد: $RESTORE_FILE"
   RESTORE_FILE="$(cd "$(dirname "$RESTORE_FILE")" && pwd)/$(basename "$RESTORE_FILE")"
   PY="$VENV_PY"; [[ -x "$PY" ]] || PY="python3"
-  step "بررسی فایل بک‌آپ (manifest و sha256)"
-  (cd "$WORKDIR" && "$PY" scripts/restore_backup.py --check "$RESTORE_FILE") || die "فایل بک‌آپ نامعتبر است؛ هیچ تغییری داده نشد."
+  step "بررسی فایل بک آپ (manifest و sha256)"
+  (cd "$WORKDIR" && "$PY" scripts/restore_backup.py --check "$RESTORE_FILE") || die "فایل بک آپ نامعتبر است؛ هیچ تغییری داده نشد."
   if (( DRY_RUN )); then
-    step "توقف سرویس‌ها"; log "[dry-run] توقف $BOT_SERVICE، $WEB_SERVICE یا pid های data/"
-    step "بک‌آپ پیش از بازگردانی و بازگردانی داده‌ها"; log "[dry-run] $PY scripts/restore_backup.py $RESTORE_FILE"
-    step "به‌روزرسانی ساختار پایگاه داده (migrate)"; log "[dry-run] migrate رد شد"
-    step "استارت ربات و وب"; log "[dry-run] استارت سرویس‌ها رد شد"
+    step "توقف سرویس ها"; log "[dry-run] توقف $BOT_SERVICE، $WEB_SERVICE یا pid های data/"
+    step "بک آپ پیش از بازگردانی و بازگردانی داده ها"; log "[dry-run] $PY scripts/restore_backup.py $RESTORE_FILE"
+    step "به روزرسانی ساختار پایگاه داده (migrate)"; log "[dry-run] migrate رد شد"
+    step "استارت ربات و وب"; log "[dry-run] استارت سرویس ها رد شد"
     step "تست سلامت"; log "[dry-run] تمام شد — هیچ چیزی تغییر نکرد."
     trap - EXIT; exit 0
   fi
-  if interactive && ! yes_no N "همهٔ داده‌های فعلی با این بک‌آپ جایگزین می‌شود. ادامه؟"; then die "لغو شد."; fi
-  step "توقف سرویس‌ها"
+  if interactive && ! yes_no N "همه داده های فعلی با این بک آپ جایگزین می شود. ادامه؟"; then die "لغو شد."; fi
+  step "توقف سرویس ها"
   if systemd_installed && have_systemd; then maybe_sudo systemctl stop "$BOT_SERVICE" "$WEB_SERVICE" || true
   else for n in bot web; do if pid_alive "$WORKDIR/data/$n.pid"; then kill "$(cat "$WORKDIR/data/$n.pid")" 2>/dev/null || true; fi; done; sleep 2; fi
-  ok "سرویس‌ها متوقف شدند"
-  step "بک‌آپ پیش از بازگردانی و بازگردانی داده‌ها"
+  ok "سرویس ها متوقف شدند"
+  step "بک آپ پیش از بازگردانی و بازگردانی داده ها"
   # shellcheck disable=SC2016  # $1..$3 expand inside the child bash
-  run_long "بازگردانی" bash -c 'cd "$1" && "$2" scripts/restore_backup.py "$3"' _ "$WORKDIR" "$PY" "$RESTORE_FILE" || warn "بازگردانی ناموفق بود — بک‌آپ «پیش از بازگردانی» در data/backups است."
+  run_long "بازگردانی" bash -c 'cd "$1" && "$2" scripts/restore_backup.py "$3"' _ "$WORKDIR" "$PY" "$RESTORE_FILE" || warn "بازگردانی ناموفق بود — بک آپ «پیش از بازگردانی» در data/backups است."
   [[ -x "$VENV_PY" ]] || VENV_PY="$PY"
-  step "به‌روزرسانی ساختار پایگاه داده (migrate)"; init_db "$WORKDIR"
+  step "به روزرسانی ساختار پایگاه داده (migrate)"; init_db "$WORKDIR"
   step "استارت ربات و وب"; start_services
   step "تست سلامت"; health_check; print_summary; trap - EXIT; exit 0
 fi
 if (( DO_SYSUP_ONLY && ! DO_UPDATE )); then
-  step "ارتقای سیستم‌عامل"; system_upgrade
-  step "استارت دوبارهٔ ربات و وب"
+  step "ارتقای سیستم عامل"; system_upgrade
+  step "استارت دوباره ربات و وب"
   if (( ! DRY_RUN )) && env_configured; then start_services; else log "  (رد شد)"; fi
   step "تست سلامت"
   if (( ! DRY_RUN )) && env_configured; then health_check; else log "  (رد شد)"; fi
@@ -874,15 +874,15 @@ if (( DO_START_ONLY )); then
 fi
 
 if [[ -z "${_NASOZ_REEXEC:-}" ]]; then   # (a re-exec after git pull continues the same numbering)
-  if (( DO_UPDATE && DO_SYSUP == 1 )); then step "ارتقای سیستم‌عامل"; system_upgrade; fi   # --full-update
+  if (( DO_UPDATE && DO_SYSUP == 1 )); then step "ارتقای سیستم عامل"; system_upgrade; fi   # --full-update
   if (( DO_UPDATE )); then step "پشتیبان پایگاه داده"; backup_db "$WORKDIR"; fi
   if (( DO_UPDATE )) && [[ -n "$OFFLINE_DIR" ]]; then
-    step "جایگزینی کد از بستهٔ آفلاین ($(cat "$OFFLINE_DIR/app/.offline_commit" 2>/dev/null || echo '?'))"
-    if (( DRY_RUN )); then log "[dry-run] کپی $OFFLINE_DIR/app → $WORKDIR (.env، data/، uploads/، .venv دست نمی‌خورد)"
+    step "جایگزینی کد از بسته آفلاین ($(cat "$OFFLINE_DIR/app/.offline_commit" 2>/dev/null || echo '?'))"
+    if (( DRY_RUN )); then log "[dry-run] کپی $OFFLINE_DIR/app → $WORKDIR (.env، data/، uploads/، .venv دست نمی خورد)"
     else
       tar -C "$OFFLINE_DIR/app" --exclude=./.env --exclude=./data --exclude=./uploads --exclude=./.venv -cf - . | tar -C "$WORKDIR" -xf - \
         || die "جایگزینی کد ناموفق بود."
-      ok "کد به نسخهٔ بسته به‌روز شد"
+      ok "کد به نسخه بسته به روز شد"
       export _NASOZ_REEXEC=1 _NASOZ_STEP_N="$STEP_N" _NASOZ_INSTALL_LOG="$INSTALL_LOG"
       trap - EXIT; exec bash "$WORKDIR/scripts/install.sh" "$@"
     fi
@@ -890,23 +890,23 @@ if [[ -z "${_NASOZ_REEXEC:-}" ]]; then   # (a re-exec after git pull continues t
   if (( DO_UPDATE )) && [[ -z "$OFFLINE_DIR" ]]; then step "دریافت آخرین نسخه (git pull)"; fi
   if (( DO_UPDATE )) && [[ -z "$OFFLINE_DIR" ]] && (( DRY_RUN )); then log "[dry-run] git -C $WORKDIR pull --ff-only"; fi
   if (( DO_UPDATE )) && [[ -z "$OFFLINE_DIR" ]] && [[ -d "$WORKDIR/.git" ]] && (( ! DRY_RUN )); then
-    run_long "git pull" git -C "$WORKDIR" pull --ff-only || warn "git pull ناموفق بود (تغییرات محلی؟) — با نسخهٔ فعلی ادامه می‌دهیم. git -C $WORKDIR status"
+    run_long "git pull" git -C "$WORKDIR" pull --ff-only || warn "git pull ناموفق بود (تغییرات محلی؟) — با نسخه فعلی ادامه می دهیم. git -C $WORKDIR status"
     # the script on disk may have changed; re-exec the new version once
     export _NASOZ_REEXEC=1 _NASOZ_STEP_N="$STEP_N" _NASOZ_INSTALL_LOG="$INSTALL_LOG"
     trap - EXIT; exec bash "$WORKDIR/scripts/install.sh" "$@"
   fi
 fi
 
-if (( ! DO_UPDATE && ! DO_REPAIR )) && (( DO_SYSUP != 2 )); then step "ارتقای سیستم‌عامل"; maybe_system_upgrade; fi   # fresh install (wizard question, default yes)
-step "نصب/بررسی بسته‌های سیستمی"; ensure_system_packages
+if (( ! DO_UPDATE && ! DO_REPAIR )) && (( DO_SYSUP != 2 )); then step "ارتقای سیستم عامل"; maybe_system_upgrade; fi   # fresh install (wizard question, default yes)
+step "نصب/بررسی بسته های سیستمی"; ensure_system_packages
 step "بررسی پایتون و tesseract"; check_python; check_tesseract
 if (( ! DO_UPDATE && ! DO_REPAIR )); then step "پیکربندی (.env)"; ensure_env; fi   # ask questions early, then long installs
-step "محیط پایتون و وابستگی‌ها"; setup_venv "$WORKDIR"
-step "بررسی ماژول‌های برنامه"; verify_imports "$WORKDIR"
-step "آماده‌سازی پایگاه داده (migrate)"; init_db "$WORKDIR"
+step "محیط پایتون و وابستگی ها"; setup_venv "$WORKDIR"
+step "بررسی ماژول های برنامه"; verify_imports "$WORKDIR"
+step "آماده سازی پایگاه داده (migrate)"; init_db "$WORKDIR"
 
 if (( DO_UPDATE || DO_REPAIR )); then
-  step "به‌روزرسانی تنظیمات سرویس‌ها"
+  step "به روزرسانی تنظیمات سرویس ها"
   if (( ! DRY_RUN )); then
     env_configured || die ".env توکن ندارد — ابتدا: bash install.sh"
     ensure_common_env
@@ -914,7 +914,7 @@ if (( DO_UPDATE || DO_REPAIR )); then
   if { systemd_installed && have_systemd; } || (( DRY_RUN )); then install_units; fi   # refresh units
 else
   step "دستیار هوشمند (اختیاری)"; maybe_assistant
-  step "نصب سرویس‌ها"
+  step "نصب سرویس ها"
   if [[ -z "$SYSTEMD_CHOICE" ]]; then
     if have_systemd && (( EUID == 0 )); then SYSTEMD_CHOICE=y; else SYSTEMD_CHOICE=n; fi
   fi
