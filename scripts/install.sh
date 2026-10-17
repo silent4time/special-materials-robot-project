@@ -14,13 +14,20 @@ DO_SEED=0; DO_UPDATE=0; DO_REPAIR=0; DO_WEB_LOGIN=0; DRY_RUN=0; DO_START_ONLY=0
 SYSTEMD_CHOICE="${INSTALL_SYSTEMD:-}"   # y / n / "" (ask)
 DO_ASSISTANT=0                          # 0=ask, 1=install, 2=skip
 RECONFIGURE=0
+DO_SYSUP=0                              # 0=ask (fresh install, default yes), 1=yes, 2=no
+DO_SYSUP_ONLY=0
 
 usage() {
   cat <<'HELP'
 Usage: bash install.sh [options]
 
   (بدون پرچم)        نصب کامل: بسته‌های سیستم + venv + ویزارد .env + سرویس‌ها + تست سلامت
-  --update           git pull + بسته‌ها/venv (خودترمیم) + migrate + restart سرویس‌ها (.env و data حفظ می‌شود)
+  --update           به‌روزرسانی برنامه: پشتیبان DB + git pull + pip install -r requirements + migrate
+                     + restart سرویس‌ها + تست سلامت (.env و data حفظ می‌شود)
+  --system-upgrade   ارتقای سیستم‌عامل: apt-get update && apt-get upgrade -y (غیرتعاملی، فایل‌های
+                     پیکربندی موجود حفظ می‌شوند) + restart سرویس‌ها
+  --full-update      هر دو: --system-upgrade و سپس --update
+  --no-system-upgrade  در نصب تازه ارتقای سیستم را نپرس/انجام نده
   --repair           فقط خودترمیم: بسته‌های apt (tesseract و ...) + venv + restart
   --reconfigure      ویزارد .env را دوباره اجرا کن (مقادیر فعلی پیش‌فرض‌اند)
   --web-login        ساخت/بازنشانی ورود پنل وب برای مالک (بعد از اولین /start)
@@ -48,6 +55,9 @@ for arg in "$@"; do
     --no-systemd) SYSTEMD_CHOICE=n ;;
     --start) DO_START_ONLY=1 ;;
     --update) DO_UPDATE=1 ;;
+    --system-upgrade) DO_SYSUP=1; DO_SYSUP_ONLY=1 ;;
+    --full-update) DO_UPDATE=1; DO_SYSUP=1 ;;
+    --no-system-upgrade) DO_SYSUP=2 ;;
     --repair) DO_REPAIR=1 ;;
     --reconfigure) RECONFIGURE=1 ;;
     --web-login) DO_WEB_LOGIN=1 ;;
@@ -159,6 +169,44 @@ ensure_system_packages() {
   maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
   ok "بسته‌های سیستم نصب شد"
 }
+# ---------- system upgrade (apt-get update && apt-get upgrade -y) ----------
+SYSUP_CMD_UPDATE=(env DEBIAN_FRONTEND=noninteractive apt-get update -y)
+SYSUP_CMD_UPGRADE=(env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+system_upgrade() {
+  if [[ "${SKIP_APT:-0}" == "1" ]]; then warn "SKIP_APT=1 — ارتقای سیستم رد شد."; return 0; fi
+  if ! need_cmd apt-get; then warn "apt-get پیدا نشد — ارتقای سیستم رد شد."; return 0; fi
+  if (( DRY_RUN )); then
+    log "[dry-run] ${SYSUP_CMD_UPDATE[*]}"
+    log "[dry-run] ${SYSUP_CMD_UPGRADE[*]}"
+    return 0
+  fi
+  log "ارتقای سیستم‌عامل (apt-get update && apt-get upgrade -y) ..."
+  maybe_sudo "${SYSUP_CMD_UPDATE[@]}"
+  maybe_sudo "${SYSUP_CMD_UPGRADE[@]}"
+  ok "سیستم‌عامل ارتقا یافت (فایل‌های پیکربندی موجود حفظ شد)"
+  [[ -f /var/run/reboot-required ]] && warn "سیستم به ریبوت نیاز دارد (کرنل/کتابخانه‌ها) — در زمان مناسب: sudo reboot" || true
+}
+maybe_system_upgrade() {  # fresh install: offered in the wizard, default yes
+  case "$DO_SYSUP" in
+    1) system_upgrade ;;
+    2) log "ارتقای سیستم رد شد (--no-system-upgrade)" ;;
+    *) if ! interactive || yes_no Y "ارتقای سیستم‌عامل (apt-get update && apt-get upgrade -y) هم انجام شود؟"; then system_upgrade
+       else log "ارتقای سیستم رد شد (بعداً: bash install.sh --system-upgrade)"; fi ;;
+  esac
+}
+backup_db() {
+  local root="$1" ts
+  [[ -f "$root/data/bot.db" ]] || return 0
+  ts="$(date +%Y%m%d_%H%M%S)"
+  if (( DRY_RUN )); then log "[dry-run] backup data/bot.db → data/backups/bot_pre_update_$ts.db"; return 0; fi
+  mkdir -p "$root/data/backups"
+  python3 - "$root/data/bot.db" "$root/data/backups/bot_pre_update_$ts.db" <<'PY' && ok "پشتیبان پایگاه داده: data/backups/bot_pre_update_$ts.db"
+import sqlite3, sys
+src = sqlite3.connect(sys.argv[1]); dst = sqlite3.connect(sys.argv[2])
+src.backup(dst); dst.close(); src.close()
+PY
+}
+
 check_python() {
   need_cmd python3 || die "python3 نصب نیست."
   local minor; minor="$(python3 -c 'import sys;print(sys.version_info[1] if sys.version_info[0]==3 else 0)')"
@@ -685,11 +733,20 @@ if (( DO_WEB_LOGIN )); then
   if (( WEB_LOGIN_READY )); then log "نام کاربری: $(env_get WEB_ADMIN_USERNAME) — رمز: grep WEB_ADMIN_PASSWORD $WORKDIR/.env"; fi
   trap - EXIT; exit 0
 fi
+if (( DO_SYSUP_ONLY && ! DO_UPDATE )); then
+  system_upgrade
+  if (( ! DRY_RUN )) && env_configured; then start_services; health_check; fi
+  if (( DRY_RUN )); then log "[dry-run] تمام شد — هیچ چیزی نصب یا اجرا نشد."; fi
+  trap - EXIT; exit 0
+fi
 if (( DO_START_ONLY )); then
   env_configured || die ".env هنوز توکن ندارد — bash install.sh"
   start_services; health_check; print_summary; trap - EXIT; exit 0
 fi
 
+if (( DO_UPDATE && DO_SYSUP == 1 )) && [[ -z "${_NASOZ_REEXEC:-}" ]]; then system_upgrade; fi   # --full-update
+if (( DO_UPDATE )) && [[ -z "${_NASOZ_REEXEC:-}" ]]; then backup_db "$WORKDIR"; fi
+if (( DO_UPDATE )) && (( DRY_RUN )); then log "[dry-run] git -C $WORKDIR pull --ff-only"; fi
 if (( DO_UPDATE )) && [[ -d "$WORKDIR/.git" ]] && (( ! DRY_RUN )); then
   log "git pull ..."
   git -C "$WORKDIR" pull --ff-only || warn "git pull ناموفق بود (تغییرات محلی؟) — با نسخهٔ فعلی ادامه می‌دهیم. git -C $WORKDIR status"
@@ -697,6 +754,7 @@ if (( DO_UPDATE )) && [[ -d "$WORKDIR/.git" ]] && (( ! DRY_RUN )); then
   if [[ -z "${_NASOZ_REEXEC:-}" ]]; then export _NASOZ_REEXEC=1; trap - EXIT; exec bash "$WORKDIR/scripts/install.sh" "$@"; fi
 fi
 
+if (( ! DO_UPDATE && ! DO_REPAIR )); then maybe_system_upgrade; fi   # fresh install (wizard question, default yes)
 ensure_system_packages
 check_python
 check_tesseract

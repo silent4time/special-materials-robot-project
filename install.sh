@@ -5,7 +5,7 @@
 # یا:
 #   curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash
 # داخل ریپو:
-#   bash install.sh [--update|--repair|--web-login|--dry-run|--help]
+#   bash install.sh [--update|--system-upgrade|--full-update|--repair|--web-login|--dry-run|--help]
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/silent4time/special-materials-robot-project.git}"

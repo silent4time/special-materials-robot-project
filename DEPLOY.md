@@ -65,12 +65,16 @@ bash install.sh
 
 | دستور | کار |
 |------|-----|
-| `bash install.sh --update` | `git pull` + بسته‌ها/venv (خودترمیم) + migrate + restart؛ `.env` و `data/` حفظ می‌شود |
+| `bash install.sh` | **نصب کامل با یک دستور**: (پرسش ارتقای سیستم — پیش‌فرض بله) + بسته‌ها + venv + ویزارد `.env` + DB + سرویس‌ها + تست سلامت |
+| `bash install.sh --update` | به‌روزرسانی برنامه: پشتیبان `data/backups/bot_pre_update_*.db` + `git pull --ff-only` + `pip install -r requirements.txt` + migrate + restart + تست سلامت؛ `.env` و `data/` حفظ می‌شود |
+| `bash install.sh --system-upgrade` | ارتقای سیستم‌عامل: `DEBIAN_FRONTEND=noninteractive apt-get update -y && apt-get upgrade -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold` (پیکربندی‌های موجود حفظ) + restart سرویس‌ها؛ اگر `/var/run/reboot-required` باشد هشدار ریبوت |
+| `bash install.sh --full-update` | `--system-upgrade` و سپس `--update` |
+| `bash install.sh --no-system-upgrade` | در نصب تازه ارتقای سیستم انجام نشود (در حالت غیرتعاملی پیش‌فرض: انجام می‌شود) |
 | `bash install.sh --repair` | نصب دوبارهٔ بسته‌های گم‌شده (tesseract، venv …) + restart |
 | `bash install.sh --reconfigure` | ویزارد دوباره |
 | `bash install.sh --web-login` | ساخت/بازنشانی ورود وب مالک از روی `.env` |
 | `bash install.sh --start` | استارت دوباره (مثلاً بعد از ریبوت در حالت nohup) |
-| `bash install.sh --dry-run` | فقط نمایش بسته‌ها و فایل‌های systemd، بدون تغییر |
+| `bash install.sh --dry-run` | فقط نمایش بسته‌ها، دستورهای apt/git/پشتیبان و فایل‌های systemd، بدون تغییر (با هر پرچم دیگر ترکیب می‌شود) |
 | `bash install.sh --with-assistant` | نصب دستیار هوشمند (Ollama) |
 | `sudo systemctl status nasoz-bot nasoz-web` | وضعیت |
 | `sudo systemctl restart nasoz-bot nasoz-web` | ری‌استارت |

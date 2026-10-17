@@ -35,7 +35,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/silent4time/special-material
 
 (`curl -fsSL …/install.sh | bash` هم کار می‌کند.) ویزارد فارسی توکن (با بررسی `getMe`)، نام کاربری ربات، شناسه مالک (اختیاری)، پورت/آدرس و ورود پنل وب را می‌پرسد؛ سپس بسته‌ها (tesseract فارسی و …)، venv، دیتابیس و دو سرویس systemd (`nasoz-bot`، `nasoz-web`) را نصب و تست سلامت می‌کند.
 
-اولین کسی که در بله `/start` بزند **مالک** می‌شود. به‌روزرسانی: `bash install.sh --update` — خودترمیم: `bash install.sh --repair`.
+اولین کسی که در بله `/start` بزند **مالک** می‌شود. همین یک دستور نصب کامل را انجام می‌دهد (در نصب تازه ارتقای سیستم‌عامل هم پرسیده می‌شود؛ پیش‌فرض بله).
+
+| دستور | کار |
+|------|-----|
+| `bash install.sh --update` | به‌روزرسانی برنامه: پشتیبان DB ← `git pull` ← `pip install -r requirements.txt` ← migrate ← restart ← تست سلامت (`.env` و `data/` حفظ می‌شود) |
+| `bash install.sh --system-upgrade` | `apt-get update && apt-get upgrade -y` غیرتعاملی (`DEBIAN_FRONTEND=noninteractive`، فایل‌های پیکربندی موجود حفظ می‌شود) + restart |
+| `bash install.sh --full-update` | هر دو (اول سیستم، بعد برنامه) |
+| `bash install.sh --repair` | خودترمیم بسته‌ها/venv |
+| `… --dry-run` | فقط چاپ دستورها، بدون تغییر |
+
+تاریخچهٔ تغییرات: **[CHANGELOG.md](CHANGELOG.md)**.
 جزئیات، نصب خودکار و عیب‌یابی: **[DEPLOY.md](DEPLOY.md)**.
 
 ## دستیار هوشمند (حذف‌شده)
@@ -337,6 +347,12 @@ bale-materials-bot/
 - long-polling برای استقرار ساده است؛ برای مقیاس بالا webhook پیشنهاد می‌شود.
 
 ## داشبورد وب
+
+**همپوشانی کامل ربات و وب (۱۴۰۵/۰۷/۲۵):** هر دکمهٔ ربات یک صفحه/مسیر وب با همان مجوز و همان سرویس دارد
+(`scripts/smoke_parity.py` اگر دکمه‌ای مسیر وب نداشته باشد یا برعکس — بدون دلیل در فهرست استثنا — شکست می‌خورد).
+صفحه‌های جدید: `/files` (📤 ورود فایل‌ها: موجودی انبار، مصرف ماهیانه، عکس آمار تولید، سکوئنس)، `/settings/users`،
+`/settings/bot` (ظاهر، گروه گزارش موجودی، دستیار صوتی)، گزارش `📈 مصرف روزانه` در `/reports`، دانلود/کدهای دسته و
+پیش‌پر فرم افزودن رکورد در `/settings/main-source`. آپلودهای Excel ربات و وب هر دو از `services/file_upload.py` می‌گذرند.
 
 فرآیند جدا (`web_main.py`) با همان SQLite و همان نقش‌های ربات (`auth.rbac`). جزئیات: `DEPLOY.md`. Seed: `scripts/seed_web_admin.py` فقط برای کاربر `owner` موجود. ربات و وب را هنگام تغییر کد مشترک با هم به‌روز کنید.
 
