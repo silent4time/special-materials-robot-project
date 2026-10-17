@@ -107,6 +107,7 @@ class PeriodConsumptionResult:
                     "sheet_title": "موجودی روزانه سایت",
                     "columns": SITE_COLS,
                     "rows": self.site_rows,
+                    "material": {"id": "شناسه کالا", "name": "شرح کالا", "mode": "per_id"},
                     "empty_message": "—",
                     "header_bg": "#2e7d32",
                 }

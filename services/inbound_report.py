@@ -581,6 +581,14 @@ def summary_text_fa(report: dict[str, Any], *, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
+def _summary_rows_with_ids(report: dict[str, Any]) -> list[dict[str, Any]]:
+    by_code: dict[str, list[str]] = {}
+    for ln in report.get("lines") or []:
+        by_code.setdefault(str(ln.get(COL_CODE) or "").strip(), []).append(str(ln.get(COL_ID) or "").strip())
+    return [dict(r, _ids=by_code.get(str(r.get(COL_CODE) or "").strip(), []))
+            for r in report.get("summary") or []]
+
+
 def report_sections(report: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         {
@@ -588,6 +596,7 @@ def report_sections(report: dict[str, Any]) -> list[dict[str, Any]]:
             "sheet_title": SHEET_INBOUND,
             "columns": INBOUND_COLUMNS,
             "rows": report.get("lines") or [],
+            "material": {"id": COL_ID, "code": COL_CODE, "mode": "per_id"},
             "empty_message": (
                 "قلم ورودی (افزایش موجودی یا شناسه جدید با موجودی) شناسایی نشد."
                 if report.get("has_baseline")
@@ -598,7 +607,9 @@ def report_sections(report: dict[str, Any]) -> list[dict[str, Any]]:
             "title": SHEET_SUMMARY,
             "sheet_title": SHEET_SUMMARY,
             "columns": SUMMARY_COLUMNS,
-            "rows": report.get("summary") or [],
+            "rows": _summary_rows_with_ids(report),
+            # per category code → the inbound IDs of that code joined
+            "material": {"ids": "_ids", "code": COL_CODE, "mode": "joined"},
             "empty_message": "—",
         },
         {
@@ -606,10 +617,28 @@ def report_sections(report: dict[str, Any]) -> list[dict[str, Any]]:
             "sheet_title": SHEET_REJECTED,
             "columns": REJECTED_COLUMNS,
             "rows": report.get("rejected") or [],
+            "material": {"id": COL_ID, "code": COL_CODE, "name": "شرح کالا", "mode": "per_id",
+                         "rename": {"موجودی": "موجودی فایل"}},
             "empty_message": "ردیفی رد نشد.",
             "header_bg": "#7f1d1d",
         },
     ]
+
+
+def preview_table(report: dict[str, Any] | None, limit: int = 50) -> dict[str, Any] | None:
+    """Web preview of the inbound lines with the shared base material columns first."""
+    if not report or not report.get("lines"):
+        return None
+    from services.material_columns import apply_section
+
+    sec = apply_section(dict(report_sections(report)[0], rows=list(report["lines"])[:limit]))
+    from pdf.generator import _format_simple_cell
+    from services.units import unit_fa
+
+    def cell(r: dict[str, Any], c: str) -> str:
+        return unit_fa(r.get(c)) if c == COL_UNIT and r.get(c) else _format_simple_cell(r.get(c), c)
+
+    return {"header": list(sec["columns"]), "rows": [[cell(r, c) for c in sec["columns"]] for r in sec["rows"]]}
 
 
 def letterhead_path(db: Database) -> Path | None:

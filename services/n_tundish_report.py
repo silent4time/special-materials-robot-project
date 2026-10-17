@@ -136,6 +136,9 @@ class NTundishResult:
                 "rows": rows,
                 "bold_rows": list(self.bold_rows),
                 "highlight_rows": list(self.highlight_rows),
+                # per code + supplier → one row per code, IDs of that supplier joined
+                "material": {"code": COL_CODE, "segment": COL_SUPPLIER, "mode": "joined", "planning": True,
+                             "drop": [COL_STOCK]},
                 "empty_message": "قلمی با نیاز مثبت یافت نشد.",
                 "header_bg": "#1f4e79",
             }

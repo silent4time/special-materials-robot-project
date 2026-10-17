@@ -163,6 +163,9 @@ def _segment_table_section(segment: str, df: pd.DataFrame, reno_mode: str) -> di
         "sheet_title": f"اقلام بحرانی — {label}",
         "columns": list(REPORT_COLUMNS),
         "rows": rows_for_simple_report(df),
+        # per 4-digit code (need is per code) → one row per code, the code's IDs of this
+        # segment joined; shared-group subtotal rows keep the group code only.
+        "material": {"code": "کد چهاررقمی", "segment": segment, "mode": "joined", "planning": True},
         # Shared-need group subtotal rows are bold + shaded (PDF and xlsx).
         "bold_rows": group_row_indices(df),
         "empty_message": (
