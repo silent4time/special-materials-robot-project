@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}دستیار هوشمند{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>🤖 از دستیار بپرس</h1>
+  {% if not enabled %}
+  <div class="alert err">دستیار هوشمند غیرفعال است. مالک می‌تواند آن را از «⚙️ تنظیمات ربات» فعال کند.</div>
+  {% else %}
+  <p class="muted">همان دستیار ربات بله: پاسخ‌ها مستقیم از دادهٔ ربات است و هر پرسش همان دسترسی منوی متناظر را دارد.</p>
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  <form method="post" action="/assistant/ask" enctype="multipart/form-data" class="form-grid">
+    <input type="text" name="q" value="{{ question }}" placeholder="مثلاً: از آجر ۱۶۰۳ چقدر داریم؟" style="min-width:60%" autofocus>
+    {% if whisper %}<input type="file" name="audio" accept="audio/*">{% endif %}
+    <button class="btn" type="submit">بپرس</button>
+  </form>
+  {% endif %}
+</div>
+{% if answer %}
+<div class="card">
+  {% if transcript %}<p class="muted">🗣 {{ transcript }}</p>{% endif %}
+  <pre style="white-space:pre-wrap;font-family:inherit">{{ answer.text }}</pre>
+  {% if links %}<p>{% for label, href in links %}<a class="btn" href="{{ href }}">{{ label }}</a> {% endfor %}</p>{% endif %}
+  {% if followups %}
+  <form method="post" action="/assistant/ask" class="form-grid">
+    {% for f in followups %}<button class="btn" type="submit" name="q" value="{{ f }}">{{ f }}</button>{% endfor %}
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+{% if enabled %}
+<div class="card"><pre class="muted" style="white-space:pre-wrap;font-family:inherit">{{ help_text }}</pre></div>
+{% endif %}
+{% endblock %}

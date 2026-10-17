@@ -134,10 +134,11 @@ def create_app() -> FastAPI:
     app.include_router(settings_router.router)
     app.include_router(tundish_report_router.router)
     app.include_router(main_goal_report_router.router)
-    from web.routers import admin as admin_router, files as files_router
+    from web.routers import admin as admin_router, assistant as assistant_router, files as files_router
 
     app.include_router(files_router.router)
     app.include_router(admin_router.router)
+    app.include_router(assistant_router.router)
 
     @app.get("/")
     async def root(request: Request):
@@ -159,6 +160,7 @@ def create_app() -> FastAPI:
             "file_guide": __import__("services.file_guides", fromlist=["guide_html"]).guide_html,
             "shamsi": __import__("bot.jalali", fromlist=["format_date"]).format_date,
             "can": __import__("services.permissions", fromlist=["can"]).can,
+            "assistant_on": lambda: get_db().get_setting("assistant_enabled") == "1",
         }
     )
     get_db()  # schema + WAL on startup
