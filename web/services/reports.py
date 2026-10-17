@@ -32,6 +32,13 @@ from web.services.data import (
 logger = logging.getLogger(__name__)
 
 
+# Shared base material columns (services.material_columns): rows carry material_name only →
+# matched to the main source by «آیدی - شرح» / exact name; one row per material (per ID).
+from services.material_columns import SPEC_RATES as RATES_SPEC  # noqa: E402
+from services.material_columns import SPEC_WAREHOUSE as WAREHOUSE_SPEC  # noqa: E402
+from services.material_columns import remaining_spec  # noqa: E402
+
+
 def _df_rows(df: pd.DataFrame | None, cols: list[str]) -> list[dict[str, Any]]:
     if df is None or df.empty:
         return []
@@ -100,6 +107,7 @@ def generate_remaining_critical_files(
             "title": f"موجودی باقیمانده ({rem_source})",
             "columns": rem_cols,
             "rows": _df_rows(rem, rem_cols),
+            "material": remaining_spec(rem_source),
             "empty_message": "موجودی خالی است.",
             "header_bg": "#2e7d32",
         },
@@ -107,6 +115,7 @@ def generate_remaining_critical_files(
             "title": f"مواد بحرانی (پوشش < {CRITICAL_DAYS} روز)",
             "columns": crit_cols,
             "rows": _df_rows(crit, crit_cols),
+            "material": remaining_spec(rem_source),
             "empty_message": "ماده بحرانی‌ای شناسایی نشد.",
             "header_bg": "#c62828",
         },
@@ -185,6 +194,7 @@ def generate_surplus_files(
         subtitle=subtitle,
         columns=cols,
         rows=rows,
+        material=WAREHOUSE_SPEC,
         empty_message="ماده مازادی شناسایی نشد.",
         output_path=pdf_path,
         filename_stem="surplus",
@@ -195,6 +205,7 @@ def generate_surplus_files(
         subtitle=subtitle,
         columns=cols,
         rows=rows,
+        material=WAREHOUSE_SPEC,
         empty_message="ماده مازادی شناسایی نشد.",
         output_path=xlsx_path,
         filename_stem="surplus",
@@ -390,7 +401,7 @@ def generate_daily_files(
     stem = _stamp_stem("daily_rates")
     pdf_path = REPORT_DIR / f"{stem}.pdf"
     xlsx_path = REPORT_DIR / f"{stem}.xlsx"
-    kw = dict(title=title, subtitle=subtitle, columns=cols, rows=rows,
+    kw = dict(title=title, subtitle=subtitle, columns=cols, rows=rows, material=RATES_SPEC,
               empty_message="در این بازه داده‌ای برای این گزارش نیست.", filename_stem="daily_rates")
     generate_simple_report_pdf(output_path=pdf_path, letterhead_path=letterhead_path(db), **kw)
     generate_simple_report_xlsx(output_path=xlsx_path, **kw)

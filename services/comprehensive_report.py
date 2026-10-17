@@ -106,6 +106,44 @@ def build_bundle(
     }
 
 
+def with_material_columns(db: Any, analytics: dict, frames: dict) -> tuple[dict, dict]:
+    """Material tables of the comprehensive report get the shared base columns first
+    (``services.material_columns``; one row per material/ID). Copies — inputs untouched."""
+    from excel.simple_report import _ANALYTICS_SHEETS
+    from pdf.generator import DISPLAY_COLUMNS
+    from services import material_columns as mc
+
+    try:
+        idx = mc.load_index(db)
+        consumed = {"quantity": "مقدار"}
+        a_specs = {
+            "daily_rates": dict(mc.SPEC_RATES),
+            "period_consumption": dict(mc.SPEC_RATES, rename=consumed),
+            "remaining": dict(mc.SPEC_WAREHOUSE),
+            "critical": dict(mc.SPEC_WAREHOUSE),
+            "forecast": dict(mc.SPEC_RATES),
+            "suggest": dict(mc.SPEC_WAREHOUSE),
+        }
+        a_cols = {key: cols for _t, key, cols in _ANALYTICS_SHEETS}
+        out_a = dict(analytics or {})
+        for key, spec in a_specs.items():
+            if out_a.get(key) is not None and key in a_cols:
+                out_a[key] = mc.augment_frame(out_a[key], dict(spec, columns=a_cols[key]), idx)
+        f_specs = {
+            "tank_consumption": {"name": "material_name", "mode": "per_id", "rename": consumed},
+            "product_inventory": {"id": "id", "code": "category_code", "mode": "per_id", "drop": ["quantity"]},
+            "monthly_consumption": {"id": "id", "name": "material_name", "mode": "per_id", "rename": consumed},
+        }
+        out_f = dict(frames or {})
+        for key, spec in f_specs.items():
+            if out_f.get(key) is not None:
+                out_f[key] = mc.augment_frame(out_f[key], dict(spec, columns=DISPLAY_COLUMNS.get(key)), idx)
+        return out_a, out_f
+    except Exception:  # noqa: BLE001
+        logger.exception("comprehensive base material columns failed; plain tables used")
+        return analytics, frames
+
+
 @dataclass
 class ComprehensiveResult:
     title: str = ""
@@ -146,6 +184,7 @@ def generate_files(
     metas = metas if metas is not None else metas_for(frames)
     frames = section_frames(frames, section)
     analytics = build_bundle(db, frames, start=start, end=end)
+    analytics, frames = with_material_columns(db, analytics, frames)
     res.metas = metas
     from config import REPORT_DIR
     from services.file_names import fa_stem, unique_dir

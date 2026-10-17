@@ -925,7 +925,9 @@ def _ambiguous(intent: Intent, ms: list[ItemMatch], verb: str, ctx: "_Ctx | None
 
         lines += text_table(["کد", "نام", "موجودی کل", "واحد"], trows, max_rows=8)
         table = {"title": "اقلام هم‌نام", "subtitle": lines[0],
-                 "sections": [{"title": None, "columns": list(trows[0].keys()), "rows": trows}]}
+                 "sections": [{"title": None, "columns": list(trows[0].keys()), "rows": trows,
+                               # per code (candidates) → IDs of each code joined
+                               "material": {"code": "کد", "mode": "joined", "drop": ["موجودی کل"]}}]}
     else:
         lines += [f"• {m.code} — {m.label}" for m in ms]
     return Answer("\n".join(lines), intent, buttons=btns, ok=True, facts={"candidates": [m.code for m in ms]},
@@ -983,7 +985,8 @@ def exec_stock(ctx: _Ctx, it: Intent) -> Answer:
     table = None
     if len(rows) > 1:
         table = {"title": f"موجودی کد {code} {kw}", "subtitle": f"جمع موجودی انبار: {_fmt(total, unit)} {_unit(unit)}",
-                 "sections": [{"title": None, "columns": tcols, "rows": trows}]}
+                 "sections": [{"title": None, "columns": tcols, "rows": trows,
+                               "material": {"id": "شناسه", "mode": "per_id"}}]}
     return Answer("\n".join(lines), it, facts={"code": code, "label": kw, "total": total, "unit": unit,
                                                 "by_segment": by_seg, "surplus": surplus},
                   buttons=[f"پوشش {code} {kw}"[:60]], table=table)
@@ -1042,7 +1045,8 @@ def exec_critical(ctx: _Ctx, it: Intent) -> Answer:
         lines += ["  " + x for x in text_table(["کد", "شرح کالا", "موجودی", "نیاز", "حد تحمل (روز)"], trows,
                                                max_rows=5, widths={"شرح کالا": 30})]
         if trows:
-            sections.append({"title": f"{SEGMENT_LABEL_FA.get(seg, seg)} — {n} قلم", "columns": tcols, "rows": trows})
+            sections.append({"title": f"{SEGMENT_LABEL_FA.get(seg, seg)} — {n} قلم", "columns": tcols, "rows": trows,
+                             "material": {"code": "کد", "segment": seg, "mode": "joined", "planning": True}})
     lines.append("")
     lines.append("جدول کامل در فایل PDF پیوست است (گزارش رسمی: دکمهٔ «اقلام بحرانی»).")
     from bot import keyboards as kb
@@ -1090,7 +1094,8 @@ def exec_coverage(ctx: _Ctx, it: Intent) -> Answer:
         head = f"• {SEGMENT_LABEL_FA.get(seg, seg)}"
         if shared:
             head += f" (نیاز مشترک گروه {r.get('کد چهاررقمی')})"
-        trows.append({"بخش": head.lstrip("• "), "حد تحمل (روز)": r.get(COL_DAYS), "موجودی": r.get("موجودی"),
+        trows.append({"کد": r.get("کد چهاررقمی"), "_seg": seg, "بخش": head.lstrip("• "),
+                      "حد تحمل (روز)": r.get(COL_DAYS), "موجودی": r.get("موجودی"),
                       "واحد": _unit(r.get("واحد")), "میانگین مصرف ماهانه": r.get(COL_MONTHLY),
                       "افق (ماه)": r.get(COL_HORIZON), "نیاز": r.get(COL_NEED)})
         lines.append(
@@ -1115,7 +1120,8 @@ def exec_coverage(ctx: _Ctx, it: Intent) -> Answer:
 
         out = [out[0]] + text_table(["بخش", "حد تحمل (روز)", "موجودی", "نیاز"], trows) + out[-1:]
         table = {"title": f"حد تحمل کد {code} {kw} ({RENO_LABEL_FA.get(reno, reno)})", "subtitle": out[-1],
-                 "sections": [{"title": None, "columns": list(trows[0].keys()), "rows": trows}]}
+                 "sections": [{"title": None, "columns": [c for c in trows[0] if not c.startswith("_")], "rows": trows,
+                               "material": {"code": "کد", "segment": "_seg", "mode": "joined", "planning": True}}]}
     return Answer("\n".join(out), it, facts=facts, buttons=[f"موجودی {code} {kw}"[:60]], table=table)
 
 
@@ -1216,7 +1222,8 @@ def exec_consumption(ctx: _Ctx, it: Intent) -> Answer:
         for r in srt[:8]:
             facts["site"][str(r["شرح کالا"])] = r["مصرف (کاهش موجودی)"]
         lines += text_table(["بخش", "شرح کالا", "مصرف (کاهش موجودی)"], srt, max_rows=8, widths={"شرح کالا": 36})
-        sections.append({"title": "الف) از موجودی روزانهٔ سایت", "columns": list(srt[0].keys()), "rows": srt})
+        sections.append({"title": "الف) از موجودی روزانهٔ سایت", "columns": list(srt[0].keys()), "rows": srt,
+                         "material": {"id": "شناسه کالا", "name": "شرح کالا", "mode": "per_id"}})
     if mg:
         lines.append(f"ب) از جداول تاندیش ماهانه: {len(mg)} ردیف")
         for r in mg[:8]:
