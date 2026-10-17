@@ -831,3 +831,112 @@ def list_ids_preview(df: pd.DataFrame | None, *, limit: int = 30) -> list[str]:
         extra = f" [{loc}]" if loc else ""
         lines.append(f"{iid} — {name}{extra}" if name else f"{iid}{extra}")
     return lines
+
+
+# ------------------------------------------------------------------ stock update (1405/07/25)
+# «📥 به‌روزرسانی موجودی انبار»: the warehouse export has only code / id+name / stock.
+# It must never damage منبع اصلی: existing ids get ONLY the new stock (name only if blank);
+# every other column is kept. New ids (already filtered by ``filter_inventory_upload``:
+# known 4-digit code, never 1800) are appended with what the file has — rates etc. stay
+# empty and are listed so an authorized user can fill them. Ids missing from the stock
+# file keep their row unchanged (stock is NOT zeroed — same as before).
+SOURCE_RATE_COLS: tuple[str, ...] = (
+    "billet_renovation", "billet_patching", "bloom_renovation", "bloom_patching",
+    "slab_renovation", "slab_patching",
+)
+
+
+def _blank(value: object) -> bool:
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return not str(value).strip()
+
+
+def merge_stock_update(
+    old: pd.DataFrame | None, new: pd.DataFrame | None
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    info: dict[str, Any] = {"updated": 0, "added": [], "missing_kept": 0}
+    if new is None or new.empty:
+        return (old.copy() if old is not None else pd.DataFrame()), info
+    if old is None or old.empty:
+        return new.copy(), info
+    out = old.copy()
+    for col in new.columns:
+        if col not in out.columns:
+            out[col] = None
+    out = out.astype({c: object for c in out.columns})
+    pos = {_norm_id(v): i for i, v in zip(out.index, out["id"])}
+    seen: set[str] = set()
+    added_rows: list[dict[str, Any]] = []
+    for _, row in new.iterrows():
+        iid = _norm_id(row.get("id"))
+        if not iid:
+            continue
+        seen.add(iid)
+        if iid in pos:
+            i = pos[iid]
+            out.at[i, "quantity"] = row.get("quantity")
+            if _blank(out.at[i, "product_name"]) and not _blank(row.get("product_name")):
+                out.at[i, "product_name"] = row.get("product_name")
+            info["updated"] += 1
+        else:
+            rec = {c: (row.get(c) if c in new.columns else None) for c in out.columns}
+            added_rows.append(rec)
+            info["added"].append({
+                "id": _cell_str(row.get("id")),
+                "category_code": _norm_code4(row.get("category_code")),
+                "product_name": _cell_str(row.get("product_name")),
+            })
+    if added_rows:
+        out = pd.concat([out, pd.DataFrame(added_rows, columns=out.columns)], ignore_index=True)
+    info["missing_kept"] = sum(1 for k in pos if k not in seen)
+    return out.reset_index(drop=True), info
+
+
+def rates_wiped(old: pd.DataFrame | None, merged: pd.DataFrame | None) -> bool:
+    """True when old had any consumption rate filled and merged has none (refuse to save)."""
+    if old is None or old.empty:
+        return False
+    cols = [c for c in SOURCE_RATE_COLS if c in old.columns]
+    if not cols or not old[cols].notna().any().any():
+        return False
+    if merged is None or merged.empty:
+        return True
+    mcols = [c for c in cols if c in merged.columns]
+    if not mcols:
+        return True
+    vals = merged[mcols].apply(pd.to_numeric, errors="coerce")
+    return not vals.notna().any().any()
+
+
+RATES_WIPED_FA = (
+    "⛔ ذخیره انجام نشد: با این فایل، نرخ‌های مصرف منبع اصلی (نوسازی/پچینگ اسلب، بلوم، بیلت) "
+    "همگی خالی می‌شدند. منبع اصلی بدون تغییر ماند. فایل را بررسی کنید یا با مدیر سیستم تماس بگیرید."
+)
+
+
+def stock_update_note_fa(info: dict[str, Any], *, limit: int = 15) -> str:
+    lines = [
+        f"\nبه‌روزرسانی موجودی: موجودی {info.get('updated', 0)} شناسه به‌روز شد؛ "
+        "سایر ستون‌های منبع اصلی (نرخ‌ها، واحد، نقطه بحرانی، اولویت، …) دست نخورد."
+    ]
+    if info.get("missing_kept"):
+        lines.append(
+            f"{info['missing_kept']} شناسهٔ منبع اصلی در این فایل نبود؛ ردیفشان بدون تغییر ماند."
+        )
+    added = info.get("added") or []
+    if added:
+        lines.append(
+            f"➕ {len(added)} شناسهٔ جدید (با کد ۴ رقمی موجود) اضافه شد — نرخ مصرف، واحد و "
+            "نقطه بحرانی این‌ها خالی است؛ از «📦 منبع اصلی ← ✏️ ویرایش رکورد» تکمیل کنید:"
+        )
+        for a in added[:limit]:
+            lines.append(f"• {a['id']} ({a['category_code']}) {a['product_name']}")
+        if len(added) > limit:
+            lines.append(f"… و {len(added) - limit} مورد دیگر")
+    return "\n".join(lines)

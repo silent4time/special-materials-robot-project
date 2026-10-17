@@ -947,11 +947,12 @@ def merge_clean_frames(
         # Full inventory re-upload: keep previous usage_location when the new
         # file omits it (or leaves it blank). Quantity still comes from new.
         if file_type == "product_inventory" and key in merged_map:
+            # Guard (1405/07/25): a blank new value never overwrites a filled old one
+            # (usage_location, rates, unit, critical point, priority, …).
             old_dict = merged_map[key]
-            if _is_blank(new_dict.get("usage_location")) and not _is_blank(
-                old_dict.get("usage_location")
-            ):
-                new_dict["usage_location"] = old_dict.get("usage_location")
+            for col, old_val in old_dict.items():
+                if _is_blank(new_dict.get(col)) and not _is_blank(old_val):
+                    new_dict[col] = old_val
         merged_map[key] = new_dict
     if not merged_map:
         return new_a.iloc[0:0].copy()
