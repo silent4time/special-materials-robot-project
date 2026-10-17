@@ -105,6 +105,49 @@ CASES: list[tuple[str, str, dict]] = [
     ("راهنما", ab.I_HELP, {}),
     ("سلام", ab.I_HELP, {}),
     ("دستیار چی بلده", ab.I_HELP, {}),
+    # 1405/07/25 — the owner's real question (typo «داربم») + colloquial stock/coverage phrasings
+    ("چندتا شرود داربم؟", ab.I_STOCK, {"query": "شرود"}),
+    ("چندتا شرود داریم؟", ab.I_STOCK, {"query": "شرود"}),
+    ("چند تا شرود داریم", ab.I_STOCK, {"query": "شرود"}),
+    ("شرود چندتا داریم", ab.I_STOCK, {"query": "شرود"}),
+    ("شرود چند عدد داریم", ab.I_STOCK, {"query": "شرود"}),
+    ("چند عدد شرود موجوده", ab.I_STOCK, {"query": "شرود"}),
+    ("شرود داریم؟", ab.I_STOCK, {"query": "شرود"}),
+    ("شرود هست؟", ab.I_STOCK, {"query": "شرود"}),
+    ("شرود چقد مونده", ab.I_STOCK, {"query": "شرود"}),
+    ("چه قدر شرود باقی مونده", ab.I_STOCK, {"query": "شرود"}),
+    ("چه مقدار شراود داریم", ab.I_STOCK, {"query": "شرود"}),
+    ("shroud موجودی", ab.I_STOCK, {"query": "شرود"}),
+    ("شرود ته کشیده؟", ab.I_STOCK, {"query": "شرود"}),
+    ("استاپر چند تا داریم", ab.I_STOCK, {"query": "استوپر"}),
+    ("از استوپر چی مونده", ab.I_STOCK, {"query": "استوپر"}),
+    ("استوپر موجوده؟", ab.I_STOCK, {"query": "استوپر"}),
+    ("چند تا استوپر تو انبار هست", ab.I_STOCK, {"query": "استوپر"}),
+    ("نازل بیرونی چندتا مونده", ab.I_STOCK, {"query": "نازل بیرونی"}),
+    ("از نازل بیرونی چقد داریم", ab.I_STOCK, {"query": "نازل بیرونی"}),
+    ("آجر کف چندتا داریم", ab.I_STOCK, {"query": "اجر کف"}),
+    ("آجر ۱۶۰۳ چند تا مونده", ab.I_STOCK, {"code": "1603"}),
+    ("بتن پلی ۶۵ چه مقدار داریم", ab.I_STOCK, {"query": "بتن پلی 65"}),
+    ("کد ۱۶۷۲ چندتا داریم", ab.I_STOCK, {"code": "1672"}),
+    ("۱۵۸۱ موجودی", ab.I_STOCK, {"code": "1581"}),
+    ("1603 چقد هست", ab.I_STOCK, {"code": "1603"}),
+    ("شرود چند روز دیگه جواب میده", ab.I_COVERAGE, {"query": "شرود"}),
+    ("استوپر تا کی کافیه", ab.I_COVERAGE, {"query": "استوپر"}),
+    ("نازل بیرونی چند روز دوام داره", ab.I_COVERAGE, {"query": "نازل بیرونی"}),
+    ("حد تحمل آجر ۱۶۰۳", ab.I_COVERAGE, {"code": "1603"}),
+    ("پوشش شرود چند روزه", ab.I_COVERAGE, {"query": "شرود"}),
+    ("چیا ته کشیده", ab.I_CRITICAL, {}),
+    ("چی تموم شده", ab.I_CRITICAL, {}),
+]
+
+# held-out stock/coverage phrasings (written 1405/07/25 after the fix, never tuned on)
+HELDOUT_STOCK: list[tuple[str, str, str]] = [  # (phrase, intent, item word that must be in the slots)
+    ("شرودا چندتان", ab.I_STOCK, "شرود"), ("هنوز شرود تو انبار داریم؟", ab.I_STOCK, "شرود"),
+    ("موجودی شراود رو بگو", ab.I_STOCK, "شرود"), ("استاپرا چقدر مونده", ab.I_STOCK, "استوپر"),
+    ("یه دونه نازل ثابت هم داریم؟", ab.I_STOCK, "نازل ثابت"), ("بتن پلی ۶۰ چند کیسه هست", ab.I_STOCK, "بتن پلی 60"),
+    ("آجر کف موجوده یا تموم شده", ab.I_STOCK, "اجر کف"), ("کد ۱۶۵۵ چه خبر", ab.I_STOCK, "1655"),
+    ("روکش اسلب تا چند روز کافیه", ab.I_COVERAGE, "روکش"), ("استوپر چه مدت دیگه بسه", ab.I_COVERAGE, "استوپر"),
+    ("از شرود چی داریم الان", ab.I_STOCK, "شرود"), ("نازل بیرونی موجودیش چنده", ab.I_STOCK, "نازل بیرونی"),
 ]
 
 # held-out phrasings (written after the rules, never tuned on): rules + LLM fallback
@@ -123,6 +166,20 @@ HELDOUT: list[tuple[str, str]] = [
     ("گزارش خلاصه مصرف ماهیانه بده", ab.I_OPEN_REPORT), ("میخوام موجودی سایت رو ثبت کنم", ab.I_OPEN_REPORT),
     ("کمکم کن", ab.I_HELP), ("چه سوالایی میتونم بپرسم", ab.I_HELP),
 ]
+
+
+def run_heldout_stock(codes, inv, model: str = "") -> None:
+    print("== held-out stock/coverage phrasings ==")
+    ok = 0
+    for q, want, item in HELDOUT_STOCK:
+        it = ab.route(q, use_llm=bool(model), model=model or None, known_codes=codes, inventory=inv)
+        vals = " ".join(str(v) for v in it.slots.values())
+        good = it.name == want and item in ab.normalize(vals)
+        ok += good
+        if not good:
+            print(f"  miss «{q}» → {it.name} {it.slots} ({it.source})")
+    print(f"  held-out stock/coverage: {ok}/{len(HELDOUT_STOCK)}" + (" (rules + LLM)" if model else " (rules)"))
+    check(ok >= len(HELDOUT_STOCK) - 2, "held-out stock/coverage accuracy too low")
 
 
 def run_heldout(codes, inv, model: str = "") -> None:
@@ -144,7 +201,7 @@ def run_heldout(codes, inv, model: str = "") -> None:
 # questions the rules deliberately miss → LLM fallback (mocked / real)
 LLM_CASES: list[tuple[str, str, dict]] = [
     ("استاک بتن ملات رو بگو ببینم", ab.I_STOCK, {}),  # rules: «استاک» → stock already; kept as control
-    ("کدوم جنسا ته کشیدن", ab.I_CRITICAL, {}),
+    ("یه لیست از چیزای در خطر بده", ab.I_CRITICAL, {}),
     ("دیتای جدید کی اومد", ab.I_LAST_UPLOAD, {}),
     ("کسی منتظر جواب منه", ab.I_PENDING, {}),
 ]
@@ -179,7 +236,7 @@ def run_units() -> None:
 def run_llm_mock(codes: set[str] | None) -> None:
     print("== LLM fallback (mocked) ==")
     replies = {
-        "کدوم جنسا ته کشیدن": '{"intent":"critical","code":"","query":"","n":0,"section":"","period":"","report":""}',
+        "یه لیست از چیزای در خطر بده": '{"intent":"critical","code":"","query":"","n":0,"section":"","period":"","report":""}',
         "دیتای جدید کی اومد": '{"intent":"last_upload","code":"","query":"","n":0,"section":"","period":"","report":""}',
         "کسی منتظر جواب منه": '```json {"intent":"pending_approvals"} ```',
     }
@@ -201,6 +258,21 @@ def run_llm_mock(codes: set[str] | None) -> None:
     g = ab.llm_route("از اون آجره چقدر هست", model="m",
                      chat=lambda m, **k: '{"intent":"stock","code":"1603","query":"آجر"}')
     check(g is not None and "code" not in g.slots and g.slots.get("query") == "اجر", "LLM code not in text dropped")
+    # guard: a named item never becomes critical/pending from the LLM (unless critical words are there)
+    crit = lambda m, **k: '{"intent":"critical"}'  # noqa: E731
+    g = ab.guard_llm_intent("وضعیت ذخیره شرود رو بگو", ab.llm_route("وضعیت ذخیره شرود رو بگو", model="m", chat=crit),
+                            "شرود")
+    check(g.name == ab.I_COVERAGE and g.slots.get("query") == "شرود", f"guard: item + LLM critical → coverage ({g})")
+    g = ab.guard_llm_intent("شرود رو چک کن", ab.Intent(ab.I_PENDING, source="llm"), "شرود")
+    check(g.name == ab.I_STOCK and g.slots.get("query") == "شرود", f"guard: item + LLM pending → stock ({g})")
+    g = ab.guard_llm_intent("کدوم شرودها بحرانی شدن", ab.Intent(ab.I_CRITICAL, source="llm"), "شرود")
+    check(g.name == ab.I_CRITICAL, "guard keeps critical when «بحرانی» is in the text")
+    g = ab.guard_llm_intent("ذخیره شرود", ab.Intent(ab.I_COVERAGE, {}, source="llm"), "شرود")
+    check(g.slots.get("query") == "شرود", "guard fills the item the model dropped")
+    check(ab.item_mention("استاپرا چطوره") == "استوپر" and ab.item_mention("shroud") == "شرود", "item aliases")
+    check(ab.understood_fa(ab.Intent(ab.I_STOCK, {"query": "شرود"})) == "برداشت: موجودی شرود", "understood footer")
+    for c in ab.intent_choices("شرود", approver=True):
+        check(ab.rule_route(c) is not None, f"misfire choice «{c}» routes by rules")
     # Ollama down → rules still answer, unknown → None
     import services.assistant_brain as m
 
@@ -210,7 +282,7 @@ def run_llm_mock(codes: set[str] | None) -> None:
         t0 = time.time()
         it = ab.route("چی کم داریم", model="qwen2.5:1.5b")
         check(it.name == ab.I_CRITICAL, "rules work with Ollama down")
-        it = ab.route("کدوم جنسا ته کشیدن", model="qwen2.5:1.5b")
+        it = ab.route("یه لیست از چیزای در خطر بده", model="qwen2.5:1.5b")
         check(it.name == ab.I_UNKNOWN and time.time() - t0 < 10, "Ollama down → unknown quickly")
         check(m.rephrase("موجودی 5", model="x") is None, "rephrase with Ollama down → template kept")
     finally:
@@ -271,6 +343,29 @@ def run_data() -> None:
     codes = ab.known_codes(inv)
     run_rules(codes)
     run_heldout(codes, inv, ARGS.ollama_model)
+    run_heldout_stock(codes, inv, ARGS.ollama_model)
+    # the owner's real question → shroud stock from the latest stock data, with a table + PDF/Excel
+    a = ab.answer(db, owner, "چندتا شرود داربم؟", use_llm=False, log=False, rephrase_answer=False)
+    rows = inv.loc[inv["category_code"].map(ab._code_of) == "1581"]
+    if not rows.empty:
+        tot = float(pd.to_numeric(rows["quantity"], errors="coerce").fillna(0).sum())
+        check(a.intent.name == ab.I_STOCK and a.facts.get("code") == "1581" and abs(a.facts["total"] - tot) < 1e-6,
+              f"«چندتا شرود داربم؟» → shroud stock ({a.intent.name} {a.facts.get('code')})")
+        check(a.understood.startswith("برداشت: موجودی شرود"), f"footer {a.understood}")
+    from services import assistant_tables as at
+
+    crit = ab.answer(db, owner, "چی کم داریم", use_llm=False, log=False, rephrase_answer=False)
+    if at.has_table(crit.table):
+        import tempfile
+
+        from smoke_phase3 import check_pdf, check_xlsx
+
+        with tempfile.TemporaryDirectory() as td:
+            files = at.write_files(crit.table, td)
+            check(set(files) == {"pdf", "xlsx"}, f"assistant table files {files}")
+            check(not check_xlsx(files["xlsx"]), f"assistant xlsx style {check_xlsx(files['xlsx'])}")
+            check(not check_pdf(files["pdf"]), f"assistant pdf fonts {check_pdf(files['pdf'])}")
+        check(at.SEP in crit.text, "critical answer shows a text table")
 
     def ask(q: str, user=owner):
         a = ab.answer(db, user, q, use_llm=False, log=False, rephrase_answer=False)
@@ -424,6 +519,19 @@ def run_wiring() -> None:
     # menu buttons still win over the assistant
     out = send(7701, kb.BTN_HOME)
     check(kb.BTN_ASK_ASSISTANT in btns(out[-1][2]), "home menu shows ask button")
+    # «🔎 برداشت: …» footer + «❌ منظورم این نبود» → logged misfire + intent choices
+    out = send(7701, "چی کم داریم")
+    check("🔎 برداشت: اقلام بحرانی" in out[-1][1], f"answer footer: {out[-1][1][-80:]}")
+    check(kb.BTN_ASSISTANT_MISFIRE in btns(out[-1][2]), "misfire button under the answer")
+    out = send(7701, kb.BTN_ASSISTANT_MISFIRE)
+    choices = btns(out[-1][2])
+    check("اقلام بحرانی کدام‌اند" in choices and "راهنمای دستیار" in choices, f"misfire choices {choices}")
+    with db.connect() as conn:
+        acts = conn.execute("SELECT details_json FROM user_activity WHERE action_key='report_assistant_misfire' "
+                            "ORDER BY id DESC LIMIT 1").fetchall()
+    check(bool(acts) and "چی کم داریم" in str(acts[0][0]), "misfire logged with the question")
+    out = send(7701, "اقلام بحرانی کدام‌اند")
+    check("اقلام بحرانی" in out[-1][1] and "🔎" in out[-1][1], "a misfire choice re-asks the assistant")
     # web parity
     from fastapi.testclient import TestClient
 
@@ -469,6 +577,7 @@ if __name__ == "__main__":
     else:
         run_rules(None)
         run_heldout(None, None, ARGS.ollama_model)
+        run_heldout_stock(None, None, ARGS.ollama_model)
     run_llm_mock(None)
     run_wiring()
     if ARGS.ollama_model:

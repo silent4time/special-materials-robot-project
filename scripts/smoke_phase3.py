@@ -187,7 +187,9 @@ def test_errors_and_expiry() -> None:
 def check_xlsx(path: Path) -> list[str]:
     from openpyxl import load_workbook
 
-    from excel.table_style import _first_table_row
+    from excel.table_style import EXCEL_FONT, _first_table_row
+
+    assert EXCEL_FONT == "Tahoma", EXCEL_FONT
 
     bad: list[str] = []
     wb = load_workbook(path)
@@ -199,12 +201,15 @@ def check_xlsx(path: Path) -> list[str]:
             for c in row:
                 if c.value in (None, ""):
                     continue
-                if c.font.name != "Vazirmatn":
+                if c.font.name != EXCEL_FONT:
                     bad.append(f"{path.name}/{ws.title}!{c.coordinate} font {c.font.name}")
-                if c.alignment.horizontal != "center":
-                    bad.append(f"{path.name}/{ws.title}!{c.coordinate} align {c.alignment.horizontal}")
+                if c.alignment.horizontal != "center" or c.alignment.vertical != "center":
+                    bad.append(f"{path.name}/{ws.title}!{c.coordinate} align {c.alignment.horizontal}/"
+                               f"{c.alignment.vertical}")
                 if header and c.row >= header and c.border.left.style != "thin" and c.border.left.style is None:
                     bad.append(f"{path.name}/{ws.title}!{c.coordinate} no border")
+        if header and ws.max_row > header and ws.freeze_panes is None:
+            bad.append(f"{path.name}/{ws.title}: header row {header} not frozen")
         if header:
             hcells = [c for c in ws[header] if c.value not in (None, "")]
             if any(c.fill.fill_type is None for c in hcells):
