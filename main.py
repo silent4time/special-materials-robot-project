@@ -93,6 +93,8 @@ def main() -> int:
         logger.info("Polling started…")
         last_reminder_tick = 0.0
         last_housekeeping = time.monotonic()
+        last_backup_tick = 0.0
+        from services import backup as backup_svc
         while True:
             try:
                 updates = client.get_updates()
@@ -102,6 +104,13 @@ def main() -> int:
                 if time.monotonic() - last_reminder_tick >= REMINDER_TICK_SECONDS:
                     last_reminder_tick = time.monotonic()
                     mandatory_reminders.tick(client, db)
+                # 💾 بک‌آپ خودکار شبانه ۰۲:۰۰ تهران (catch-up after restart; never raises)
+                if time.monotonic() - last_backup_tick >= 60:
+                    last_backup_tick = time.monotonic()
+                    try:
+                        backup_svc.nightly_tick(client, db, paths=backup_svc.Paths(db=db.path))
+                    except Exception:  # noqa: BLE001
+                        logger.exception("nightly backup tick failed")
                 if time.monotonic() - last_housekeeping >= HOUSEKEEPING_SECONDS:
                     last_housekeeping = time.monotonic()
                     housekeeping.run_all()

@@ -1464,6 +1464,9 @@ class BotApp:
         self.db.set_pending_file_type(user["bale_user_id"], None)
         self._await_category_code.discard(uid)
         self._main_source_pending.pop(uid, None)
+        if self._backup_restore_pending.pop(uid, None) is not None:
+            self._reply(message, "بازگردانی لغو شد.", kb.backup_menu(user))
+            return
         # short message + the menu the flow started from (no full status dump)
         if had_main_source:
             self._upload_return_menu.pop(uid, None)
@@ -4473,6 +4476,14 @@ class BotApp:
             self._on_role_perm_callback(data, message, user, answer)
             return
 
+        if data.startswith(kb.CB_BACKUP_PREFIX):
+            user = ensure_registered(self.db, uid, self._display_name(message))
+            if not user:
+                answer("شما در سیستم ثبت نشده‌اید.", alert=True)
+                return
+            self._on_backup_callback(data, message, user, answer)
+            return
+
         if data.startswith(msa.CB_PREFIX):
             user = ensure_registered(self.db, uid, self._display_name(message))
             if not user:
@@ -4625,6 +4636,188 @@ class BotApp:
         self.db.set_setting(va.SETTING_ENABLED, "1" if enable else "0", updated_by=user["bale_user_id"])
         log_activity(self.db, user, "assistant_enabled" if enable else "assistant_disabled")
         self._reply(message, f"دستیار هوشمند {'فعال شد' if enable else 'غیرفعال شد'}.", kb.assistant_settings_menu())
+
+    # ---------- 💾 بک‌آپ (services.backup; web parity: /settings/backups) ----------
+    @property
+    def _backup_restore_pending(self) -> dict:
+        d = self.__dict__.get("_bk_pending")
+        if d is None:
+            d = self.__dict__["_bk_pending"] = {}
+        return d
+
+    def _backup_user(self, message: dict) -> dict | None:
+        user = self._user_or_deny(message)
+        if not user:
+            return None
+        if self._deny_technician(message, user, perm.BACKUP):
+            return None
+        return user
+
+    def on_backup_menu(self, message: dict) -> None:
+        from services import backup as bk
+
+        user = self._backup_user(message)
+        if not user:
+            return
+        self._reply(
+            message,
+            "💾 بک‌آپ کامل (پایگاه داده + فایل‌های منبع اصلی و آپلودها + دارایی‌های ربات؛ بدون توکن و رمزها).\n"
+            + bk.last_auto_status_fa(self.db)
+            + "\nبازگردانی فقط توسط مالک.",
+            kb.backup_menu(user),
+        )
+
+    def on_backup_create(self, message: dict) -> None:
+        from services import backup as bk
+
+        user = self._backup_user(message)
+        if not user:
+            return
+        self._reply(message, "⏳ در حال ساخت بک‌آپ…")
+        try:
+            path = bk.create_backup(bk.MANUAL, paths=bk.Paths(db=self.db.path), actor=str(user["bale_user_id"]))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("manual backup failed")
+            self._reply(message, user_errors.error_fa("ساخت بک‌آپ ناموفق بود", exc), kb.backup_menu(user))
+            return
+        log_activity(self.db, user, "backup_create", file=path.name)
+        bk.send_to_chat(self.client, self._chat_id(message), path,
+                        caption=f"💾 بک‌آپ دستی — {path.name} ({bk.human_size(path.stat().st_size)})")
+        self._reply(message, "✅ بک‌آپ ساخته شد.", kb.backup_menu(user))
+
+    def on_backup_list(self, message: dict) -> None:
+        from services import backup as bk
+
+        user = self._backup_user(message)
+        if not user:
+            return
+        items = bk.list_backups()[:15]
+        if not items:
+            self._reply(message, "هنوز بک‌آپی نیست.\n" + bk.last_auto_status_fa(self.db), kb.backup_menu(user))
+            return
+        lines = ["📋 بک‌آپ‌ها (جدیدترین اول):"] + [
+            f"{i}) {b['date_fa']} — {b['kind_fa']} — {b['size_fa']}" for i, b in enumerate(items, 1)
+        ] + ["", bk.last_auto_status_fa(self.db), "برای دریافت، دکمهٔ شمارهٔ آن را بزنید."]
+        rows = [[{"text": f"⬇️ {i}) {b['date_fa']}", "callback_data": f"{kb.CB_BACKUP_PREFIX}get|{b['name']}"}]
+                for i, b in enumerate(items, 1)]
+        self.client.send_message(self._chat_id(message), "\n".join(lines), reply_markup={"inline_keyboard": rows})
+
+    def on_backup_restore_start(self, message: dict) -> None:
+        user = self._backup_user(message)
+        if not user:
+            return
+        if not perm.is_owner(user):
+            self._reply(message, "بازگردانی فقط توسط مالک امکان‌پذیر است.", kb.backup_menu(user))
+            return
+        uid = str(user["bale_user_id"])
+        self._backup_restore_pending[uid] = {"await": "zip"}
+        self._reply(
+            message,
+            "♻️ فایل ZIP بک‌آپ (nasoz_backup_….zip) را بفرستید.\n"
+            "ابتدا اعتبار و sha256 بررسی و خلاصه نشان داده می‌شود؛ پیش از بازگردانی خودکار یک بک‌آپ گرفته می‌شود.",
+            kb.cancel_pending_menu(),
+        )
+
+    def on_backup_restore_document(self, message: dict) -> bool:
+        from services import backup as bk
+
+        uid = str(self._uid(message))
+        pend = self._backup_restore_pending.get(uid)
+        if not pend or pend.get("await") != "zip":
+            return False
+        user = self._user_or_deny(message)
+        if not user or not perm.is_owner(user):
+            self._backup_restore_pending.pop(uid, None)
+            return True
+        doc = message.get("document") or {}
+        name = (doc.get("file_name") or "").strip()
+        if not name.lower().endswith(".zip") or not doc.get("file_id"):
+            self._reply(message, "فقط فایل .zip بک‌آپ پذیرفته می‌شود.", kb.cancel_pending_menu())
+            return True
+        dest = bk.Paths().backups / "incoming" / f"restore_{uid}.zip"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.client.download_file(doc["file_id"], dest)
+        except Exception as exc:  # noqa: BLE001
+            self._reply(message, user_errors.error_fa("دانلود فایل از بله ناموفق بود (برای فایل‌های بزرگ از وب استفاده کنید)", exc),
+                        kb.backup_menu(user))
+            self._backup_restore_pending.pop(uid, None)
+            return True
+        man, err = bk.validate(dest)
+        if not man:
+            dest.unlink(missing_ok=True)
+            self._backup_restore_pending.pop(uid, None)
+            self._reply(message, f"⛔ فایل رد شد: {err}", kb.backup_menu(user))
+            return True
+        self._backup_restore_pending[uid] = {"await": "confirm1", "path": str(dest)}
+        self.client.send_message(
+            self._chat_id(message),
+            bk.summary_fa(man) + "\n\n⚠ همهٔ داده‌های فعلی با این بک‌آپ جایگزین می‌شود. ادامه می‌دهید؟",
+            reply_markup={"inline_keyboard": [[
+                {"text": "✅ ادامه", "callback_data": f"{kb.CB_BACKUP_PREFIX}r1"},
+                {"text": "❌ انصراف", "callback_data": f"{kb.CB_BACKUP_PREFIX}rx"}]]},
+        )
+        return True
+
+    def _on_backup_callback(self, data: str, message: dict, user: dict, answer) -> None:
+        from services import backup as bk
+
+        uid = str(user["bale_user_id"])
+        parts = data[len(kb.CB_BACKUP_PREFIX):].split("|", 1)
+        act = parts[0]
+        if act == "get":
+            if not perm.can(user, perm.BACKUP):
+                answer("دسترسی ندارید.", alert=True)
+                return
+            path = bk.resolve(parts[1] if len(parts) > 1 else "")
+            if not path:
+                answer("فایل یافت نشد.", alert=True)
+                return
+            answer()
+            log_activity(self.db, user, "backup_download", file=path.name)
+            bk.send_to_chat(self.client, self._chat_id(message), path, caption=f"💾 {path.name}")
+            return
+        pend = self._backup_restore_pending.get(uid) or {}
+        if not perm.is_owner(user):
+            answer("فقط مالک.", alert=True)
+            return
+        if act == "rx":
+            p = pend.get("path")
+            if p:
+                Path(p).unlink(missing_ok=True)
+            self._backup_restore_pending.pop(uid, None)
+            answer("لغو شد.")
+            self._reply(message, "بازگردانی لغو شد.", kb.backup_menu(user))
+            return
+        if act == "r1" and pend.get("await") == "confirm1":
+            pend["await"] = "confirm2"
+            answer()
+            self.client.send_message(
+                self._chat_id(message),
+                "⚠️ تأیید نهایی: پایگاه داده، فایل‌های آپلود و دارایی‌های ربات با بک‌آپ جایگزین می‌شوند "
+                "(پیش از آن خودکار یک بک‌آپ «پیش از بازگردانی» گرفته می‌شود).",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "⚠️ بله، بازگردانی شود", "callback_data": f"{kb.CB_BACKUP_PREFIX}r2"},
+                    {"text": "❌ انصراف", "callback_data": f"{kb.CB_BACKUP_PREFIX}rx"}]]},
+            )
+            return
+        if act == "r2" and pend.get("await") == "confirm2":
+            answer("در حال بازگردانی…")
+            path = Path(pend["path"])
+            self._backup_restore_pending.pop(uid, None)
+            try:
+                ok, text, _pre = bk.restore(path, paths=bk.Paths(db=self.db.path), actor=uid)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("restore failed")
+                ok, text = False, user_errors.error_fa("بازگردانی ناموفق بود", exc)
+            finally:
+                path.unlink(missing_ok=True)
+            perm.invalidate()
+            if ok:
+                log_activity(self.db, user, "backup_restore", file=path.name)
+            self._reply(message, text, kb.backup_menu(user))
+            return
+        answer("این مرحله منقضی شده است؛ دوباره از «♻️ بازگردانی» شروع کنید.", alert=True)
 
     def on_voice_message(self, message: dict) -> None:
         """Voice/audio: only the owner, only when enabled AND installed. Never crashes."""
@@ -6149,6 +6342,8 @@ class BotApp:
             return
 
         if message.get("document"):
+            if self.on_backup_restore_document(message):
+                return
             if self.on_bot_settings_letterhead_document(message):
                 return
         if message.get("photo") or message.get("document"):
@@ -6369,6 +6564,10 @@ class BotApp:
             kb.BTN_SET_LETTERHEAD: lambda m: self.on_bot_settings_section(m, "letterhead"),
             kb.BTN_SET_STOCK_GROUP: lambda m: self.on_bot_settings_section(m, "stock_group"),
             kb.BTN_ASSISTANT: self.on_assistant_settings,
+            kb.BTN_BACKUP: self.on_backup_menu,
+            kb.BTN_BACKUP_CREATE: self.on_backup_create,
+            kb.BTN_BACKUP_LIST: self.on_backup_list,
+            kb.BTN_BACKUP_RESTORE: self.on_backup_restore_start,
             kb.BTN_ASSISTANT_STATUS: self.on_assistant_settings,
             kb.BTN_ASSISTANT_ON: lambda m: self.on_assistant_toggle(m, True),
             kb.BTN_ASSISTANT_OFF: lambda m: self.on_assistant_toggle(m, False),

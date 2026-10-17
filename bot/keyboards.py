@@ -52,6 +52,7 @@ MENU_PARENT: dict[str, str | None] = {
     "stock_group": "settings",
     "appearance": "settings",
     "assistant": "settings",
+    "backup": "settings",
     "appearance_item": "appearance",
     "role_perms": "settings",
     "letterhead": "appearance",
@@ -797,6 +798,7 @@ def bot_settings_menu(user: dict | None = None) -> dict:
         (perm.REMINDERS, BTN_SET_REMINDERS),
         (perm.STOCK_GROUP, BTN_SET_STOCK_GROUP),
         (perm.APPEARANCE, BTN_APPEARANCE),
+        (perm.BACKUP, BTN_BACKUP),
     ]
     labels = [lbl for feat, lbl in items if user is None or perm.can(user, feat)]
     # دستیار هوشمند فقط برای مالک
@@ -804,6 +806,20 @@ def bot_settings_menu(user: dict | None = None) -> dict:
         labels.append(BTN_ASSISTANT)
     return _kb(_pairs(labels), "settings")
 
+
+
+BTN_BACKUP = "💾 بک‌آپ"
+BTN_BACKUP_CREATE = "💾 ساخت بک‌آپ کامل"
+BTN_BACKUP_LIST = "📋 لیست بک‌آپ‌ها"
+BTN_BACKUP_RESTORE = "♻️ بازگردانی از بک‌آپ"
+CB_BACKUP_PREFIX = "bk|"
+
+
+def backup_menu(user: dict | None = None) -> dict:
+    rows = [[BTN_BACKUP_CREATE, BTN_BACKUP_LIST]]
+    if perm.is_owner(user):
+        rows.append([BTN_BACKUP_RESTORE])
+    return _kb(rows, "backup")
 
 
 def assistant_settings_menu() -> dict:
@@ -1177,6 +1193,10 @@ def _button_features() -> dict[str, tuple[str, ...]]:
         BTN_SET_REMINDERS: (P.REMINDERS,),
         BTN_SET_STOCK_GROUP: (P.STOCK_GROUP,),
         BTN_APPEARANCE: (P.APPEARANCE,),
+        BTN_BACKUP: (P.BACKUP,),
+        BTN_BACKUP_CREATE: (P.BACKUP,),
+        BTN_BACKUP_LIST: (P.BACKUP,),
+        BTN_BACKUP_RESTORE: (P.BACKUP,),
         BTN_SET_INVITE: (P.APPEARANCE,),
         BTN_SET_WELCOME: (P.APPEARANCE,),
         BTN_SET_LOGO: (P.APPEARANCE,),
