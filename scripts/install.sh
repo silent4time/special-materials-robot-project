@@ -23,7 +23,10 @@ usage() {
   cat <<'HELP'
 Usage: bash install.sh [options]
 
-  (بدون پرچم)        نصب کامل: بسته های سیستم + venv + ویزارد .env + سرویس ها + تست سلامت
+  (بدون پرچم)        در ترمینال تعاملی: منوی اصلی فارسی (نصب، به روزرسانی، وضعیت، بک آپ، بازیابی،
+                     تعمیر، سرویس ها، لاگ ها، تنظیمات). بدون ترمینال: نصب کامل مثل --install
+  --install          نصب کامل بدون منو: بسته های سیستم + venv + ویزارد .env + سرویس ها + تست سلامت
+  --menu             نمایش منو حتی با پرچم های دیگر (مثلا --menu --offline DIR یا --menu --dry-run)
   --update           به روزرسانی برنامه: پشتیبان DB + git pull + pip install -r requirements + migrate
                      + restart سرویس ها + تست سلامت (.env و data حفظ می شود)
   --system-upgrade   ارتقای سیستم عامل: apt-get update && apt-get upgrade -y (غیرتعاملی، فایل های
@@ -54,7 +57,7 @@ Usage: bash install.sh [options]
 HELP
 }
 
-_want_restore=0; _want_offline=0
+_want_restore=0; _want_offline=0; WANT_MENU=0; NASOZ_ARGC=$#
 for arg in "$@"; do
   if (( _want_restore )); then RESTORE_FILE="$arg"; _want_restore=0; continue; fi
   if (( _want_offline )); then OFFLINE_SRC="$arg"; _want_offline=0; continue; fi
@@ -63,6 +66,8 @@ for arg in "$@"; do
     --restore=*) RESTORE_FILE="${arg#--restore=}" ;;
     --offline) _want_offline=1 ;;
     --offline=*) OFFLINE_SRC="${arg#--offline=}" ;;
+    --install) ;;                      # explicit fresh install (skips the menu)
+    --menu) WANT_MENU=1 ;;
     --seed-admin) DO_SEED=1 ;;
     --systemd) SYSTEMD_CHOICE=y ;;
     --no-systemd) SYSTEMD_CHOICE=n ;;
@@ -98,6 +103,41 @@ if (( PROGRESS_TTY )) && [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb ]]; th
 else
   C_B=""; C_G=""; C_R=""; C_0=""
 fi
+# ---------- logo (plain ASCII + box drawing; ≤ 80 columns; color only if tput colors ≥ 8) ----------
+logo_colors() {
+  [[ -z "${NO_COLOR:-}" && -t 2 && "${TERM:-dumb}" != dumb ]] || return 1
+  local n; n="$(tput colors 2>/dev/null || echo 0)"
+  [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 8 ))
+}
+app_version() {  # app_version DIR → "commit/tag (date)" from VERSION, git or the offline bundle stamp
+  local d="${1:-}" v="" dt=""
+  [[ -n "$d" && -d "$d" ]] || { printf 'نامشخص'; return 0; }
+  if [[ -f "$d/VERSION" ]]; then v="$(head -n1 "$d/VERSION" | tr -d '\r')"; fi
+  if [[ -d "$d/.git" ]] && need_cmd git; then
+    [[ -n "$v" ]] || v="$(git -C "$d" describe --tags --always 2>/dev/null || true)"
+    dt="$(git -C "$d" log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M' 2>/dev/null || true)"
+  fi
+  if [[ -z "$v" && -f "$d/.offline_commit" ]]; then
+    v="$(head -n1 "$d/.offline_commit") (بسته آفلاین)"; dt="$(date -r "$d/.offline_commit" '+%Y-%m-%d' 2>/dev/null || true)"
+  fi
+  printf '%s%s' "${v:-نامشخص}" "${dt:+ ، $dt}"
+}
+print_logo() {  # print_logo [version-dir]
+  local f="" b="" s="" z="" ver
+  if logo_colors; then f=$'\033[1;33m'; b=$'\033[1;31m'; s=$'\033[36m'; z=$'\033[0m'; fi
+  ver="$(app_version "${1:-}")"
+  cat >&2 <<LOGO
+
+${f}     (  )  (    ${b} ███╗   ██╗ █████╗ ███████╗ ██████╗ ███████╗${z}
+${f}    ) (  )  )   ${b} ████╗  ██║██╔══██╗██╔════╝██╔═══██╗╚══███╔╝${z}
+${f}   (  ) (  (    ${b} ██╔██╗ ██║███████║███████╗██║   ██║  ███╔╝ ${z}
+${s}  \\~~~~~~~~~~/  ${b} ██║╚██╗██║██╔══██║╚════██║██║   ██║ ███╔╝  ${z}
+${s}   \\________/   ${b} ██║ ╚████║██║  ██║███████║╚██████╔╝███████╗${z}
+${s}      |  |      ${b} ╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚══════╝${z}
+${s}  ════════════════════════════════════════════════════════════${z}
+   ربات مدیریت مواد نسوز تاندیش   |   نسخه: ${ver}
+LOGO
+}
 fa_digits() { printf '%s' "$1" | sed 'y/0123456789/۰۱۲۳۴۵۶۷۸۹/'; }
 step() {  # step "نام مرحله" → «[۳/۱۰] ۳۰٪ ███░░░░░░░ نام...»
   STEP_N=$((STEP_N + 1)); STEP_NAME="$1"
@@ -155,7 +195,7 @@ trap on_exit EXIT
 # ---------- terminal detection: stdin, else /dev/tty ----------
 TTY_FD=""
 if [[ "${NONINTERACTIVE:-0}" != "1" ]]; then
-  if [[ -t 0 ]]; then
+  if [[ -t 0 || "${NASOZ_TTY_STDIN:-0}" == 1 ]]; then   # NASOZ_TTY_STDIN=1: scripted tests feed stdin
     TTY_FD=0
   elif { exec 3</dev/tty; } 2>/dev/null; then
     TTY_FD=3
@@ -819,7 +859,313 @@ maybe_assistant() {
   return 0
 }
 
+# ========== interactive main menu (no flags + terminal; flags always skip it) ==========
+SELF_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+MENU_DIR=""   # install dir found WITHOUT cloning ("" = nothing here yet)
+menu_find_dir() {
+  local c
+  for c in "${INSTALL_DIR:-}" "$(dirname "$(dirname "$SELF_SCRIPT")")" "$PWD" /opt/nasoz "$PWD/$REPO_NAME" "/root/$REPO_NAME"; do
+    [[ -n "$c" ]] && is_repo_root "$c" || continue
+    # prefer a configured install; the bundle's own app/ is never "the install"
+    if [[ -f "$c/.env" ]] && token_format_ok "$(WORKDIR="$c" env_get BALE_BOT_TOKEN)"; then (cd "$c" && pwd); return 0; fi
+  done
+  for c in "${INSTALL_DIR:-}" "$(dirname "$(dirname "$SELF_SCRIPT")")"; do
+    [[ -n "$c" ]] && is_repo_root "$c" && [[ "$(basename "$c")" != app ]] && { (cd "$c" && pwd); return 0; }
+  done
+  return 0
+}
+menu_installed() { [[ -n "$MENU_DIR" ]] && WORKDIR="$MENU_DIR" env_configured; }
+menu_need_install() {
+  if menu_installed; then return 0; fi
+  warn "ربات هنوز روی این سرور نصب نشده است (فایل .env با توکن پیدا نشد)."
+  log "  ابتدا گزینه 1 (نصب جدید) را انتخاب کنید."
+  return 1
+}
+menu_pause() { local _r; printf '\nبرای بازگشت به منو Enter بزنید...' >&2; IFS= read -r -u "$TTY_FD" _r || true; }
+menu_run() {  # menu_run args… → run a child installer; its failure never ends the menu
+  local rc=0
+  log ""
+  _NASOZ_MENU_CHILD=1 bash "$@" || rc=$?
+  if (( rc == 0 )); then ok "انجام شد."; else warn "عملیات با خطا تمام شد (کد $rc). جزئیات در پیام های بالا و لاگ نصب."; fi
+  return 0
+}
+menu_script() { if [[ -n "$MENU_DIR" ]]; then printf '%s' "$MENU_DIR/scripts/install.sh"; else printf '%s' "$SELF_SCRIPT"; fi; }
+MENU_DRY=(); if (( DRY_RUN )); then MENU_DRY=(--dry-run); fi
+redact_stream() {  # never let the bot token reach the terminal
+  local t; t="$(WORKDIR="$MENU_DIR" env_get BALE_BOT_TOKEN 2>/dev/null || true)"
+  awk -v t="$t" '{ if (t != "") while ((i = index($0, t)) > 0) $0 = substr($0, 1, i - 1) "<توکن مخفی>" substr($0, i + length(t)); print }' \
+    | LC_ALL=C sed -E 's/[0-9]{6,}:[A-Za-z0-9_-]{20,}/<توکن مخفی>/g; s/\xE2\x80\x8C/ /g; s/\xE2\x80[\x8B\x8D\x8E\x8F]//g'   # + ZWNJ → space (PuTTY/CMD)
+}
+menu_py() { if [[ -x "$MENU_DIR/.venv/bin/python" ]]; then printf '%s' "$MENU_DIR/.venv/bin/python"; else printf '%s' python3; fi; }
+
+# ---- 3) status ----
+url_check() {  # url_check LABEL URL → "✓/✗ LABEL (HTTP code)"
+  local code mark="✗"
+  code="$(http_code "$2")"
+  if [[ "$code" =~ ^[23] || "$code" == 401 || "$code" == 404 || "$code" == 405 ]]; then mark="✓"; fi
+  if [[ "$code" == 000 ]]; then printf '  %s  بدون اتصال  %s\n' "$mark" "$1" >&2
+  else printf '  %s  HTTP %s    %s\n' "$mark" "$code" "$1" >&2; fi
+}
+apt_mirror_url() {
+  local u=""
+  u="$(grep -hsE '^[[:space:]]*deb[[:space:]]' /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null \
+       | awk '{for (i = 2; i <= NF; i++) if ($i ~ /^https?:/) {print $i; exit}}')" || true
+  [[ -n "$u" ]] || u="$(grep -hsE '^URIs:' /etc/apt/sources.list.d/*.sources 2>/dev/null | awk '{print $2; exit}')" || true
+  printf '%s' "$u"
+}
+svc_line() {  # svc_line systemd-name label pid-name script
+  local st since secs up=""
+  if systemd_installed && have_systemd; then
+    st="$(systemctl is-active "$1" 2>/dev/null || true)"
+    if [[ "$st" == active ]]; then
+      since="$(systemctl show -p ActiveEnterTimestamp --value "$1" 2>/dev/null || true)"
+      if [[ -n "$since" ]] && secs=$(( $(date +%s) - $(date -d "$since" +%s 2>/dev/null || date +%s) )); then
+        up="، روشن از $(( secs / 86400 )) روز و $(( secs % 86400 / 3600 )) ساعت و $(( secs % 3600 / 60 )) دقیقه پیش"
+      fi
+      printf '  ✓ %s: فعال (systemd: %s%s)\n' "$2" "$1" "$up" >&2
+    else
+      printf '  ✗ %s: %s (systemd: %s)\n' "$2" "${st:-نامشخص}" "$1" >&2
+    fi
+  elif pid_alive "$MENU_DIR/data/$3.pid"; then
+    up="$(ps -o etime= -p "$(cat "$MENU_DIR/data/$3.pid")" 2>/dev/null | tr -d ' ' || true)"
+    printf '  ✓ %s: در حال اجرا (nohup، pid %s، مدت %s)\n' "$2" "$(cat "$MENU_DIR/data/$3.pid")" "${up:-?}" >&2
+  else
+    printf '  ✗ %s: خاموش\n' "$2" >&2
+  fi
+}
+menu_status() {
+  local d="$MENU_DIR" tok port host k v pyv
+  log ""; log "━━━━━━━━ وضعیت ━━━━━━━━"
+  log "نسخه ربات:    $(app_version "$d")"
+  log "مسیر نصب:     ${d:-نصب نشده}"
+  if [[ -x "$d/.venv/bin/python" ]]; then pyv="$("$d/.venv/bin/python" -V 2>&1) (.venv)"; else pyv="$(python3 -V 2>&1 || echo 'python3 پیدا نشد') (سیستم)"; fi
+  log "پایتون:       $pyv"
+  if ! menu_installed; then
+    log ""; warn "ربات هنوز نصب نشده است (.env با توکن پیدا نشد) — برای نصب گزینه 1 را بزنید."
+    d=""
+  fi
+  if [[ -n "$d" ]]; then
+    tok="$(WORKDIR="$d" env_get BALE_BOT_TOKEN)"
+    port="$(WORKDIR="$d" env_get WEB_PORT)"; port="${port:-8000}"; host="$(WORKDIR="$d" env_get WEB_HOST)"
+    log ""; log "تنظیمات (.env):"
+    if token_format_ok "$tok"; then
+      local rc=0; getme "$tok" || rc=$?
+      case "$rc" in
+        0) log "  توکن:          تنظیم شده (مخفی) — ✓ getMe: @${GETME_USERNAME}" ;;
+        1) log "  توکن:          تنظیم شده (مخفی) — ✗ بله این توکن را رد کرد" ;;
+        *) log "  توکن:          تنظیم شده (مخفی) — ✗ دسترسی به tapi.bale.ai برای getMe نیست" ;;
+      esac
+    else
+      log "  توکن:          تنظیم نشده"
+    fi
+    log "  نام کاربری ربات: @$(WORKDIR="$d" env_get BOT_USERNAME)"
+    local aid; aid="$(WORKDIR="$d" env_get ADMIN_BALE_USER_ID)"
+    log "  شناسه مالک (.env): ${aid:-- (اولین /start مالک می شود)}"
+    log "  پنل وب:        ${host:-0.0.0.0}:${port}  (کاربر: $(WORKDIR="$d" env_get WEB_ADMIN_USERNAME))"
+    log ""; log "سرویس ها:"
+    svc_line "$BOT_SERVICE" "ربات" bot main.py
+    svc_line "$WEB_SERVICE" "پنل وب" web web_main.py
+  fi
+  log ""; log "اتصال ها:"
+  url_check "tapi.bale.ai" "https://tapi.bale.ai/"
+  [[ -n "$d" ]] && url_check "پنل وب /login" "http://127.0.0.1:${port}/login"
+  url_check "github.com" "https://github.com/"
+  url_check "pypi.org" "https://pypi.org/simple/"
+  local m; m="$(apt_mirror_url)"
+  if [[ -n "$m" ]]; then url_check "mirror apt" "$m"; else log "  - mirror apt: پیدا نشد"; fi
+  if [[ -n "$d" ]]; then
+    log ""; log "داده و بک آپ:"
+    log "  حجم data/:     $(du -sh "$d/data" 2>/dev/null | cut -f1 || echo -)   (فضای آزاد دیسک: $(df -h "$d" 2>/dev/null | awk 'NR==2{print $4}'))"
+    if [[ -f "$d/data/bot.db" || -x "$d/.venv/bin/python" ]]; then
+      while IFS='=' read -r k v; do
+        case "$k" in
+          DB_SIZE) log "  حجم پایگاه داده: $v" ;;
+          OWNERS) log "  مالک ها (بله):  $v" ;;
+          ADMINS) log "  مدیرها (بله):   $v" ;;
+          USERS) log "  کاربران فعال:  $v" ;;
+          LAST_BACKUP) log "  آخرین بک آپ:    $v" ;;
+          BACKUP_COUNT) log "  تعداد بک آپ ها: $v (در data/backups)" ;;
+          NIGHTLY) log "  بک آپ شبانه:    $v" ;;
+          DB_ERROR) log "  ✗ خواندن پایگاه داده ناموفق بود ($v)" ;;
+        esac
+      done < <(cd "$d" && timeout 60 "$(menu_py)" scripts/menu_helper.py status 2>/dev/null | redact_stream || true)
+    fi
+  fi
+}
+
+# ---- 4) backup ----
+menu_backup() {
+  menu_need_install || return 0
+  local send=""
+  if yes_no N "بک آپ برای مالک در بله هم فرستاده شود؟"; then send="--send"; fi
+  if (( DRY_RUN )); then log "[dry-run] $(menu_py) scripts/menu_helper.py backup $send"; return 0; fi
+  log "ساخت بک آپ کامل (پایگاه داده + uploads + bot_assets) ..."
+  (cd "$MENU_DIR" && "$(menu_py)" scripts/menu_helper.py backup ${send:+"$send"} 2>&1 | redact_stream) || warn "ساخت بک آپ ناموفق بود."
+}
+
+# ---- 5) restore ----
+menu_restore() {
+  menu_need_install || return 0
+  local -a files=() ; local line i=0 pick file owners oid
+  log ""; log "بک آپ های موجود در $MENU_DIR/data/backups:"
+  while IFS='|' read -r line rest; do
+    [[ -n "$line" ]] || continue
+    files+=("$line"); i=$((i + 1))
+    printf '  %2d) %s  (%s)\n' "$i" "$(basename "$line")" "$rest" >&2
+  done < <(cd "$MENU_DIR" && "$(menu_py)" scripts/menu_helper.py list 2>/dev/null | redact_stream || true)
+  (( i )) || log "  (هیچ بک آپی پیدا نشد)"
+  pick="$(ask "شماره بک آپ یا مسیر کامل فایل zip (0 = انصراف)" "0")"
+  if [[ "$pick" == 0 ]]; then log "لغو شد."; return 0; fi
+  if [[ "$pick" =~ ^[0-9]+$ ]] && (( pick >= 1 && pick <= i )); then file="${files[pick-1]}"; else file="$pick"; fi
+  [[ -f "$file" ]] || { warn "فایل پیدا نشد: $file"; return 0; }
+  # owner-level confirmation: the owner's Bale ID (from DB or .env) must be typed
+  owners="$(cd "$MENU_DIR" && "$(menu_py)" scripts/menu_helper.py status 2>/dev/null | sed -n 's/^OWNERS=//p' | tr -d ' ' | tr '،' ' ')"
+  [[ "$owners" == "-" ]] && owners=""
+  owners="$owners $(WORKDIR="$MENU_DIR" env_get ADMIN_BALE_USER_ID)"
+  if [[ -n "${owners// /}" ]]; then
+    oid="$(ask "تایید مالک: شناسه عددی مالک در بله را وارد کنید")"
+    if [[ -z "$oid" || " $owners " != *" $oid "* ]]; then warn "شناسه مالک درست نیست؛ بازیابی انجام نشد."; return 0; fi
+  else
+    warn "هنوز مالکی ثبت نشده است؛ فقط با تایید متنی ادامه می دهیم."
+  fi
+  log "قبل از بازیابی یک بک آپ خودکار «پیش از بازگردانی» گرفته می شود."
+  menu_run "$(menu_script)" --restore "$file" "${MENU_DRY[@]}"
+}
+
+# ---- 7) services ----
+menu_services() {
+  local act tgt units=() names=()
+  log ""; log "مدیریت سرویس ها:  1) استارت   2) توقف   3) ری استارت   4) وضعیت   0) بازگشت"
+  act="$(ask "انتخاب" "0")"
+  case "$act" in 1|2|3|4) ;; *) return 0 ;; esac
+  menu_need_install || return 0
+  if [[ "$act" == 4 ]]; then svc_line "$BOT_SERVICE" "ربات" bot main.py; svc_line "$WEB_SERVICE" "پنل وب" web web_main.py; return 0; fi
+  tgt="$(ask "کدام؟  1) ربات   2) پنل وب   3) هر دو" "3")"
+  case "$tgt" in 1) units=("$BOT_SERVICE"); names=(bot) ;; 2) units=("$WEB_SERVICE"); names=(web) ;; *) units=("$BOT_SERVICE" "$WEB_SERVICE"); names=(bot web) ;; esac
+  local verb; case "$act" in 1) verb=start ;; 2) verb=stop ;; 3) verb=restart ;; esac
+  if (( DRY_RUN )); then log "[dry-run] $verb ${units[*]}"; return 0; fi
+  WORKDIR="$MENU_DIR"; VENV_PY="$MENU_DIR/.venv/bin/python"
+  if systemd_installed && have_systemd; then
+    maybe_sudo systemctl "$verb" "${units[@]}" && ok "systemctl $verb ${units[*]}" || warn "systemctl $verb ناموفق بود: journalctl -u ${units[0]} -n 50"
+    return 0
+  fi
+  local n s p
+  for n in "${names[@]}"; do
+    if [[ "$n" == bot ]]; then s=main.py; else s=web_main.py; fi
+    if [[ "$verb" == stop ]]; then
+      if pid_alive "$MENU_DIR/data/$n.pid"; then p="$(cat "$MENU_DIR/data/$n.pid")"; kill "$p" 2>/dev/null || true; ok "$n متوقف شد (pid $p)"; else log "$n از قبل خاموش است"; fi
+    else
+      nohup_restart "$n" "$s"; ok "$n با nohup اجرا شد (pid $(cat "$MENU_DIR/data/$n.pid"))"
+    fi
+  done
+}
+
+# ---- 8) logs ----
+menu_logs() {
+  local c n f
+  log ""; log "مشاهده لاگ ها:  1) ربات   2) پنل وب   3) آخرین لاگ نصب   4) journalctl ربات   5) journalctl وب   0) بازگشت"
+  c="$(ask "انتخاب" "0")"
+  case "$c" in 1|2|3|4|5) ;; *) return 0 ;; esac
+  [[ -n "$MENU_DIR" ]] || { menu_need_install; return 0; }
+  n="$(ask "تعداد خط های آخر" "50")"; [[ "$n" =~ ^[0-9]+$ ]] || n=50
+  case "$c" in
+    1) f="$MENU_DIR/data/bot.log" ;;
+    2) f="$MENU_DIR/data/web.log" ;;
+    3) f="$(find "$MENU_DIR/data/logs" -maxdepth 1 -name 'nasoz_install_*.log' -printf '%T@ %p\n' 2>/dev/null | sort -rn | awk 'NR==1{print $2}')" ;;
+    4|5) if need_cmd journalctl; then
+           local u="$BOT_SERVICE"; [[ "$c" == 5 ]] && u="$WEB_SERVICE"
+           log "━━━━ journalctl -u $u (آخرین $n خط) ━━━━"
+           journalctl -u "$u" -n "$n" --no-pager 2>&1 | redact_stream >&2 || true
+         else warn "journalctl روی این سیستم نیست."; fi
+         return 0 ;;
+  esac
+  if [[ -z "$f" || ! -f "$f" ]]; then warn "فایل لاگ پیدا نشد: ${f:-data/logs}"; return 0; fi
+  log "━━━━ $f (آخرین $n خط) ━━━━"
+  tail -n "$n" "$f" | redact_stream >&2
+}
+
+# ---- 2) update ----
+menu_update() {
+  menu_need_install || return 0
+  local mode=--update src="" def=""
+  if yes_no N "ارتقای سیستم عامل (apt-get upgrade) هم انجام شود؟"; then mode=--full-update; fi
+  if [[ -n "$OFFLINE_SRC" ]]; then def="$OFFLINE_SRC"; fi
+  src="$(ask "مسیر بسته آفلاین (.tar.gz یا پوشه)؛ خالی = آنلاین از GitHub" "$def")"
+  if [[ -n "$src" ]]; then
+    [[ -e "$src" ]] || { warn "بسته پیدا نشد: $src"; return 0; }
+    menu_run "$MENU_DIR/scripts/install.sh" "$mode" --offline "$src" "${MENU_DRY[@]}"
+  else
+    menu_run "$MENU_DIR/scripts/install.sh" "$mode" "${MENU_DRY[@]}"
+  fi
+}
+
+# ---- 1) fresh install ----
+menu_install() {
+  if menu_installed; then
+    warn "ربات از قبل در $MENU_DIR نصب شده است."
+    yes_no N "دوباره نصب شود؟ (.env و data/ حفظ می شود؛ برای تغییر تنظیمات گزینه 9)" || return 0
+  fi
+  if [[ -n "$OFFLINE_SRC" && -f "$OFFLINE_SRC/install_offline.sh" ]] && ! menu_installed; then
+    menu_run "$OFFLINE_SRC/install_offline.sh" --install "${MENU_DRY[@]}"
+  elif [[ -n "$OFFLINE_SRC" ]]; then
+    menu_run "$(menu_script)" --install --offline "$OFFLINE_SRC" "${MENU_DRY[@]}"
+  else
+    menu_run "$(menu_script)" --install "${MENU_DRY[@]}"
+  fi
+}
+
+main_menu() {
+  local choice
+  while :; do
+    MENU_DIR="$(menu_find_dir)"
+    print_logo "${MENU_DIR:-$(dirname "$(dirname "$SELF_SCRIPT")")}"
+    if menu_installed; then log "   نصب شده در: $MENU_DIR"; else log "   هنوز نصب نشده است — گزینه 1"; fi
+    [[ -n "$OFFLINE_SRC" ]] && log "   بسته آفلاین: $OFFLINE_SRC"
+    (( DRY_RUN )) && log "   [dry-run] هیچ تغییری انجام نمی شود"
+    cat >&2 <<'MENU'
+
+  1) نصب جدید
+  2) به روزرسانی
+  3) وضعیت
+  4) گرفتن بک آپ
+  5) بازیابی بک آپ
+  6) تعمیر
+  7) مدیریت سرویس ها
+  8) مشاهده لاگ ها
+  9) تغییر تنظیمات (.env)
+  0) خروج
+
+MENU
+    printf 'گزینه را وارد کنید: ' >&2
+    if ! IFS= read -r -u "$TTY_FD" choice; then log ""; log "پایان ورودی — خروج."; break; fi
+    choice="$(printf '%s' "$choice" | tr -d '[:space:]')"
+    choice="$(printf '%s' "$choice" | sed 'y/۰۱۲۳۴۵۶۷۸۹/0123456789/')"
+    case "$choice" in
+      1) menu_install ;;
+      2) menu_update ;;
+      3) menu_status ;;
+      4) menu_backup ;;
+      5) menu_restore ;;
+      6) if menu_need_install; then menu_run "$MENU_DIR/scripts/install.sh" --repair "${MENU_DRY[@]}"; fi ;;
+      7) menu_services ;;
+      8) menu_logs ;;
+      9) if menu_need_install; then menu_run "$MENU_DIR/scripts/install.sh" --reconfigure "${MENU_DRY[@]}"; fi ;;
+      0|q|Q|exit) log "خروج."; break ;;
+      "") continue ;;
+      *) warn "گزینه نامعتبر: $choice (0 تا 9)"; continue ;;
+    esac
+    menu_pause
+  done
+  [[ -s "$INSTALL_LOG" ]] || rm -f "$INSTALL_LOG" 2>/dev/null || true
+  trap - EXIT; exit 0
+}
+
 # ========== main ==========
+if (( WANT_MENU )) || { (( NASOZ_ARGC == 0 )) && [[ -z "${_NASOZ_REEXEC:-}${_NASOZ_MENU_CHILD:-}" ]] && interactive; }; then
+  interactive || die "منو به ترمینال تعاملی نیاز دارد (یا از پرچم ها استفاده کنید: bash install.sh --help)."
+  main_menu
+fi
+if [[ -z "${_NASOZ_REEXEC:-}${_NASOZ_MENU_CHILD:-}" ]]; then print_logo "$(dirname "$(dirname "$SELF_SCRIPT")")"; fi
 log "━━━━━━━━ نصب بازوی مواد (بله) ━━━━━━━━"
 if interactive; then
   if [[ $TTY_FD == 0 ]]; then log "ترمینال: stdin"; else log "ترمینال: /dev/tty"; fi
