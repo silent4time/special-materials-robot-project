@@ -100,8 +100,8 @@ def _assert_portrait(pdf: Path) -> int:
         rot = int(page.get("/Rotate") or 0) % 180
         if rot:
             w, h = h, w
-        # 1405/07/25 standing rule: material tables lead with the 7 main-source base columns, so the
-        # wide critical-items table is laid out on A4 *landscape*; any other size is still an error.
+        # A4 in either orientation: the template-locked critical-items report is A4 *landscape*
+        # like the user's sample («140506»); wide material tables are landscape too.
         w, h = min(w, h), max(w, h)
         assert abs(w - 595.3) < 2 and abs(h - 841.9) < 2, f"{pdf.name} not A4: {w}x{h}"
     return len(reader.pages)
@@ -860,12 +860,17 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
         return " ".join(str(c.value) for row in ws.iter_rows() for c in row if c.value is not None)
 
     wb = load_workbook(res.xlsx)
-    assert wb.sheetnames == ["اقلام بحرانی — شرکت", "اقلام بحرانی — پیمانکار", "توضیحات"], wb.sheetnames
-    assert "با نوسازی" in _sheet_text(wb["اقلام بحرانی — شرکت"])
-    assert "«با نوسازی»" in _sheet_text(wb["توضیحات"])
-    co_text = _sheet_text(wb["اقلام بحرانی — شرکت"])
+    # TEMPLATE-LOCKED (user sample «140506»): one sheet per segment, «توضیحات» at the
+    # bottom of the SAME sheet — no separate notes sheet.
+    ym = _today_tag().replace("-", "")[:6]
+    assert wb.sheetnames == [f"{ym} شرکت", f"{ym} پیمانکار"], wb.sheetnames
+    assert "توضیحات" not in wb.sheetnames
+    co_ws, ct_ws = wb.worksheets
+    co_text = _sheet_text(co_ws)
+    assert "با نوسازی" in co_text and "«با نوسازی»" in co_text
     assert COL_MONTHLY in co_text and "۳ ماه آینده" in co_text and "مصرف پیش‌بینی‌شده در افق" in co_text
-    assert "1655" in _sheet_text(wb["توضیحات"])  # missing-origin flag in notes
+    assert "توضیحات" in co_text and "توضیحات" in _sheet_text(ct_ws)
+    assert "1655" in co_text  # missing-origin flag in the notes block
     for p in (res.company_pdf, res.contractor_pdf):
         _assert_portrait(p)
     assert "با_نوسازی" in res.company_pdf.name
@@ -889,8 +894,8 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     assert int(wco.loc[wco["کد چهاررقمی"].astype(str) == "1203", "موجودی"].iloc[0]) == 900
     assert "بدون نوسازی" in wo.titles["company"] and "بدون نوسازی" in wo.titles["contractor"]
     wb2 = load_workbook(wo.xlsx)
-    assert "بدون نوسازی" in _sheet_text(wb2["اقلام بحرانی — پیمانکار"])
-    assert "«بدون نوسازی»" in _sheet_text(wb2["توضیحات"])
+    assert "بدون نوسازی" in _sheet_text(wb2.worksheets[1])
+    assert "«بدون نوسازی»" in _sheet_text(wb2.worksheets[0])
     for p in (wo.company_pdf, wo.contractor_pdf):
         _assert_portrait(p)
     assert wo.company_pdf != res.company_pdf and wo.xlsx != res.xlsx
@@ -1041,7 +1046,8 @@ def test_web(tmp: Path) -> dict:
         assert r.status_code == 200 and r.content[:2] == b"PK"
         wb = load_workbook(io.BytesIO(r.content))
         label = "بدون نوسازی" if reno == "without" else "با نوسازی"
-        notes = " ".join(str(x.value) for row in wb["توضیحات"].iter_rows() for x in row if x.value)
+        assert "توضیحات" not in wb.sheetnames, wb.sheetnames  # notes live under each table
+        notes = " ".join(str(x.value) for row in wb.worksheets[0].iter_rows() for x in row if x.value)
         assert f"«{label}»" in notes, notes[:300]
     # legacy month params are ignored: report date = today, same basis
     r = c.get("/reports/critical-items?jalali_year=1400&jalali_month=1", follow_redirects=False)
