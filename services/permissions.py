@@ -60,6 +60,7 @@ TUNDISH_REPORT_SETTINGS = "tundish_report_settings"
 REMINDERS = "reminders"
 STOCK_GROUP = "stock_group"
 APPEARANCE = "appearance"
+BACKUP = "backup"  # «💾 بک‌آپ» (create/list/download; restore = owner only)
 
 FEATURE_LABEL_FA: dict[str, str] = {
     SITE_STOCK: "موجودی روزانه سایت",
@@ -88,6 +89,7 @@ FEATURE_LABEL_FA: dict[str, str] = {
     REMINDERS: "یادآورها",
     STOCK_GROUP: "گروه گزارش موجودی",
     APPEARANCE: "ظاهر ربات",
+    BACKUP: "بک‌آپ (پشتیبان‌گیری)",
 }
 
 _DEFAULTS: dict[str, frozenset[str]] = {
@@ -117,6 +119,7 @@ _DEFAULTS: dict[str, frozenset[str]] = {
     REMINDERS: ADMINS,
     STOCK_GROUP: ADMINS,
     APPEARANCE: ADMINS,
+    BACKUP: ADMINS,
 }
 
 REPORT_FEATURES = (
@@ -124,7 +127,7 @@ REPORT_FEATURES = (
     REPORT_N_TUNDISH, REPORT_SURPLUS, REPORT_INBOUND, REPORT_MONTHLY_SUMMARY,
 )
 SETTINGS_FEATURES = (
-    USERS, USER_ACTIVITY, ROLE_PERMISSIONS, TUNDISH_REPORT_SETTINGS, REMINDERS, STOCK_GROUP, APPEARANCE,
+    USERS, USER_ACTIVITY, ROLE_PERMISSIONS, TUNDISH_REPORT_SETTINGS, REMINDERS, STOCK_GROUP, APPEARANCE, BACKUP,
 )
 DERIVED = {REPORTS: REPORT_FEATURES, SETTINGS: SETTINGS_FEATURES}
 # owner/manager only, never toggled (spec: users & role-permission pages)

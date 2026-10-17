@@ -52,11 +52,11 @@ def backup_path(phase: str) -> Path:
     return BACKUP_DIR / f"bot_backup_{time.strftime('%Y%m%d_%H%M%S')}_{phase}.db"
 
 
-def backup_db(db_path: Path, phase: str) -> Path:
+def backup_db(db_path: Path, phase: str, dst: Path | None = None) -> Path:
     """Consistent online copy via sqlite3 backup API (works while bot/web run)."""
     import sqlite3
 
-    dst = backup_path(phase)
+    dst = Path(dst) if dst else backup_path(phase)
     src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         out = sqlite3.connect(dst)
