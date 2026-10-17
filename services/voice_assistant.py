@@ -3,6 +3,7 @@
 همهٔ وابستگی‌ها اختیاری‌اند و فقط هنگام نیاز import می‌شوند؛ اگر نصب نباشند ربات از کار
 نمی‌افتد و فقط پیام «دستیار صوتی روی سرور نصب نیست» نشان داده می‌شود.
 فقط مالک می‌تواند آن را روشن/خاموش کند (⚙️ تنظیمات ← 🤖 دستیار هوشمند صوتی).
+فهم سؤال و پاسخ از دادهٔ واقعی در services.assistant_brain است (قواعد فارسی + Ollama فقط به‌عنوان پشتیبان).
 
 نصب لازم برای اجرای واقعی (هیچ‌کدام خودکار دانلود نمی‌شود):
   pip install faster-whisper requests        (+ مدل Whisper، «small» ≈ ۴۶۰MB)
@@ -55,6 +56,39 @@ def is_installed() -> bool:
     return a["whisper"] and a["ollama"]
 
 
+def PARTIAL_FA(a: dict[str, bool]) -> str:  # noqa: N802 - message builder
+    missing = [n for n, k in (("Whisper", "whisper"), ("Ollama", "ollama")) if not a.get(k)]
+    return (
+        f"{' و '.join(missing)} روی سرور نصب/در دسترس نیست: سؤال‌های متنی با قواعد فارسی پاسخ داده می‌شوند"
+        + ("؛ پیام صوتی تا نصب Whisper پاسخ ندارد." if not a.get("whisper") else "؛ پشتیبان مدل زبانی غیرفعال است.")
+    )
+
+
+def speakable_fa(text: str, limit: int = 600) -> str:
+    """Text for Piper: no emoji/table symbols, Persian digits, bounded length."""
+    import re
+
+    s = re.sub(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F•…]", " ", str(text or ""))
+    s = s.replace("|", "، ").replace("—", "، ").replace("«", "").replace("»", "")
+    s = s.translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+    s = re.sub(r"[ \t]+", " ", s).strip()
+    return s[:limit]
+
+
+def to_ogg(wav: Path) -> Path | None:
+    """WAV → OGG/Opus (Bale voice) when ffmpeg exists; None otherwise."""
+    ff = shutil.which("ffmpeg")
+    if not ff:
+        return None
+    out = wav.with_suffix(".ogg")
+    try:
+        proc = subprocess.run([ff, "-y", "-loglevel", "error", "-i", str(wav), "-c:a", "libopus", "-b:a", "32k", str(out)],
+                              capture_output=True, timeout=60, check=False)
+        return out if proc.returncode == 0 and out.exists() and out.stat().st_size > 100 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def status_text_fa(enabled: bool, model: str | None) -> str:
     a = availability()
     ok = lambda b: "✅" if b else "❌"  # noqa: E731
@@ -68,8 +102,13 @@ def status_text_fa(enabled: bool, model: str | None) -> str:
         f"{ok(a['piper'])} Piper (متن→گفتار، اختیاری)",
     ]
     if not (a["whisper"] and a["ollama"]):
-        lines += ["", "⚠ " + NOT_INSTALLED_FA + " تا نصب نشود قابل فعال‌سازی نیست."]
-    lines += ["", "فقط مالک می‌تواند این تنظیمات را تغییر دهد."]
+        lines += ["", "⚠ " + PARTIAL_FA(a)]
+    lines += [
+        "",
+        "وقتی فعال است، همهٔ کاربران با «🤖 از دستیار بپرس»، متن آزاد یا پیام صوتی می‌پرسند؛ "
+        "هر پاسخ همان دسترسی منوی متناظر را دارد و اعداد مستقیم از داده است.",
+        "فقط مالک می‌تواند این تنظیمات را تغییر دهد.",
+    ]
     return "\n".join(lines)
 
 

@@ -128,6 +128,24 @@ class BaleClient:
             files = {"document": (path.name, fh, mime)}
             return self._call("sendDocument", data=data, files=files)
 
+    def send_voice(self, chat_id: int | str, file_path: Path | str, caption: str | None = None) -> dict:
+        """OGG/Opus voice note (assistant spoken answer)."""
+        path = Path(file_path)
+        data: dict[str, Any] = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption
+        with path.open("rb") as fh:
+            return self._call("sendVoice", data=data, files={"voice": (path.name, fh, "audio/ogg")})
+
+    def send_audio(self, chat_id: int | str, file_path: Path | str, caption: str | None = None) -> dict:
+        path = Path(file_path)
+        data: dict[str, Any] = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption
+        mime = "audio/wav" if path.suffix.lower() == ".wav" else "audio/mpeg"
+        with path.open("rb") as fh:
+            return self._call("sendAudio", data=data, files={"audio": (path.name, fh, mime)})
+
     def send_photo(
         self,
         chat_id: int | str,
