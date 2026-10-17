@@ -10,36 +10,83 @@ Not used for «📦 منبع اصلی» (that file is maintained inside the bot 
 from __future__ import annotations
 
 from html import escape
+from pathlib import Path
 
 PLACEHOLDER_FA = "راهنمای مسیر سیستم به‌زودی اضافه می‌شود."
 
 # kind → title
 TITLES: dict[str, str] = {
-    "product_inventory": "📥 به‌روزرسانی موجودی انبار (Excel)",
-    "monthly_consumption": "📥 مصرف ماهیانه (Excel)",
-    "mg_production_photo": "📸 عکس آمار تولید (هدف اصلی)",
-    "mg_production_xlsx": "📤 اکسل آمار تولید (هدف اصلی)",
-    "mg_consumption": "📤 اکسل مصرف تاندیش بیلت/بلوم/اسلب (هدف اصلی)",
-    "mg_sequence": "📤 اکسل لاگ سکوئنس تاندیش",
+    "product_inventory": "📥 فایل موجودی انبار (Excel)",
+    "monthly_consumption": "📥 مصرف ماهیانه مواد (Excel)",
+    "mg_production_photo": "📸 آمار تولید — عکس تب «ریخته‌گری»",
+    "mg_sequence": "📤 گزارش جامع تاندیش در سکوئنس (Excel)",
+    "mg_production_xlsx": "📤 اکسل آمار تولید (قدیمی)",
+    "mg_consumption": "📤 اکسل مصرف تاندیش هر بخش (قدیمی)",
     "mg_bulk": "📦 آپلود گروهی (هدف اصلی)",
 }
 
-# kind → step-by-step export instructions in the plant system (None → placeholder).
+# The 4 owner-approved inputs (1405/07/19) — shown in the general guide in this order.
+MAIN_INPUTS: tuple[str, ...] = ("product_inventory", "monthly_consumption", "mg_production_photo", "mg_sequence")
+
+_PORTAL = (
+    "در پورتال «شرکت فولاد خوزستان» (صفحهٔ سامانه‌ها) روی آیکون "
+    "«برنامه‌ریزی و کنترل تولید فولادسازی» (SMC) بزنید."
+)
+
+# kind → step-by-step export instructions in the plant system (from the owner's screenshots).
 SYSTEM_STEPS: dict[str, list[str] | None] = {
-    "mg_production_photo": [
-        "سامانهٔ آمار تولید otsteel.ksc.ir/productionstatistics را باز کنید.",
-        "تب «ریخته‌گری» را انتخاب کنید (تب «کوره» پذیرفته نمی‌شود).",
-        "تاریخ شروع و پایان را روی ماه مورد نظر تنظیم کنید.",
-        "دکمهٔ «جستجو» را بزنید.",
-        "از جدول نتیجه (همراه با فیلتر تاریخ) تصویر صفحه (اسکرین‌شات) بگیرید و به‌صورت عکس بفرستید.",
+    "product_inventory": [
+        _PORTAL,
+        "در کادر راست «گزارشات» و در کادر چپ «گزارش موجودی مواد نسوز در انبار» را انتخاب کنید.",
+        "در صفحهٔ «مقدار موجودی مواد نسوز در انبار»، «کد دسته‌بندی کالا» را از ۱۲۰۰ تا ۱۸۰۰ بگذارید و «جستجو» را بزنید.",
+        "وقتی جدول بالا و «ریز اطلاعات» پر شد، آیکون سبز Excel در نوار ابزار بالای صفحه را بزنید.",
+        "فایل در Excel باز می‌شود (شیت «ریز اطلاعات»: کد دسته‌بندی، کد و شرح کالا، موجودی). "
+        "آن را با Save As به‌صورت «Excel Workbook (.xlsx)» ذخیره و در ربات بفرستید.",
     ],
-    "product_inventory": None,
-    "monthly_consumption": None,
+    "monthly_consumption": [
+        _PORTAL,
+        "در کادر راست «گزارشات» و در کادر چپ «گزارشات ماهیانه نسوز» را انتخاب کنید.",
+        "در صفحهٔ «Refractory Monthly Reports» سال (Year) و ماه (Month) را وارد کنید.",
+        "در ستون TUNDISH گزینهٔ «Total Tundish Consumption / Life (4-14)» (هر سه بخش) "
+        "یا برای یک بخش «Slab (4-11)»، «Bloom (4-12)» یا «Billet (4-13)» را انتخاب کنید.",
+        "دکمهٔ «Search» و سپس «Excel» را بزنید؛ فایل را با پسوند .xlsx ذخیره و ارسال کنید.",
+    ],
+    "mg_production_photo": [
+        "در مرورگر سایت otsteel.ksc.ir را باز کنید؛ در بخش «گزارش های تولید» روی «آمار تولید» بزنید.",
+        "در صفحهٔ «نمایش آماری اطلاعات تولید» (otsteel.ksc.ir/productionstatistics) «از تاریخ» و «تا تاریخ» را تنظیم و «جستجو» را بزنید.",
+        "تب «ریخته گری» را انتخاب کنید (تب‌های «کوره» و «کوره پاتیلی» پذیرفته نمی‌شوند).",
+        "از جدول (ردیف‌های شماره CCM، «مجموع اسلب ها»، «مجموع بلوم بیلت ها»، «سرجمع کل») همراه با فیلتر تاریخ "
+        "عکس بگیرید و به‌صورت عکس بفرستید — Excel پذیرفته نمی‌شود.",
+    ],
+    "mg_sequence": [
+        "در مرورگر سایت otsteel.ksc.ir را باز کنید؛ بخش «نسوز تاندیش» را باز کنید و «گزارش جامع تاندیش در سکوئنس» را بزنید.",
+        "در صفحهٔ «سکوئنس های ریخته گری» (otsteel.ksc.ir/ccssequence) «نوع تجهیز» و «تجهیز» را خالی بگذارید "
+        "تا هر سه بخش (اسلب، بلوم، بیلت) بیاید؛ «از تاریخ» و «تا تاریخ» را تنظیم و «جستجو» را بزنید.",
+        "دکمهٔ «خروجی Excel» را بزنید و همان فایل را (یک فایل برای هر سه بخش) در ربات بفرستید.",
+    ],
     "mg_production_xlsx": None,
     "mg_consumption": None,
-    "mg_sequence": None,
     "mg_bulk": None,
 }
+
+# kind → step screenshots (personal names blurred) in services/file_guides_img/
+IMG_DIR = Path(__file__).resolve().parent / "file_guides_img"
+IMAGE_COUNTS: dict[str, int] = {
+    "product_inventory": 5,
+    "monthly_consumption": 3,
+    "mg_production_photo": 2,
+    "mg_sequence": 2,
+}
+
+
+def guide_images(kind: str | None) -> list[Path]:
+    kind = ALIASES.get(kind or "", kind)
+    n = IMAGE_COUNTS.get(kind or "", 0)
+    return [p for p in (IMG_DIR / f"{kind}_{i}.jpg" for i in range(1, n + 1)) if p.is_file()]
+
+
+# older guide kinds → current input
+ALIASES: dict[str, str] = {"mg_consumption": "mg_sequence"}
 
 # kind → required file shape (kept in sync with the parsers in code)
 SHAPES: dict[str, list[str]] = {
@@ -65,7 +112,10 @@ SHAPES: dict[str, list[str]] = {
         "ماه شمسی در نام فایل بیاید، مثلاً «مصرف تاندیش بیلت شهریور ۱۴۰۵.xlsx».",
     ],
     "mg_sequence": [
-        "فرمت: .xlsx — ستون‌های ماشین، تاندیش، تاندیشکار، تعداد ذوب، مدت سکوئنس، شرود، نازل، تیوب.",
+        "فرمت: .xlsx — خروجی Excel همان صفحه با ستون‌های ماشین، تاندیش، تاندیشکار، تعداد ذوب، مدت سکوئنس، "
+        "ذوب اول/آخر سکوئنس (شماره ذوب، شروع/پایان ریخته‌گری)، تعویض شرود، تعویض نازل بیرونی، تیوب چنجر.",
+        "بخش از ستون «ماشین» (اسلب ۱/۲ ← اسلب، بلوم ← بلوم، بیلت ۱/۲ ← بیلت) و ماه از تاریخ شروع ریخته‌گری "
+        "تشخیص داده می‌شود؛ هر ماه/بخش جداگانه جایگزین می‌شود. جایگزین آپلودهای جداگانهٔ مصرف تاندیش هر بخش.",
     ],
     "mg_bulk": [
         "هر تعداد فایل و هر ترتیب: عکس آمار تولید (تب ریخته‌گری) یا اکسل آمار تولید، "
@@ -76,8 +126,8 @@ SHAPES: dict[str, list[str]] = {
 SHAPES["mg_bulk"] = SHAPES["mg_bulk"] + ["—"] + SHAPES["mg_production_xlsx"] + SHAPES["mg_consumption"][:1]
 
 GENERAL_FA = (
-    "راهنمای تهیهٔ فایل برای ورودی‌های فایل/عکس:\n"
-    + "\n".join(f"• {t}" for t in TITLES.values())
+    "راهنمای تهیهٔ فایل — چهار ورودی اصلی («📤 ورود فایل‌ها»):\n"
+    + "\n".join(f"{i}. {TITLES[k]}" for i, k in enumerate(MAIN_INPUTS, 1))
     + "\n\nهنگام انتظار برای هر فایل، همین دکمه راهنمای همان فایل را نشان می‌دهد."
 )
 
@@ -88,6 +138,7 @@ def kinds() -> list[str]:
 
 def guide_text(kind: str | None) -> str:
     """Plain-text guide for the bot (general list when kind unknown)."""
+    kind = ALIASES.get(kind or "", kind)
     if not kind or kind not in TITLES:
         return GENERAL_FA
     steps = SYSTEM_STEPS.get(kind)
@@ -104,7 +155,8 @@ def guide_text(kind: str | None) -> str:
 
 
 def guide_html(kind: str) -> str:
-    """Small HTML block for web upload forms."""
+    """Small HTML block for web upload forms (text + step screenshots)."""
+    kind = ALIASES.get(kind, kind)
     steps = SYSTEM_STEPS.get(kind)
     parts = [f"<details class=\"file-guide\"><summary>❓ راهنمای تهیهٔ فایل — {escape(TITLES.get(kind, kind))}</summary>"]
     if steps:
@@ -112,5 +164,12 @@ def guide_html(kind: str) -> str:
     else:
         parts.append(f"<p class=\"muted\">مسیر در سیستم: {escape(PLACEHOLDER_FA)}</p>")
     parts.append("<ul>" + "".join(f"<li>{escape(s)}</li>" for s in SHAPES.get(kind, []) if s != "—") + "</ul>")
+    imgs = guide_images(kind)
+    if imgs:
+        parts.append("<div class=\"file-guide-imgs\">" + "".join(
+            f"<a href=\"/file-guides/{escape(p.name)}\" target=\"_blank\">"
+            f"<img src=\"/file-guides/{escape(p.name)}\" alt=\"مرحلهٔ {i}\" loading=\"lazy\" "
+            f"style=\"max-width:100%;margin:4px 0;border:1px solid #ccc\"></a>"
+            for i, p in enumerate(imgs, 1)) + "</div>")
     parts.append("</details>")
     return "".join(parts)

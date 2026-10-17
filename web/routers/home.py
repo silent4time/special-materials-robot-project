@@ -26,3 +26,17 @@ async def home(request: Request, user=Depends(current_user)):
             "error": None,
         },
     )
+
+
+@router.get("/file-guides/{name}")
+async def file_guide_image(name: str, user=Depends(current_user)):
+    """Step screenshots of «❓ راهنمای تهیهٔ فایل» (login required; names blurred)."""
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    from services import file_guides
+
+    path = (file_guides.IMG_DIR / name).resolve()
+    if path.parent != file_guides.IMG_DIR.resolve() or not path.is_file() or path.suffix != ".jpg":
+        raise HTTPException(status_code=404)
+    return FileResponse(path, media_type="image/jpeg")
