@@ -117,6 +117,8 @@ class Answer:
     ok: bool = True  # False = denied / no data / not understood
     rephrased: bool = False
     facts: dict[str, Any] = field(default_factory=dict)  # raw numbers (tests/web)
+    understood: str = ""  # «برداشت: موجودی شرود» footer (bot/web; not spoken)
+    table: dict[str, Any] | None = None  # services.assistant_tables (text table + PDF/Excel)
 
 
 # ---------------------------------------------------------------- slot parsers
@@ -237,6 +239,8 @@ _ID_RE = re.compile(r"(?<![\w])(\d{8,}[a-z]?)(?![\w])")
 
 _STOP = set("""
 از چقدر چه قدر چند چندتا تا داریم داره داری هست هستش است اند هستن موجودی موجود موجودیش انبار انباره الان فعلا
+چقد چقدرش چندتاش چندتاشو داریمش دارید دارین داربم دارم موجوده موجودن هنوز اصلا واقعا الانم دونه دونش چندتایی
+باقیمونده باقیمانده مونده؟ موند میخوام بدونم ببینم بگی بگین بپرسم سوال یعنی خب خوب ایا اونجا اینجا چیزی
 فعلی کل مجموع ما رو را برای به با در توی تو که کالای کالا قلم اقلام جنس مواد ماده مقدار میزان باقی مانده مونده
 ماند چی چیه چیست چطور چگونه کجا ایا اقا لطفا بگو بگید بفرما بفرمایید بده بدید نشون نشان نمایش بهم بهمون ی یه
 یک عدد کیلو کیلوگرم تن دونه تعداد کد شماره شناسه استاک وضعیت چندتاست چقدره چقدر داریم میشه میشود من مون شون
@@ -246,14 +250,88 @@ _STOP = set("""
 """.split())
 
 
+# colloquial / Latin / misspelled item names → the keyword used in منبع اصلی (normalized form)
+ITEM_ALIASES: dict[str, str] = {
+    "شراود": "شرود", "شرواد": "شرود", "شیرود": "شرود", "شرودها": "شرود", "شرودا": "شرود", "shroud": "شرود",
+    "shrouds": "شرود", "استاپر": "استوپر", "استپر": "استوپر", "استوپرها": "استوپر", "استوپرا": "استوپر",
+    "stopper": "استوپر", "نازلها": "نازل", "نازلا": "نازل", "nozzle": "نازل", "نوزل": "نازل",
+    "اجرها": "اجر", "اجرا": "اجر", "brick": "اجر", "بتنها": "بتن", "concrete": "بتن",
+}
+# words that never identify an item on their own
+_GENERIC_ITEM_TOKENS = set("""
+اسلب بلوم بیلت نوسازی پچینگ وصله سطح ریخته گری کف دیواره بالا پایین شرکت پیمانکار برای با بدون فقط
+""".split())
+
+
+_PLURAL_SUFFIXES = ("هایی", "های", "ها", "ای", "ا", "و", "رو", "شو", "ش")
+
+
+def alias_word(w: str) -> str:
+    """«شراود»→«شرود», «استاپرا»/«شرودها»/«استوپرو» (colloquial plural/object) → the base item word."""
+    if w in ITEM_ALIASES:
+        return ITEM_ALIASES[w]
+    bases = set(ITEM_ALIASES.values())
+    for suf in _PLURAL_SUFFIXES:
+        if len(w) > len(suf) + 2 and w.endswith(suf):
+            b = w[: -len(suf)]
+            if b in ITEM_ALIASES:
+                return ITEM_ALIASES[b]
+            if b in bases:
+                return b
+    return w
+
+
+def apply_aliases(t: str) -> str:
+    return " ".join(alias_word(w) for w in t.split())
+
+
+def item_terms(inv) -> set[str]:
+    """Normalized keyword tokens of every منبع اصلی row (incl. 1800 / casting-level rows)."""
+    if inv is None or getattr(inv, "empty", True):
+        return set()
+    cached = getattr(inv, "attrs", {}).get("_asst_terms")
+    if cached is not None:
+        return cached
+    out: set[str] = set()
+    for v in inv.get("keyword", []):
+        for w in normalize(v).split():
+            if len(w) >= 3 and not w.isdigit() and w not in _STOP and w not in _GENERIC_ITEM_TOKENS:
+                out.add(w)
+    out |= set(ITEM_ALIASES.values())
+    try:
+        inv.attrs["_asst_terms"] = out
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def item_mention(text: str, inv=None, known_codes: set[str] | None = None) -> str | None:
+    """Item named in the question («شرود», «استاپر» → «استوپر», a known 4-digit code) or None."""
+    t = apply_aliases(normalize(text))
+    for c in _CODE_RE.findall(t):
+        if known_codes is None or c in known_codes:
+            return c
+    terms = item_terms(inv) if inv is not None else set(ITEM_ALIASES.values())
+    for w in t.split():
+        if w in terms:
+            return w
+        if len(w) >= 4 and not w.isdigit() and w not in _STOP:
+            close = difflib.get_close_matches(w, list(terms), n=1, cutoff=0.86)
+            if close:
+                return close[0]
+    return None
+
+
 def extract_item_query(t: str) -> str:
     t = _ID_RE.sub(" ", t)
     t = _CODE_RE.sub(" ", t)
     t = re.sub(r"(بدون|بی) ?نوسازی|با نوسازی|فقط (وصله|پچ)", " ", t)
+    t = re.sub(r"ته (ن?می ?)?(کشیده|کشه|کشید|کشن|نکشیده)|ته انبار|تموم (شده|نشده|شدن|کردیم|میشه|می شه)|"
+               r"(^| )(چیا|چی|چه چیزی|کدوما|کدوم)( |$)", " ", t)
     t = re.sub(_NUMW + r" ?(تا|عدد|دونه)? ?(روز|هفته|ماه|تاندیش|سال)", " ", t)
     for name in _MONTHS:
         t = re.sub(rf"(?<![\w]){name}(?![\w])", " ", t)
-    toks = [w for w in re.split(r"\s+", t) if w and w not in _STOP]
+    toks = [alias_word(w) for w in re.split(r"\s+", t) if w and w not in _STOP]
     return " ".join(toks).strip()
 
 
@@ -288,6 +366,14 @@ def _report_button(t: str) -> str | None:
         if re.search(pat, t):
             return attr
     return None
+
+
+# «چندتا/چند تا/چند عدد/چقدر/چه قدر/چه مقدار/موجودی/داریم/مونده/باقی مونده X» (X first or last, colloquial, typos)
+_STOCK_RE = (
+    r"موجود|چند ?تا|چند (عدد|دونه|قلم|کارتن|کیسه|کیلو|تن|متر|بسته)|چقد|چه ?قد|چه (مقدار|میزان|تعداد)|"
+    r"تعداد|دار[یبن]?م|داریمش|دارید|دارین|(^| )داری( |$)|مونده|مانده|موند|باقی|انبار|استاک|stock|"
+    r"(^| )هست(ش|ن)?( |$)|تموم (شده|نشده|کردیم)|ته (کشیده|نکشیده)"
+)
 
 
 def rule_route(text: str, *, known_codes: set[str] | None = None) -> Intent | None:
@@ -369,6 +455,10 @@ def rule_route(text: str, *, known_codes: set[str] | None = None) -> Intent | No
                  r"رو به (اتمام|پایان)|تموم (می ?)?شه|نقطه سفارش|سفارش (بد|بزن)|کم (اومده|است|هست|اند)|"
                  r"باید (بخریم|سفارش)|خرید", t):
         return Intent(I_CRITICAL, dict(slots, reno=parse_reno(t)))
+    # «چیا ته کشیده / چی تموم شده» without an item = critical; «شرود ته کشیده؟» = stock (below)
+    if re.search(r"ته (می ?)?(کشیده|کشه|کشید|کشن)|تموم (شده|شدن|کردیم)", t) and not code_m and not id_m \
+            and not extract_item_query(t):
+        return Intent(I_CRITICAL, dict(slots, reno=parse_reno(t)))
 
     # مصرف بازه‌ای
     if re.search(r"مصرف|خرج (شد|کردیم)|استفاده (شد|کردیم)|مصرفی", t):
@@ -384,7 +474,7 @@ def rule_route(text: str, *, known_codes: set[str] | None = None) -> Intent | No
         return it
 
     # موجودی قلم
-    if re.search(r"موجودی|چقدر|چند ?(تا)? داریم|داریم|مونده|مانده|باقی|انبار|استاک", t) or code_m or id_m:
+    if re.search(_STOCK_RE, t) or code_m or id_m:
         return with_item(I_STOCK)
 
     # «گزارش X» بدون فعل
@@ -399,7 +489,8 @@ _LLM_SYSTEM = (
     "You label Persian questions sent to a refractory-materials (تاندیش) warehouse bot. "
     "Reply ONLY with one JSON object with keys intent, code, query, n, section, period, report.\n"
     "intent must be one of:\n"
-    "stock = موجودی یک قلم مشخص (چقدر داریم، چندتا مونده، موجودی کد)\n"
+    "stock = موجودی یک قلم مشخص (چقدر داریم، چندتا مونده، موجودی کد). ANY question that names an item "
+    "(شرود، استوپر، نازل، آجر، بتن، a 4-digit code) is stock or coverage, never critical\n"
     "critical = چه چیزهایی کم است / کسری / بحرانی / تموم میشه / ته کشیده / باید سفارش بدیم (بدون نام قلم)\n"
     "n_tundish = مواد لازم برای N تاندیش آینده (عدد + تاندیش)\n"
     "coverage = یک قلم چند روز کافی است / تا کی جواب میده / حد تحمل\n"
@@ -438,6 +529,15 @@ _LLM_SHOTS: list[tuple[str, dict[str, Any]]] = [
     ("سلام وقت بخیر", _shot("help")),
     ("چطوری ازت استفاده کنم", _shot("help")),
     ("هوا امروز چطوره", _shot("unknown")),
+    ("چندتا شرود داربم؟", _shot("stock", query="شرود")),
+    ("شرود چی داریم", _shot("stock", query="شرود")),
+    ("از اون استاپرا هنوز هست؟", _shot("stock", query="استوپر")),
+    ("وضعیت ذخیره شرود رو بگو", _shot("coverage", query="شرود")),
+    ("نازل بیرونی ته انبار مونده؟", _shot("stock", query="نازل بیرونی")),
+    ("بتن ۸۶ برای چند وقت بسه", _shot("coverage", query="بتن 86")),
+    ("کد ۱۶۷۲ رو چک کن", _shot("stock", code="1672")),
+    ("دیروز کسی فایل جدید فرستاد؟", _shot("last_upload")),
+    ("کدوم جنسا داره ته میکشه", _shot("critical")),
 ]
 
 
@@ -545,11 +645,57 @@ def route(text: str, *, use_llm: bool = True, model: str | None = None,
         ms = match_items(inventory, q, limit=2)
         if ms and ms[0].score >= 0.8:
             return Intent(I_STOCK, {"query": q})
+    mention = item_mention(text, inventory, known_codes)
     if use_llm and model:
         it = llm_route(text, model=model, chat=chat, known_codes=known_codes)
         if it is not None:
-            return it
+            return guard_llm_intent(text, it, mention, inventory)
+    if mention:  # an item is named: never "unknown"
+        return guard_llm_intent(text, Intent(I_UNKNOWN, source="none"), mention, inventory)
     return Intent(I_UNKNOWN, source="none")
+
+
+_CRITICAL_KW = (r"بحرانی|کم داریم|کم داربم|کمبود|کسری|کسر|ته (می ?)?(کشیده|کشه|کشید)|رو به (اتمام|پایان)|"
+                r"باید (بخریم|سفارش)|نقطه سفارش|چی کم|چیا کم")
+_COVERAGE_KW = r"چند روز|تا کی|چه مدت|چقدر وقت|کافی|کفایت|دوام|جواب (می ?)?ده|حد تحمل|پوشش|ذخیره"
+_ITEM_OK_INTENTS = {I_STOCK, I_COVERAGE, I_CONSUMPTION, I_N_TUNDISH, I_OPEN_REPORT}
+
+
+def _item_query(text: str, mention: str, inv=None) -> str:
+    """Item words of the question (known item terms + numbers, e.g. «نازل بیرونی», «بتن 86»), else the mention."""
+    terms = item_terms(inv) if inv is not None else set(ITEM_ALIASES.values())
+    toks = [w for w in extract_item_query(normalize(text)).split() if w in terms or w.isdigit()]
+    return " ".join(toks) if toks and mention in toks else mention
+
+
+def guard_llm_intent(text: str, it: Intent, mention: str | None, inv=None) -> Intent:
+    """A question naming a known item is about that item: never critical/pending/... from the LLM,
+    unless critical words are really there. Prefer coverage when it asks «چند روز/تا کی/کافی»."""
+    if not mention:
+        return it
+    if it.name in (I_STOCK, I_COVERAGE, I_CONSUMPTION) and not (it.slots.get("code") or it.slots.get("query")
+                                                              or it.slots.get("item_id")):
+        if re.fullmatch(r"\d{4}", mention):
+            it.slots["code"] = mention
+        else:
+            it.slots["query"] = _item_query(text, mention, inv)  # the model dropped the item
+        return it
+    if it.name in _ITEM_OK_INTENTS:
+        return it
+    t = normalize(text)
+    if it.name == I_CRITICAL and re.search(_CRITICAL_KW, t):
+        return it
+    slots: dict[str, Any] = {k: v for k, v in it.slots.items() if k in ("section",)}
+    if re.fullmatch(r"\d{4}", mention):
+        slots["code"] = mention
+    else:
+        slots["query"] = _item_query(text, mention, inv)
+    name = I_COVERAGE if re.search(_COVERAGE_KW, t) else I_STOCK
+    if name == I_COVERAGE:
+        slots["reno"] = parse_reno(t)
+    logger.info("assistant LLM intent %s overridden → %s (item %s)", it.name, name, mention)
+    return Intent(name, slots, source=(it.source + "+guard") if it.source != "none" else "guard")
+
 
 
 # ---------------------------------------------------------------- numbers check
@@ -652,10 +798,19 @@ def match_items(inv, query: str, limit: int = 5) -> list[ItemMatch]:
     """Fuzzy match on keyword + product name, one entry per 4-digit code, best first."""
     if inv is None or inv.empty or not query:
         return []
-    q = normalize(query)
+    q = apply_aliases(normalize(query))
     q_tok = [w for w in q.split() if len(w) >= 2]
     if not q_tok:
         return []
+    terms = item_terms(inv)
+    names = " ".join(normalize(v) for v in inv.get("product_name", []))
+
+    def known(w: str) -> bool:
+        return w in terms or w in names or bool(difflib.get_close_matches(w, list(terms), n=1, cutoff=0.8))
+
+    useful = [w for w in q_tok if known(w)]
+    if useful and len(useful) < len(q_tok):
+        q_tok, q = useful, " ".join(useful)
     best: dict[str, ItemMatch] = {}
     for _, r in inv.iterrows():
         code = _code_of(r.get("category_code"))
@@ -704,7 +859,8 @@ def resolve_item(ctx: _Ctx, slots: dict[str, Any]) -> tuple[str | None, list[Ite
         return None, [], None
     ms = match_items(inv, q)
     if not ms:
-        return None, [], f"قلمی شبیه «{q}» در منبع اصلی پیدا نشد."
+        return None, [], (f"«{q}» در فهرست موجودی (منبع اصلی) نیست؛ این قلم در انبار ثبت نمی‌شود یا نامش "
+                          f"فرق دارد. کد چهاررقمی یا نام دیگرش را بنویسید (مثلاً «موجودی ۱۵۸۱»).")
     from config import SURPLUS_CATEGORY_CODE
 
     # «اقلام مازاد» (1800) shares keywords with real codes: prefer the real code
@@ -741,13 +897,39 @@ def _allowed(user: dict, intent: Intent) -> bool:
     return True if not feats else perm.can_any(user, feats)
 
 
-def _ambiguous(intent: Intent, ms: list[ItemMatch], verb: str) -> Answer:
+def _ambiguous(intent: Intent, ms: list[ItemMatch], verb: str, ctx: "_Ctx | None" = None) -> Answer:
     lines = ["چند قلم با این نام پیدا شد؛ کدام منظورتان است؟"]
     btns = []
+    trows: list[dict[str, Any]] = []
+    inv = None
+    if ctx is not None:
+        try:
+            inv = ctx.inventory
+        except Exception:  # noqa: BLE001
+            inv = None
     for m in ms:
-        lines.append(f"• {m.code} — {m.label}")
+        row: dict[str, Any] = {"کد": m.code, "نام": m.label}
+        if inv is not None and not inv.empty:
+            import pandas as pd
+
+            rr = inv.loc[inv["category_code"].map(_code_of) == m.code]
+            unit = next((u for u in rr["unit"].astype(str) if u and u.lower() != "nan"), "")
+            row["موجودی کل"] = _fmt(float(pd.to_numeric(rr["quantity"], errors="coerce").fillna(0).sum()), unit)
+            row["واحد"] = _unit(unit)
+            row["ردیف‌ها"] = len(rr)
+        trows.append(row)
         btns.append(f"{verb} {m.code} {m.label}"[:60])
-    return Answer("\n".join(lines), intent, buttons=btns, ok=True, facts={"candidates": [m.code for m in ms]})
+    table = None
+    if trows and "موجودی کل" in trows[0]:
+        from services.assistant_tables import text_table
+
+        lines += text_table(["کد", "نام", "موجودی کل", "واحد"], trows, max_rows=8)
+        table = {"title": "اقلام هم‌نام", "subtitle": lines[0],
+                 "sections": [{"title": None, "columns": list(trows[0].keys()), "rows": trows}]}
+    else:
+        lines += [f"• {m.code} — {m.label}" for m in ms]
+    return Answer("\n".join(lines), intent, buttons=btns, ok=True, facts={"candidates": [m.code for m in ms]},
+                  table=table)
 
 
 def exec_stock(ctx: _Ctx, it: Intent) -> Answer:
@@ -755,7 +937,7 @@ def exec_stock(ctx: _Ctx, it: Intent) -> Answer:
     if err:
         return Answer(err, it, ok=False)
     if ms:
-        return _ambiguous(it, ms, "موجودی")
+        return _ambiguous(it, ms, "موجودی", ctx)
     if not code:
         return Answer("کد چهاررقمی یا نام قلم را بگویید؛ مثلاً «موجودی ۱۶۷۲» یا «از استوپر چقدر داریم».", it,
                       ok=False)
@@ -775,11 +957,18 @@ def exec_stock(ctx: _Ctx, it: Intent) -> Answer:
             by_seg[seg] = by_seg.get(seg, 0.0) + float(q)
     if len(by_seg) > 1:
         lines.append(" | ".join(f"{k}: {_fmt(v, unit)}" for k, v in by_seg.items()))
+    from services.assistant_tables import text_table
+
+    trows = []
+    for (_, r), q in zip(rows.iterrows(), qty):
+        seg = str(r.get("contractor_or_company") or "").strip()
+        trows.append({"شناسه": r.get("id"), "شرح کالا": str(r.get("product_name") or "").strip(),
+                      "پیمانکار/شرکت": "" if seg.lower() == "nan" else seg, "موجودی": _fmt(q, unit),
+                      "واحد": _unit(unit)})
+    tcols = ["شناسه", "شرح کالا", "پیمانکار/شرکت", "موجودی", "واحد"]
     if len(rows) > 1:
         lines.append(f"{len(rows)} ردیف:")
-        for (_, r), q in list(zip(rows.iterrows(), qty))[:8]:
-            name = str(r.get("product_name") or "").strip()
-            lines.append(f"• {r.get('id')} — {name[:45]}: {_fmt(q, unit)}")
+        lines += text_table(["شناسه", "شرح کالا", "موجودی"], trows, max_rows=8, widths={"شرح کالا": 40})
     from config import SURPLUS_CATEGORY_CODE
 
     surplus = 0.0
@@ -791,9 +980,13 @@ def exec_stock(ctx: _Ctx, it: Intent) -> Answer:
             lines.append(f"(جدا از این، در اقلام مازاد کد {SURPLUS_CATEGORY_CODE} هم {_fmt(surplus, unit)} "
                          f"{_unit(unit)} با همین نام هست.)")
     lines.append("مبنا: منبع اصلی + اصلاحات دفتر انبار (همان مبنای گزارش‌ها).")
-    return Answer("\n".join(lines), it, facts={"code": code, "total": total, "unit": unit,
+    table = None
+    if len(rows) > 1:
+        table = {"title": f"موجودی کد {code} {kw}", "subtitle": f"جمع موجودی انبار: {_fmt(total, unit)} {_unit(unit)}",
+                 "sections": [{"title": None, "columns": tcols, "rows": trows}]}
+    return Answer("\n".join(lines), it, facts={"code": code, "label": kw, "total": total, "unit": unit,
                                                 "by_segment": by_seg, "surplus": surplus},
-                  buttons=[f"پوشش {code} {kw}"[:60]])
+                  buttons=[f"پوشش {code} {kw}"[:60]], table=table)
 
 
 def _critical_frames(ctx: _Ctx, reno: str, include_covered: bool = False):
@@ -826,7 +1019,11 @@ def exec_critical(ctx: _Ctx, it: Intent) -> Answer:
         return Answer(err, it, ok=False)
     lines = [f"⚠️ اقلام بحرانی ({RENO_LABEL_FA.get(reno, reno)}) — نیاز مثبت در افق ۳ ماه داخلی / ۶ ماه وارداتی",
              horizon_header_note(counts), ""]
+    from services.assistant_tables import text_table
+
     facts: dict[str, Any] = {"counts": {}, "top": {}}
+    tcols = ["کد", "شرح کالا", "موجودی", "واحد", "نیاز", "حد تحمل (روز)"]
+    sections = []
     for seg in SEGMENTS:
         df = frames.get(seg)
         n = critical_item_count(df)
@@ -834,26 +1031,25 @@ def exec_critical(ctx: _Ctx, it: Intent) -> Answer:
         lines.append(f"• {SEGMENT_LABEL_FA.get(seg, seg)}: {n} قلم")
         if df is None or df.empty:
             continue
-        shown = []
+        trows = []
         for _, r in df.iterrows():
             if str(r.get("ردیف", "")).strip() == "":
                 continue
-            if len(shown) >= 5:
-                break
-            shown.append(str(r.get("کد چهاررقمی")))
-            desc = str(r.get("کد و شرح کالا") or "")[:38]
-            lines.append(
-                f"  {r.get('کد چهاررقمی')} {desc} — موجودی {r.get('موجودی')} {_unit(r.get('واحد'))} | "
-                f"نیاز {r.get(COL_NEED)} | حد تحمل {r.get(COL_DAYS)} روز"
-            )
-        facts["top"][seg] = shown
-        if n > len(shown):
-            lines.append(f"  … و {n - len(shown)} قلم دیگر")
+            trows.append({"کد": r.get("کد چهاررقمی"), "شرح کالا": str(r.get("کد و شرح کالا") or "").strip(),
+                          "موجودی": r.get("موجودی"), "واحد": _unit(r.get("واحد")), "نیاز": r.get(COL_NEED),
+                          "حد تحمل (روز)": r.get(COL_DAYS)})
+        facts["top"][seg] = [str(r["کد"]) for r in trows[:5]]
+        lines += ["  " + x for x in text_table(["کد", "شرح کالا", "موجودی", "نیاز", "حد تحمل (روز)"], trows,
+                                               max_rows=5, widths={"شرح کالا": 30})]
+        if trows:
+            sections.append({"title": f"{SEGMENT_LABEL_FA.get(seg, seg)} — {n} قلم", "columns": tcols, "rows": trows})
     lines.append("")
-    lines.append("فایل کامل (PDF/اکسل): دکمهٔ «اقلام بحرانی».")
+    lines.append("جدول کامل در فایل PDF پیوست است (گزارش رسمی: دکمهٔ «اقلام بحرانی»).")
     from bot import keyboards as kb
 
-    return Answer("\n".join(lines), it, buttons=[kb.BTN_CRITICAL_ITEMS], facts=facts)
+    table = {"title": f"اقلام بحرانی ({RENO_LABEL_FA.get(reno, reno)})", "subtitle": horizon_header_note(counts),
+             "sections": sections} if sections else None
+    return Answer("\n".join(lines), it, buttons=[kb.BTN_CRITICAL_ITEMS], facts=facts, table=table)
 
 
 def exec_coverage(ctx: _Ctx, it: Intent) -> Answer:
@@ -864,7 +1060,7 @@ def exec_coverage(ctx: _Ctx, it: Intent) -> Answer:
     if err:
         return Answer(err, it, ok=False)
     if ms:
-        return _ambiguous(it, ms, "پوشش")
+        return _ambiguous(it, ms, "پوشش", ctx)
     if not code:
         # no item → the most urgent items are the answer
         return exec_critical(ctx, Intent(I_CRITICAL, {"reno": it.slots.get("reno") or "with"}, it.source))
@@ -873,6 +1069,7 @@ def exec_coverage(ctx: _Ctx, it: Intent) -> Answer:
     if err:
         return Answer(err, it, ok=False)
     lines: list[str] = []
+    trows: list[dict[str, Any]] = []
     facts: dict[str, Any] = {"code": code, "days": {}}
     for seg in SEGMENTS:
         df = frames.get(seg)
@@ -893,6 +1090,9 @@ def exec_coverage(ctx: _Ctx, it: Intent) -> Answer:
         head = f"• {SEGMENT_LABEL_FA.get(seg, seg)}"
         if shared:
             head += f" (نیاز مشترک گروه {r.get('کد چهاررقمی')})"
+        trows.append({"بخش": head.lstrip("• "), "حد تحمل (روز)": r.get(COL_DAYS), "موجودی": r.get("موجودی"),
+                      "واحد": _unit(r.get("واحد")), "میانگین مصرف ماهانه": r.get(COL_MONTHLY),
+                      "افق (ماه)": r.get(COL_HORIZON), "نیاز": r.get(COL_NEED)})
         lines.append(
             f"{head}: حد تحمل {r.get(COL_DAYS)} روز | موجودی {r.get('موجودی')} {_unit(r.get('واحد'))} | "
             f"میانگین مصرف ماهانه {r.get(COL_MONTHLY)} | افق {r.get(COL_HORIZON)} ماه | نیاز {r.get(COL_NEED)}"
@@ -906,9 +1106,17 @@ def exec_coverage(ctx: _Ctx, it: Intent) -> Answer:
         return Answer(
             f"برای کد {code} {kw} نرخ مصرف به ازای تاندیش در منبع اصلی ثبت نشده (یا اولویت ۰ است)؛ "
             "حد تحمل قابل محاسبه نیست.", it, ok=False, facts=facts)
+    facts["label"] = kw
     out = [f"⏳ حد تحمل کد {code} — {kw} ({RENO_LABEL_FA.get(reno, reno)})"] + lines
     out.append("مبنا: میانگین تعداد تاندیش ۳ ماه کامل گذشته (همان محاسبهٔ گزارش اقلام بحرانی).")
-    return Answer("\n".join(out), it, facts=facts, buttons=[f"موجودی {code} {kw}"[:60]])
+    table = None
+    if len(trows) > 1:
+        from services.assistant_tables import text_table
+
+        out = [out[0]] + text_table(["بخش", "حد تحمل (روز)", "موجودی", "نیاز"], trows) + out[-1:]
+        table = {"title": f"حد تحمل کد {code} {kw} ({RENO_LABEL_FA.get(reno, reno)})", "subtitle": out[-1],
+                 "sections": [{"title": None, "columns": list(trows[0].keys()), "rows": trows}]}
+    return Answer("\n".join(out), it, facts=facts, buttons=[f"موجودی {code} {kw}"[:60]], table=table)
 
 
 def exec_n_tundish(ctx: _Ctx, it: Intent) -> Answer:
@@ -930,12 +1138,23 @@ def exec_n_tundish(ctx: _Ctx, it: Intent) -> Answer:
         res = nt.build_rows(inv, sec, n, reno, report_date=today)
         if res.error:
             return Answer(res.error, it, ok=False)
-        return Answer(res.bot_text(top=8) + "\n\nفایل PDF/اکسل: دکمهٔ «نیاز مواد برای N تاندیش».", it,
-                      buttons=[kb.BTN_N_TUNDISH],
-                      facts={"section": sec, "n": n, "items": res.item_count(), "short": res.shortage_count()})
+        from services import assistant_tables as at
+
+        hl = [res.rows[i] for i in res.highlight_rows if res.rows[i].get(nt.COL_ROW) not in ("", None)]
+        body = [f"🧮 {res.title}", res.subtitle, "",
+                f"{res.item_count()} قلم با نیاز مثبت؛ {res.shortage_count()} قلم کسری دارد."]
+        if hl:
+            body.append("اقلام کسری:")
+            body += at.text_table([nt.COL_CODE, nt.COL_KEYWORD, nt.COL_NEED, nt.COL_STOCK, nt.COL_SHORT], hl,
+                                  max_rows=8, header_map={nt.COL_NEED: "نیاز", nt.COL_STOCK: "موجودی"})
+        return Answer("\n".join(body) + "\n\nجدول کامل در فایل PDF پیوست است (گزارش رسمی: دکمهٔ «نیاز مواد برای N تاندیش»).",
+                      it, buttons=[kb.BTN_N_TUNDISH],
+                      facts={"section": sec, "n": n, "items": res.item_count(), "short": res.shortage_count()},
+                      table={"title": res.title, "subtitle": res.subtitle, "sections": res.sections()})
     lines = [f"🧮 نیاز مواد برای {n} تاندیش — بخش را مشخص نکردید؛ خلاصهٔ هر سه بخش:"]
     facts: dict[str, Any] = {"n": n, "sections": {}}
     btns = []
+    sections: list[dict[str, Any]] = []
     for key, fa in nt.SECTIONS.items():
         res = nt.build_rows(inv, key, n, reno, report_date=today)
         if res.error:
@@ -944,8 +1163,11 @@ def exec_n_tundish(ctx: _Ctx, it: Intent) -> Answer:
         facts["sections"][key] = {"items": res.item_count(), "short": res.shortage_count()}
         lines.append(f"• {fa}: {res.item_count()} قلم با نیاز؛ {res.shortage_count()} قلم کسری")
         btns.append(f"نیاز {n} تاندیش {fa}")
-    lines.append("برای جزئیات یک بخش، دکمهٔ همان بخش را بزنید.")
-    return Answer("\n".join(lines), it, buttons=btns, facts=facts)
+        for sct in res.sections():
+            sections.append(dict(sct, title=f"{fa} — {res.item_count()} قلم، {res.shortage_count()} کسری"))
+    lines.append("برای جزئیات یک بخش، دکمهٔ همان بخش را بزنید (جدول هر سه بخش در فایل PDF پیوست است).")
+    table = {"title": f"نیاز مواد برای {n} تاندیش — {today}", "subtitle": "هر سه بخش", "sections": sections}
+    return Answer("\n".join(lines), it, buttons=btns, facts=facts, table=table if sections else None)
 
 
 def exec_consumption(ctx: _Ctx, it: Intent) -> Answer:
@@ -984,23 +1206,32 @@ def exec_consumption(ctx: _Ctx, it: Intent) -> Answer:
         msg = f"برای «{label}»" + (f" و قلم «{q}»" if q else "") + " دادهٔ مصرفی پیدا نشد.\n"
         return Answer(msg + pc.availability_text_fa(av), it, ok=False)
     lines = [f"📅 مصرف {label} — {res.section_label}" + (f" — «{q}»" if q else ""), res.source_line()]
+    from services.assistant_tables import text_table
+
     facts: dict[str, Any] = {"site": {}, "mg": {}}
+    sections: list[dict[str, Any]] = []
     if site:
         lines.append(f"الف) از موجودی روزانهٔ سایت: {len(site)} قلم")
-        for r in sorted(site, key=lambda r: -float(r["مصرف (کاهش موجودی)"] or 0))[:8]:
+        srt = sorted(site, key=lambda r: -float(r["مصرف (کاهش موجودی)"] or 0))
+        for r in srt[:8]:
             facts["site"][str(r["شرح کالا"])] = r["مصرف (کاهش موجودی)"]
-            lines.append(f"• {r['بخش']} | {str(r['شرح کالا'])[:40]}: {r['مصرف (کاهش موجودی)']}")
+        lines += text_table(["بخش", "شرح کالا", "مصرف (کاهش موجودی)"], srt, max_rows=8, widths={"شرح کالا": 36})
+        sections.append({"title": "الف) از موجودی روزانهٔ سایت", "columns": list(srt[0].keys()), "rows": srt})
     if mg:
         lines.append(f"ب) از جداول تاندیش ماهانه: {len(mg)} ردیف")
         for r in mg[:8]:
             facts["mg"][f"{r['بخش']}|{r['ماده']}"] = r["مصرف"]
-            lines.append(f"• {r['بخش']} | {r['ماده']}: {r['مصرف']} {_unit(r['واحد'])}")
+        mrows = [dict(r, واحد=_unit(r.get("واحد"))) for r in mg]
+        lines += text_table(["بخش", "ماده", "مصرف", "واحد"], mrows, max_rows=8)
+        sections.append({"title": "ب) از جداول تاندیش ماهانه", "columns": list(mrows[0].keys()), "rows": mrows})
     elif res.mg_counts and not q:
         for r in res.mg_counts[:6]:
             lines.append(f"• {r['بخش']} | {r['ماه']}: {r['تعداد تاندیش']} تاندیش")
     from bot import keyboards as kb
 
-    return Answer("\n".join(lines), it, buttons=[kb.BTN_PERIOD], facts=facts)
+    table = {"title": f"مصرف {p['label']}" + (f" — {q}" if q else ""), "subtitle": label + " — " + res.section_label,
+             "sections": sections} if sections else None
+    return Answer("\n".join(lines), it, buttons=[kb.BTN_PERIOD], facts=facts, table=table)
 
 
 def exec_last_upload(ctx: _Ctx, it: Intent) -> Answer:
@@ -1163,6 +1394,49 @@ EXECUTORS: dict[str, Callable[[_Ctx, Intent], Answer]] = {
 
 SETTING_REPHRASE = "assistant_rephrase"
 
+_UNDERSTOOD_FA = {
+    I_STOCK: "موجودی", I_COVERAGE: "حد تحمل", I_CONSUMPTION: "مصرف", I_CRITICAL: "اقلام بحرانی",
+    I_N_TUNDISH: "نیاز مواد", I_LAST_UPLOAD: "آخرین بارگذاری موجودی", I_PENDING: "درخواست‌های در انتظار تأیید",
+    I_TUNDISH_STATS: "آمار تاندیش", I_OPEN_REPORT: "باز کردن گزارش", I_HELP: "راهنما", I_UNKNOWN: "نامشخص",
+}
+
+
+def intent_choices(item: str = "", *, approver: bool = False) -> list[str]:
+    """«❌ منظورم این نبود» menu: plain questions the rules route deterministically."""
+    out: list[str] = []
+    if item:
+        out += [f"موجودی {item}", f"حد تحمل {item}", f"مصرف {item} در ۳۰ روز اخیر"]
+    out += ["اقلام بحرانی کدام‌اند", "نیاز مواد برای ۱۰ تاندیش", "آخرین بارگذاری موجودی کی بود",
+            "آمار تاندیش ماه گذشته"]
+    if approver:
+        out.append("درخواست‌های در انتظار تأیید")
+    out.append("راهنمای دستیار")
+    return out
+
+
+def understood_fa(it: Intent, ans: Answer | None = None) -> str:
+    """Short footer of what the assistant understood, e.g. «برداشت: موجودی شرود (کد 1581)»."""
+    parts = [_UNDERSTOOD_FA.get(it.name, it.name)]
+    sl = it.slots
+    if it.name == I_N_TUNDISH and sl.get("n"):
+        parts.append(f"برای {sl['n']} تاندیش")
+    facts = ans.facts if ans else {}
+    label = str(facts.get("label") or sl.get("query") or "").strip()
+    if label:
+        parts.append(label)
+    code = facts.get("code") or sl.get("code")
+    if code and code != label:
+        parts.append(f"(کد {code})" if label else str(code))
+    if sl.get("section") in SECTION_FA:
+        parts.append(SECTION_FA[sl["section"]])
+    if isinstance(sl.get("period"), dict) and sl["period"].get("label"):
+        parts.append(str(sl["period"]["label"]))
+    if it.name in (I_CRITICAL, I_COVERAGE, I_N_TUNDISH) and sl.get("reno") == parse_reno("بدون نوسازی"):
+        parts.append("بدون نوسازی")
+    src = {"rules": "", "llm": "، با مدل زبانی", "llm+guard": "، اصلاح‌شده", "guard": "، از نام قلم"}.get(
+        it.source, "")
+    return "برداشت: " + " ".join(parts) + (f" ({src.lstrip('، ')})" if src else "")
+
 
 def answer(db: Any, user: dict, text: str, *, use_llm: bool | None = None, model: str | None = None,
            rephrase_answer: bool | None = None, chat: Callable[..., str] | None = None,
@@ -1204,6 +1478,7 @@ def answer(db: Any, user: dict, text: str, *, use_llm: bool | None = None, model
         better = rephrase(ans.text, model=model, chat=chat)
         if better:
             ans.text, ans.rephrased = better, True
+    ans.understood = understood_fa(ans.intent or it, ans)
     if log:
         try:
             from bot.activity import log_activity

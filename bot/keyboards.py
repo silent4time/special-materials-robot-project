@@ -224,6 +224,7 @@ BTN_ASSISTANT_ON = "✅ فعال‌سازی دستیار"
 BTN_ASSISTANT_OFF = "⏸ غیرفعال‌سازی دستیار"
 BTN_ASSISTANT_STATUS = "📋 وضعیت فعلی دستیار"
 BTN_ASK_ASSISTANT = "🤖 از دستیار بپرس"
+BTN_ASSISTANT_MISFIRE = "❌ منظورم این نبود"
 BTN_ASSISTANT_REPHRASE_ON = "✍️ بازنویسی روان پاسخ: روشن"
 BTN_ASSISTANT_REPHRASE_OFF = "✍️ بازنویسی روان پاسخ: خاموش"
 
@@ -871,9 +872,11 @@ def assistant_settings_menu() -> dict:
     )
 
 
-def assistant_answer_menu(buttons: list[str] | None = None) -> dict:
-    """Answer keyboard: suggested follow-ups (item choices / report buttons) + nav."""
+def assistant_answer_menu(buttons: list[str] | None = None, *, misfire: bool = False) -> dict:
+    """Answer keyboard: suggested follow-ups (item choices / report buttons), «❌ منظورم این نبود» + nav."""
     rows = _pairs(list(dict.fromkeys(b for b in (buttons or []) if b)))
+    if misfire:
+        rows.append([BTN_ASSISTANT_MISFIRE])
     return _kb(rows, "assistant_ask")
 
 def appearance_menu() -> dict:

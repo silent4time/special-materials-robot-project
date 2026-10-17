@@ -4699,12 +4699,70 @@ class BotApp:
         def work() -> bool:
             ans = ab.answer(self.db, user, text, channel="bot_voice" if transcript else "bot")
             body = (f"🗣 {transcript}\n\n" if transcript else "") + ans.text
-            self._reply_chunked(message, body, kb.assistant_answer_menu(ans.buttons))
+            if ans.understood:
+                body += f"\n\n🔎 {ans.understood}"
+            self._assistant_last[str(user.get("bale_user_id"))] = {
+                "q": text, "intent": ans.intent.name, "source": ans.intent.source,
+                "item": str(ans.facts.get("label") or ans.intent.slots.get("query") or ans.intent.slots.get("code")
+                            or ""),
+                "code": str(ans.facts.get("code") or ans.intent.slots.get("code") or ""),
+            }
+            self._reply_chunked(message, body, kb.assistant_answer_menu(
+                ans.buttons, misfire=ans.intent.name != ab.I_HELP))
+            self._send_assistant_table(message, user, ans)
             if voice_reply and ans.ok:
                 self._send_assistant_voice(message, ans.text)
             return True
 
         self._heavy(message, "دستیار هوشمند", False, work)
+
+    @property
+    def _assistant_last(self) -> dict:
+        d = self.__dict__.get("_asst_last")
+        if d is None:
+            d = self.__dict__["_asst_last"] = {}
+        return d
+
+    def _send_assistant_table(self, message: dict, user: dict, ans) -> None:
+        """Answers with a table also get a PDF (RTL, Vazirmatn) of the full table. Never raises."""
+        from services import assistant_tables as at
+
+        if not at.has_table(ans.table):
+            return
+        try:
+            from services.file_names import unique_dir
+
+            files = at.write_files(ans.table, unique_dir(REPORT_DIR, "assistant"), xlsx=False,
+                                   letterhead_path=self._letterhead_path())
+            if files.get("pdf"):
+                self.client.send_document(self._chat_id(message), files["pdf"],
+                                          caption=f"📄 {ans.table.get('title') or 'جدول پاسخ'} (جدول کامل)")
+        except Exception:  # noqa: BLE001
+            logger.warning("assistant table PDF send failed")
+
+    def on_assistant_misfire(self, message: dict) -> None:
+        """«❌ منظورم این نبود»: log the misfire and offer the intents to choose from."""
+        from services import assistant_brain as ab
+        from services.main_source_approvals import is_approver
+
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        last = self._assistant_last.get(str(user.get("bale_user_id"))) or {}
+        log_activity(self.db, user, "report_assistant_misfire", question=str(last.get("q") or "")[:200],
+                     intent=last.get("intent") or "", source=last.get("source") or "")
+        logger.info("assistant misfire intent=%s source=%s", last.get("intent"), last.get("source"))
+        item = last.get("code") or last.get("item") or ""
+        item = item if len(item) <= 30 else ""
+        choices = ab.intent_choices(item, approver=is_approver(user))
+        q = last.get("q")
+        self._reply(
+            message,
+            ("ممنون که گفتید؛ ثبت شد تا دستیار بهتر شود.\n"
+             + (f"سؤال شما: «{q}»\n" if q else "")
+             + "منظورتان کدام بود؟ یکی از دکمه‌ها را بزنید یا سؤال را با نام یا کد قلم دوباره بنویسید."),
+            kb.assistant_answer_menu(choices),
+        )
 
     def _send_assistant_voice(self, message: dict, text: str) -> None:
         """Piper TTS (optional). Never raises; text reply was already sent."""
@@ -6666,6 +6724,7 @@ class BotApp:
             kb.BTN_ASSISTANT_REPHRASE_ON: lambda m: self.on_assistant_rephrase_toggle(m, True),
             kb.BTN_ASSISTANT_REPHRASE_OFF: lambda m: self.on_assistant_rephrase_toggle(m, False),
             kb.BTN_ASK_ASSISTANT: self.on_assistant_ask_start,
+            kb.BTN_ASSISTANT_MISFIRE: self.on_assistant_misfire,
             kb.BTN_SETTINGS_CLEAR_STOCK_GROUP: self.on_bot_settings_clear_stock_group,
             kb.BTN_SETTINGS_UPLOAD_LETTERHEAD: self.on_bot_settings_upload_letterhead_start,
             kb.BTN_SETTINGS_CLEAR_LETTERHEAD: self.on_bot_settings_clear_letterhead,
