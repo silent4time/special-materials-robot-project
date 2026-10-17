@@ -82,7 +82,69 @@ ok()   { printf '✓ %s\n' "$*" >&2; }
 warn() { printf '⚠ %s\n' "$*" >&2; }
 die()  { printf '\n✗ %s\n' "$*" >&2; exit 1; }
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
-trap 'rc=$?; if (( rc != 0 )); then printf "\n✗ نصب با خطا متوقف شد (کد %s). خروجی بالا را ببینید؛ اجرای دوباره امن است: bash install.sh\n" "$rc" >&2; fi' EXIT
+# ---------- progress bar + install log (no tput needed; NO_COLOR / non-TTY degrade) ----------
+STEP_N="${_NASOZ_STEP_N:-0}"; STEP_TOTAL=0; STEP_NAME=""
+INSTALL_LOG="${_NASOZ_INSTALL_LOG:-${TMPDIR:-/tmp}/nasoz_install_$(date +%Y%m%d_%H%M%S).log}"
+: >>"$INSTALL_LOG" 2>/dev/null || INSTALL_LOG="/dev/null"
+if [[ -t 2 ]]; then PROGRESS_TTY=1; else PROGRESS_TTY=0; fi
+if (( PROGRESS_TTY )) && [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb ]]; then
+  C_B=$'\033[1m'; C_G=$'\033[32m'; C_R=$'\033[31m'; C_0=$'\033[0m'
+else
+  C_B=""; C_G=""; C_R=""; C_0=""
+fi
+fa_digits() { printf '%s' "$1" | sed 'y/0123456789/۰۱۲۳۴۵۶۷۸۹/'; }
+step() {  # step "نام مرحله" → «[۳/۱۰] ۳۰٪ ███░░░░░░░ نام...»
+  STEP_N=$((STEP_N + 1)); STEP_NAME="$1"
+  local total=$(( STEP_TOTAL > 0 ? STEP_TOTAL : STEP_N )) pct filled bar="" i
+  (( STEP_N > total )) && total=$STEP_N
+  pct=$(( STEP_N * 100 / total )); filled=$(( pct / 10 ))
+  for (( i = 0; i < 10; i++ )); do if (( i < filled )); then bar+="█"; else bar+="░"; fi; done
+  printf '\n%s[%s/%s] %s٪ %s %s...%s\n' "$C_B" "$(fa_digits "$STEP_N")" "$(fa_digits "$total")" \
+    "$(fa_digits "$pct")" "$bar" "$1" "$C_0" >&2
+  printf '\n===== [%s/%s] %s (%s) =====\n' "$STEP_N" "$total" "$1" "$(date '+%F %T')" >>"$INSTALL_LOG" 2>/dev/null || true
+}
+run_long() {  # run_long "توضیح" cmd… → output only to $INSTALL_LOG; spinner+elapsed on TTY
+  local label="$1"; shift
+  local start=$SECONDS rc=0 pid sp="|/-\\" i=0
+  printf '$ %s\n' "$*" >>"$INSTALL_LOG" 2>/dev/null || true
+  if (( PROGRESS_TTY )); then
+    "$@" >>"$INSTALL_LOG" 2>&1 </dev/null & pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+      printf '\r  %s %s (%s ثانیه)   ' "${sp:i++%4:1}" "$label" "$(fa_digits $((SECONDS - start)))" >&2
+      sleep 0.5
+    done
+    wait "$pid" || rc=$?
+    printf '\r\033[K' >&2
+  else
+    log "  … $label (جزئیات: $INSTALL_LOG)"
+    "$@" >>"$INSTALL_LOG" 2>&1 </dev/null || rc=$?
+  fi
+  if (( rc != 0 )); then
+    printf '%s  ✗ %s ناموفق بود (کد %s). آخرین خطوط لاگ:%s\n' "$C_R" "$label" "$(fa_digits "$rc")" "$C_0" >&2
+    tail -n 15 "$INSTALL_LOG" 2>/dev/null | sed 's/^/    │ /' >&2
+    return "$rc"
+  fi
+  printf '%s  ✓ %s (%s ثانیه)%s\n' "$C_G" "$label" "$(fa_digits $((SECONDS - start)))" "$C_0" >&2
+}
+move_log_to() {  # keep one log per run under <repo>/data/logs/
+  local dir="$1/data/logs" dest
+  mkdir -p "$dir" 2>/dev/null || return 0
+  dest="$dir/$(basename "$INSTALL_LOG")"
+  if [[ "$INSTALL_LOG" != /dev/null && "$INSTALL_LOG" != "$dest" ]]; then
+    cat "$INSTALL_LOG" >>"$dest" 2>/dev/null && rm -f "$INSTALL_LOG"
+    INSTALL_LOG="$dest"
+  fi
+}
+# shellcheck disable=SC2317  # invoked via trap
+on_exit() {
+  local rc=$?
+  if (( rc != 0 )); then
+    printf '\n%s✗ نصب با خطا متوقف شد (کد %s)%s\n' "$C_R" "$(fa_digits "$rc")" "$C_0" >&2
+    [[ -n "$STEP_NAME" ]] && printf '  مرحلهٔ ناموفق: [%s/%s] %s\n' "$(fa_digits "$STEP_N")" "$(fa_digits "$STEP_TOTAL")" "$STEP_NAME" >&2
+    printf '  لاگ کامل: %s\n  اجرای دوباره امن است: bash install.sh\n' "$INSTALL_LOG" >&2
+  fi
+}
+trap on_exit EXIT
 
 # ---------- terminal detection: stdin, else /dev/tty ----------
 TTY_FD=""
@@ -172,8 +234,9 @@ ensure_system_packages() {
   if ((${#missing[@]} == 0)); then ok "بسته‌های سیستم کامل است (python3-venv، tesseract fas/eng، ...)"; return 0; fi
   if (( DRY_RUN )); then log "[dry-run] apt-get install -y ${missing[*]}"; return 0; fi
   log "نصب بسته‌های سیستم: ${missing[*]}"
-  maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y
-  maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+  run_long "apt-get update" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y || die "به‌روزرسانی فهرست بسته‌ها ناموفق بود."
+  run_long "نصب ${#missing[@]} بستهٔ سیستمی" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}" \
+    || die "نصب بسته‌های سیستمی ناموفق بود."
   ok "بسته‌های سیستم نصب شد"
 }
 # ---------- system upgrade (apt-get update && apt-get upgrade -y) ----------
@@ -188,10 +251,10 @@ system_upgrade() {
     return 0
   fi
   log "ارتقای سیستم‌عامل (apt-get update && apt-get upgrade -y) ..."
-  maybe_sudo "${SYSUP_CMD_UPDATE[@]}"
-  maybe_sudo "${SYSUP_CMD_UPGRADE[@]}"
+  run_long "apt-get update" maybe_sudo "${SYSUP_CMD_UPDATE[@]}" || die "apt-get update ناموفق بود."
+  run_long "apt-get upgrade (ممکن است چند دقیقه طول بکشد)" maybe_sudo "${SYSUP_CMD_UPGRADE[@]}" || die "apt-get upgrade ناموفق بود."
   ok "سیستم‌عامل ارتقا یافت (فایل‌های پیکربندی موجود حفظ شد)"
-  [[ -f /var/run/reboot-required ]] && warn "سیستم به ریبوت نیاز دارد (کرنل/کتابخانه‌ها) — در زمان مناسب: sudo reboot" || true
+  if [[ -f /var/run/reboot-required ]]; then warn "سیستم به ریبوت نیاز دارد (کرنل/کتابخانه‌ها) — در زمان مناسب: sudo reboot"; fi
 }
 maybe_system_upgrade() {  # fresh install: offered in the wizard, default yes
   case "$DO_SYSUP" in
@@ -255,11 +318,11 @@ setup_venv() {
   fi
   if [[ ! -d "$root/.venv" ]]; then
     log "ساخت محیط مجازی .venv ..."
-    python3 -m venv "$root/.venv" || { rm -rf "$root/.venv"; die "ساخت venv ناموفق بود. بسته python3-venv را نصب کنید: sudo apt install python3-venv"; }
+    run_long "ساخت .venv" python3 -m venv "$root/.venv" || { rm -rf "$root/.venv"; die "ساخت venv ناموفق بود. بسته python3-venv را نصب کنید: sudo apt install python3-venv"; }
   fi
-  "$VENV_PY" -m pip install -q -U pip wheel
-  log "نصب وابستگی‌های Python (چند دقیقه) ..."
-  "$VENV_PY" -m pip install -q -r "$root/requirements.txt"
+  run_long "به‌روزرسانی pip" "$VENV_PY" -m pip install -U pip wheel || die "به‌روزرسانی pip ناموفق بود."
+  run_long "نصب وابستگی‌های Python (چند دقیقه)" "$VENV_PY" -m pip install -r "$root/requirements.txt" \
+    || die "نصب وابستگی‌های Python ناموفق بود."
   ok "وابستگی‌های Python نصب شد"
 }
 verify_imports() {
@@ -600,36 +663,6 @@ DEFAULT_OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:3b}"
 DEFAULT_OLLAMA_URL="http://127.0.0.1:11434"
 DEFAULT_OLLAMA_TIMEOUT="60"
 
-upsert_env_var() {
-  # usage: upsert_env_var ROOT KEY VALUE
-  local root="$1" key="$2" value="$3" tmp
-  cd "$root"
-  if [[ ! -f .env ]]; then
-    if [[ -f .env.example ]]; then
-      cp .env.example .env
-    else
-      touch .env
-    fi
-    chmod 600 .env 2>/dev/null || true
-  fi
-  tmp="$(mktemp)"
-  if grep -qE "^${key}=" .env 2>/dev/null; then
-    # replace existing assignment (keep other lines)
-    awk -v k="$key" -v v="$value" '
-      BEGIN { done=0 }
-      $0 ~ "^"k"=" {
-        if (!done) { print k"="v; done=1; next }
-      }
-      { print }
-      END { if (!done) print k"="v }
-    ' .env > "$tmp"
-  else
-    cat .env > "$tmp"
-    printf '\n%s=%s\n' "$key" "$value" >> "$tmp"
-  fi
-  mv "$tmp" .env
-  chmod 600 .env 2>/dev/null || true
-}
 
 write_ollama_env() {
   local root="$1"
@@ -722,11 +755,26 @@ else
   log "حالت غیرتعاملی"
 fi
 
+# total steps per mode (one «step» call per item below)
+plan_total() {
+  if [[ -n "$RESTORE_FILE" ]]; then echo 6
+  elif (( DO_SYSUP_ONLY && ! DO_UPDATE )); then echo 3
+  elif (( DO_START_ONLY )); then echo 2
+  elif (( DO_UPDATE )); then echo $(( 10 + (DO_SYSUP == 1 ? 1 : 0) ))
+  elif (( DO_REPAIR )); then echo 8
+  else echo $(( 11 + (DO_SYSUP == 2 ? 0 : 1) ))
+  fi
+}
+STEP_TOTAL="$(plan_total)"
+if (( DO_WEB_LOGIN )); then STEP_TOTAL=0; fi
+
 need_cmd git || ensure_system_packages
 WORKDIR="$(resolve_workdir)"
 export WORKDIR
 cd "$WORKDIR"
+move_log_to "$WORKDIR"
 log "مسیر نصب: $WORKDIR"
+log "لاگ نصب: $INSTALL_LOG"
 VENV_PY="$WORKDIR/.venv/bin/python"
 
 # fail fast (before minutes of apt/pip) when a fresh install cannot get a token
@@ -745,60 +793,75 @@ if [[ -n "$RESTORE_FILE" ]]; then
   [[ -f "$RESTORE_FILE" ]] || die "فایل بک‌آپ پیدا نشد: $RESTORE_FILE"
   RESTORE_FILE="$(cd "$(dirname "$RESTORE_FILE")" && pwd)/$(basename "$RESTORE_FILE")"
   PY="$VENV_PY"; [[ -x "$PY" ]] || PY="python3"
+  step "بررسی فایل بک‌آپ (manifest و sha256)"
   (cd "$WORKDIR" && "$PY" scripts/restore_backup.py --check "$RESTORE_FILE") || die "فایل بک‌آپ نامعتبر است؛ هیچ تغییری داده نشد."
   if (( DRY_RUN )); then
-    log "[dry-run] توقف سرویس‌ها ($BOT_SERVICE، $WEB_SERVICE یا pid های data/)"
-    log "[dry-run] $PY scripts/restore_backup.py $RESTORE_FILE   (بک‌آپ پیش از بازگردانی + بازگردانی + migrate)"
-    log "[dry-run] استارت سرویس‌ها + تست سلامت"
+    step "توقف سرویس‌ها"; log "[dry-run] توقف $BOT_SERVICE، $WEB_SERVICE یا pid های data/"
+    step "بک‌آپ پیش از بازگردانی و بازگردانی داده‌ها"; log "[dry-run] $PY scripts/restore_backup.py $RESTORE_FILE"
+    step "به‌روزرسانی ساختار پایگاه داده (migrate)"; log "[dry-run] migrate رد شد"
+    step "استارت ربات و وب"; log "[dry-run] استارت سرویس‌ها رد شد"
+    step "تست سلامت"; log "[dry-run] تمام شد — هیچ چیزی تغییر نکرد."
     trap - EXIT; exit 0
   fi
   if interactive && ! yes_no N "همهٔ داده‌های فعلی با این بک‌آپ جایگزین می‌شود. ادامه؟"; then die "لغو شد."; fi
+  step "توقف سرویس‌ها"
   if systemd_installed && have_systemd; then maybe_sudo systemctl stop "$BOT_SERVICE" "$WEB_SERVICE" || true
-  else for n in bot web; do pid_alive "$WORKDIR/data/$n.pid" && kill "$(cat "$WORKDIR/data/$n.pid")" 2>/dev/null || true; done; sleep 2; fi
+  else for n in bot web; do if pid_alive "$WORKDIR/data/$n.pid"; then kill "$(cat "$WORKDIR/data/$n.pid")" 2>/dev/null || true; fi; done; sleep 2; fi
   ok "سرویس‌ها متوقف شدند"
-  (cd "$WORKDIR" && "$PY" scripts/restore_backup.py "$RESTORE_FILE") || warn "بازگردانی ناموفق بود — بک‌آپ «پیش از بازگردانی» در data/backups است."
+  step "بک‌آپ پیش از بازگردانی و بازگردانی داده‌ها"
+  # shellcheck disable=SC2016  # $1..$3 expand inside the child bash
+  run_long "بازگردانی" bash -c 'cd "$1" && "$2" scripts/restore_backup.py "$3"' _ "$WORKDIR" "$PY" "$RESTORE_FILE" || warn "بازگردانی ناموفق بود — بک‌آپ «پیش از بازگردانی» در data/backups است."
   [[ -x "$VENV_PY" ]] || VENV_PY="$PY"
-  init_db "$WORKDIR"
-  start_services; health_check; print_summary; trap - EXIT; exit 0
+  step "به‌روزرسانی ساختار پایگاه داده (migrate)"; init_db "$WORKDIR"
+  step "استارت ربات و وب"; start_services
+  step "تست سلامت"; health_check; print_summary; trap - EXIT; exit 0
 fi
 if (( DO_SYSUP_ONLY && ! DO_UPDATE )); then
-  system_upgrade
-  if (( ! DRY_RUN )) && env_configured; then start_services; health_check; fi
+  step "ارتقای سیستم‌عامل"; system_upgrade
+  step "استارت دوبارهٔ ربات و وب"
+  if (( ! DRY_RUN )) && env_configured; then start_services; else log "  (رد شد)"; fi
+  step "تست سلامت"
+  if (( ! DRY_RUN )) && env_configured; then health_check; else log "  (رد شد)"; fi
   if (( DRY_RUN )); then log "[dry-run] تمام شد — هیچ چیزی نصب یا اجرا نشد."; fi
   trap - EXIT; exit 0
 fi
 if (( DO_START_ONLY )); then
   env_configured || die ".env هنوز توکن ندارد — bash install.sh"
-  start_services; health_check; print_summary; trap - EXIT; exit 0
+  step "استارت ربات و وب"; start_services
+  step "تست سلامت"; health_check; print_summary; trap - EXIT; exit 0
 fi
 
-if (( DO_UPDATE && DO_SYSUP == 1 )) && [[ -z "${_NASOZ_REEXEC:-}" ]]; then system_upgrade; fi   # --full-update
-if (( DO_UPDATE )) && [[ -z "${_NASOZ_REEXEC:-}" ]]; then backup_db "$WORKDIR"; fi
-if (( DO_UPDATE )) && (( DRY_RUN )); then log "[dry-run] git -C $WORKDIR pull --ff-only"; fi
-if (( DO_UPDATE )) && [[ -d "$WORKDIR/.git" ]] && (( ! DRY_RUN )); then
-  log "git pull ..."
-  git -C "$WORKDIR" pull --ff-only || warn "git pull ناموفق بود (تغییرات محلی؟) — با نسخهٔ فعلی ادامه می‌دهیم. git -C $WORKDIR status"
-  # the script on disk may have changed; re-exec the new version once
-  if [[ -z "${_NASOZ_REEXEC:-}" ]]; then export _NASOZ_REEXEC=1; trap - EXIT; exec bash "$WORKDIR/scripts/install.sh" "$@"; fi
+if [[ -z "${_NASOZ_REEXEC:-}" ]]; then   # (a re-exec after git pull continues the same numbering)
+  if (( DO_UPDATE && DO_SYSUP == 1 )); then step "ارتقای سیستم‌عامل"; system_upgrade; fi   # --full-update
+  if (( DO_UPDATE )); then step "پشتیبان پایگاه داده"; backup_db "$WORKDIR"; fi
+  if (( DO_UPDATE )); then step "دریافت آخرین نسخه (git pull)"; fi
+  if (( DO_UPDATE )) && (( DRY_RUN )); then log "[dry-run] git -C $WORKDIR pull --ff-only"; fi
+  if (( DO_UPDATE )) && [[ -d "$WORKDIR/.git" ]] && (( ! DRY_RUN )); then
+    run_long "git pull" git -C "$WORKDIR" pull --ff-only || warn "git pull ناموفق بود (تغییرات محلی؟) — با نسخهٔ فعلی ادامه می‌دهیم. git -C $WORKDIR status"
+    # the script on disk may have changed; re-exec the new version once
+    export _NASOZ_REEXEC=1 _NASOZ_STEP_N="$STEP_N" _NASOZ_INSTALL_LOG="$INSTALL_LOG"
+    trap - EXIT; exec bash "$WORKDIR/scripts/install.sh" "$@"
+  fi
 fi
 
-if (( ! DO_UPDATE && ! DO_REPAIR )); then maybe_system_upgrade; fi   # fresh install (wizard question, default yes)
-ensure_system_packages
-check_python
-check_tesseract
-if (( ! DO_UPDATE && ! DO_REPAIR )); then ensure_env; fi   # ask questions early, then long installs
-setup_venv "$WORKDIR"
-verify_imports "$WORKDIR"
-init_db "$WORKDIR"
+if (( ! DO_UPDATE && ! DO_REPAIR )) && (( DO_SYSUP != 2 )); then step "ارتقای سیستم‌عامل"; maybe_system_upgrade; fi   # fresh install (wizard question, default yes)
+step "نصب/بررسی بسته‌های سیستمی"; ensure_system_packages
+step "بررسی پایتون و tesseract"; check_python; check_tesseract
+if (( ! DO_UPDATE && ! DO_REPAIR )); then step "پیکربندی (.env)"; ensure_env; fi   # ask questions early, then long installs
+step "محیط پایتون و وابستگی‌ها"; setup_venv "$WORKDIR"
+step "بررسی ماژول‌های برنامه"; verify_imports "$WORKDIR"
+step "آماده‌سازی پایگاه داده (migrate)"; init_db "$WORKDIR"
 
 if (( DO_UPDATE || DO_REPAIR )); then
+  step "به‌روزرسانی تنظیمات سرویس‌ها"
   if (( ! DRY_RUN )); then
     env_configured || die ".env توکن ندارد — ابتدا: bash install.sh"
     ensure_common_env
   fi
   if { systemd_installed && have_systemd; } || (( DRY_RUN )); then install_units; fi   # refresh units
 else
-  maybe_assistant
+  step "دستیار هوشمند (اختیاری)"; maybe_assistant
+  step "نصب سرویس‌ها"
   if [[ -z "$SYSTEMD_CHOICE" ]]; then
     if have_systemd && (( EUID == 0 )); then SYSTEMD_CHOICE=y; else SYSTEMD_CHOICE=n; fi
   fi
@@ -808,9 +871,11 @@ else
   fi
 fi
 
-start_services
-if (( ! DO_UPDATE && ! DO_REPAIR )) || (( DO_SEED )); then seed_web_login 1; fi
-health_check
+step "استارت ربات و وب"; start_services
+if (( ! DO_UPDATE && ! DO_REPAIR )); then step "ورود پنل وب"; seed_web_login 1
+elif (( DO_SEED )); then seed_web_login 1; fi
+step "تست سلامت"; health_check
+log "لاگ کامل نصب: $INSTALL_LOG"
 if (( DRY_RUN )); then log "[dry-run] تمام شد — هیچ چیزی نصب یا اجرا نشد."; trap - EXIT; exit 0; fi
 print_summary
 trap - EXIT
