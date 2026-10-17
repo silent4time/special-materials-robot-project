@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}بک‌آپ{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>💾 بک‌آپ</h1>
+  <p class="muted">بک‌آپ کامل: پایگاه داده (کپی سازگار)، فایل‌های منبع اصلی و آپلودها، دارایی‌های ربات و تنظیمات بدون توکن/رمزها + manifest با sha256. محل ذخیره روی سرور: <code>data/backups/</code>.
+    خودکار هر شب ۰۲:۰۰ به وقت تهران (نگهداری ۷ روزانه + ۴ هفتگی؛ بک‌آپ‌های دستی و پیش از بازگردانی تا ۳۰ روز حذف نمی‌شوند).</p>
+  <p><strong>{{ last_auto }}</strong></p>
+  {% if message %}<div class="alert ok" style="white-space:pre-line">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err" style="white-space:pre-line">{{ error }}</div>{% endif %}
+  {% if new_name %}<p><a class="btn" href="/settings/backups/file/{{ new_name }}">⬇️ دانلود {{ new_name }}</a></p>{% endif %}
+  <form method="post" action="/settings/backups/create"><button class="btn" type="submit">💾 ساخت بک‌آپ کامل</button></form>
+</div>
+<div class="card">
+  <h2>📋 لیست بک‌آپ‌ها ({{ items|length }})</h2>
+  <table class="table">
+    <tr><th>تاریخ (تهران)</th><th>نوع</th><th>حجم</th><th></th></tr>
+    {% for b in items %}
+    <tr><td>{{ b.date_fa }}</td><td>{{ b.kind_fa }}</td><td>{{ b.size_fa }}</td><td><a href="/settings/backups/file/{{ b.name }}">⬇️ دانلود</a></td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% if is_owner %}
+<div class="card" id="restore">
+  <h2>♻️ بازگردانی از بک‌آپ (فقط مالک)</h2>
+  {% if restore_step == 1 %}
+  <pre class="muted" style="white-space:pre-wrap">{{ restore_summary }}</pre>
+  <form method="post" action="/settings/backups/restore/confirm">
+    <label><input type="checkbox" name="confirm1" value="1"> می‌دانم همهٔ داده‌های فعلی با این بک‌آپ جایگزین می‌شود (پیش از آن خودکار بک‌آپ گرفته می‌شود).</label>
+    <label>برای تأیید نهایی کلمهٔ «بازگردانی» را تایپ کنید<input name="confirm2" autocomplete="off"></label>
+    <button class="btn" type="submit">⚠️ بازگردانی</button>
+  </form>
+  {% else %}
+  <form method="post" action="/settings/backups/restore/upload" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".zip" required> <button type="submit">بررسی فایل</button>
+  </form>
+  <p class="muted">روی سرور: <code>bash install.sh --restore فایل.zip</code></p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -182,3 +182,95 @@ async def assistant_toggle(request: Request, user=Depends(current_user), db: Dat
     db.set_setting(va.SETTING_ENABLED, "1" if enable else "0", updated_by=str(user["bale_user_id"]))
     log_activity(db, user, "assistant_enabled" if enable else "assistant_disabled")
     return render(request, "settings_bot.html", _bot_ctx(db, user, message="✅ ذخیره شد."))
+
+
+# ------------------------------------------------------------------ 💾 بک‌آپ (same services.backup as bot)
+def _bk_ctx(db, user, **kw):
+    from services import backup as bk
+
+    return {"user": user, "items": bk.list_backups(), "last_auto": bk.last_auto_status_fa(db),
+            "is_owner": require_owner(user), **kw}
+
+
+@router.get("/backups")
+async def backups_page(request: Request, user=Depends(require_feature(perm.BACKUP)), db: Database = Depends(get_db)):
+    return render(request, "settings_backups.html", _bk_ctx(db, user))
+
+
+@router.post("/backups/create")
+async def backups_create(request: Request, user=Depends(require_feature(perm.BACKUP)), db: Database = Depends(get_db)):
+    from services import backup as bk
+
+    try:
+        path = bk.create_backup(bk.MANUAL, paths=bk.Paths(db=db.path), actor=str(user["bale_user_id"]))
+    except Exception as exc:  # noqa: BLE001
+        return render(request, "settings_backups.html", _bk_ctx(db, user, error=f"ساخت بک‌آپ ناموفق بود: {exc}"), status_code=500)
+    log_activity(db, user, "backup_create", file=path.name)
+    return render(request, "settings_backups.html", _bk_ctx(db, user, message=f"✅ بک‌آپ ساخته شد: {path.name}", new_name=path.name))
+
+
+@router.get("/backups/file/{name}")
+async def backups_download(name: str, user=Depends(require_feature(perm.BACKUP)), db: Database = Depends(get_db)):
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    from services import backup as bk
+
+    path = bk.resolve(name)
+    if not path:
+        raise HTTPException(status_code=404)
+    log_activity(db, user, "backup_download", file=path.name)
+    return FileResponse(path, media_type="application/zip", filename=path.name)
+
+
+def _incoming(user) -> Path:
+    from services import backup as bk
+
+    d = bk.Paths().backups / "incoming"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"restore_web_{user['bale_user_id']}.zip"
+
+
+@router.post("/backups/restore/upload")
+async def backups_restore_upload(request: Request, file: UploadFile = File(...), user=Depends(current_user),
+                                 db: Database = Depends(get_db)):
+    """Owner only: upload → validate manifest/sha256 → summary (confirm step 1)."""
+    from services import backup as bk
+
+    if not require_owner(user):
+        raise ForbiddenFa("بازگردانی فقط توسط مالک.")
+    dest = _incoming(user)
+    with dest.open("wb") as fh:
+        shutil.copyfileobj(file.file, fh)
+    man, err = bk.validate(dest)
+    if not man:
+        dest.unlink(missing_ok=True)
+        return render(request, "settings_backups.html", _bk_ctx(db, user, error=f"⛔ فایل رد شد: {err}"), status_code=400)
+    return render(request, "settings_backups.html", _bk_ctx(db, user, restore_summary=bk.summary_fa(man), restore_step=1))
+
+
+@router.post("/backups/restore/confirm")
+async def backups_restore_confirm(request: Request, user=Depends(current_user), db: Database = Depends(get_db)):
+    """Step 2 (+3): owner confirms twice (checkbox + typed word) → pre-restore backup → restore."""
+    from services import backup as bk
+
+    if not require_owner(user):
+        raise ForbiddenFa("بازگردانی فقط توسط مالک.")
+    form = await request.form()
+    dest = _incoming(user)
+    if not dest.is_file():
+        return render(request, "settings_backups.html", _bk_ctx(db, user, error="ابتدا فایل بک‌آپ را بارگذاری کنید."), status_code=400)
+    if form.get("confirm1") != "1" or str(form.get("confirm2") or "").strip() != "بازگردانی":
+        man, _ = bk.validate(dest)
+        return render(request, "settings_backups.html", _bk_ctx(
+            db, user, restore_summary=bk.summary_fa(man) if man else "", restore_step=1,
+            error="برای تأیید، تیک را بزنید و کلمهٔ «بازگردانی» را تایپ کنید."), status_code=400)
+    try:
+        ok, text, _pre = bk.restore(dest, paths=bk.Paths(db=db.path), actor=str(user["bale_user_id"]))
+    finally:
+        dest.unlink(missing_ok=True)
+    perm.invalidate()
+    if ok:
+        log_activity(db, user, "backup_restore")
+    return render(request, "settings_backups.html", _bk_ctx(db, user, message=text if ok else None, error=None if ok else text),
+                  status_code=200 if ok else 400)

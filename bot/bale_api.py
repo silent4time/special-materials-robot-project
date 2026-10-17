@@ -120,6 +120,8 @@ class BaleClient:
             mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         elif suffix == ".xls":
             mime = "application/vnd.ms-excel"
+        elif suffix == ".zip":
+            mime = "application/zip"
         else:
             mime = "application/pdf"
         with path.open("rb") as fh:
