@@ -41,6 +41,20 @@
   </form>
 </div>
 
+{% if is_approver and pending_requests %}
+<div class="card">
+  <h2>📝 درخواست‌های افزودن رکورد در انتظار تأیید ({{ pending_requests|length }})</h2>
+  {% for r in pending_requests %}
+  <div style="border-top:1px solid #ddd;padding:.5rem 0">
+    <strong>#{{ r.id }}</strong> — {{ r.requester_name or r.requester_id }} — {% if r.allow_update %}جایگزینی رکورد موجود{% else %}رکورد جدید{% endif %}
+    <ul>{% for k, v in r.record.items() %}{% if v %}<li>{{ labels.get(k, k) }}: {{ v }}</li>{% endif %}{% endfor %}</ul>
+    <form method="post" action="/settings/main-source/requests/{{ r.id }}/approve" style="display:inline"><button type="submit">✅ تایید</button></form>
+    <form method="post" action="/settings/main-source/requests/{{ r.id }}/reject" style="display:inline"><button type="submit">❌ رد</button></form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 <div class="card">
   <h2>اضافه کردن رکورد</h2>
   <form method="post" action="/settings/main-source/add">
@@ -50,6 +64,7 @@
     <input id="add_{{ key }}" name="{{ key }}" type="text"{% if required %} required{% endif %}{% if key == 'priority' %} value="1"{% endif %}>
     {% endfor %}
     <label><input type="checkbox" name="overwrite" value="1"> اگر شناسه تکراری بود، رکورد قبلی جایگزین شود</label>
+    {% if needs_approval %}<p class="muted">رکورد شما پس از تأیید مدیر یا مالک در منبع اصلی اعمال می‌شود.</p>{% endif %}
     <p style="margin-top:1rem"><button type="submit">افزودن رکورد</button></p>
   </form>
 </div>
