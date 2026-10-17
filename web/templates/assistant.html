@@ -15,10 +15,33 @@
   </form>
   {% endif %}
 </div>
+{% if misfire %}
+<div class="card">
+  <p>ممنون که گفتید؛ ثبت شد تا دستیار بهتر شود. منظورتان کدام بود؟ یکی را بزنید یا سؤال را با نام یا کد قلم دوباره بنویسید.</p>
+  <form method="post" action="/assistant/ask" class="form-grid">
+    {% for f in followups %}<button class="btn" type="submit" name="q" value="{{ f }}">{{ f }}</button>{% endfor %}
+  </form>
+</div>
+{% endif %}
 {% if answer %}
 <div class="card">
   {% if transcript %}<p class="muted">🗣 {{ transcript }}</p>{% endif %}
-  <pre style="white-space:pre-wrap;font-family:inherit">{{ answer.text }}</pre>
+  <pre style="white-space:pre-wrap;font-family:inherit">{{ answer_text or answer.text }}</pre>
+  {% for t in tables %}
+  {% if t.title %}<h3>{{ t.title }}</h3>{% endif %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr>{% for h in t.header %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+    <tbody>{% for r in t.rows %}<tr>{% for c in r %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+  </table></div>
+  {% if t.more %}<p class="muted">… و {{ t.more }} ردیف دیگر (در فایل PDF/اکسل)</p>{% endif %}
+  {% endfor %}
+  {% if downloads %}<p>{% for label, href in downloads %}<a class="btn" href="{{ href }}">{{ label }}</a> {% endfor %}</p>{% endif %}
+  {% if answer.understood %}<p class="muted">🔎 {{ answer.understood }}</p>
+  <form method="post" action="/assistant/misfire" style="display:inline">
+    <input type="hidden" name="q" value="{{ question }}"><input type="hidden" name="intent" value="{{ answer.intent.name }}">
+    <input type="hidden" name="item" value="{{ answer.facts.get('label') or answer.intent.slots.get('query') or answer.intent.slots.get('code') or '' }}">
+    <button class="btn" type="submit">❌ منظورم این نبود</button>
+  </form>{% endif %}
   {% if links %}<p>{% for label, href in links %}<a class="btn" href="{{ href }}">{{ label }}</a> {% endfor %}</p>{% endif %}
   {% if followups %}
   <form method="post" action="/assistant/ask" class="form-grid">

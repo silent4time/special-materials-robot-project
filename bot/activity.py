@@ -73,6 +73,7 @@ ACTION_PHRASES: dict[str, str] = {
     "report_generate_pdf": "گزارش کلی مواد را گرفت",
     "report_user_activity": "گزارش فعالیت کاربران را گرفت",
     "report_assistant_asked": "از دستیار هوشمند پرسش کرد",
+    "report_assistant_misfire": "پاسخ دستیار هوشمند را «منظورم این نبود» زد",
     "settings_letterhead": "سربرگ PDF را تغییر داد",
     "settings_logo": "لوگوی ربات را تغییر داد",
     "settings_invite": "تنظیمات دعوت‌نامه را تغییر داد",

@@ -58,6 +58,10 @@ def _ctx(db: Database, user: dict, **kw):
         "answer": None,
         "links": [],
         "followups": [],
+        "misfire": False,
+        "tables": [],
+        "downloads": [],
+        "answer_text": "",
         "transcript": "",
         "error": None,
         **kw,
@@ -112,4 +116,80 @@ async def assistant_ask(request: Request, user=Depends(current_user), db: Databa
         else:
             followups.append(b)
     ctx.update(question=q, answer=ans, links=links, followups=followups, transcript=transcript)
+    ctx.update(_table_ctx(request, ans))
+    return render(request, "assistant.html", ctx)
+
+
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _table_ctx(request: Request, ans) -> dict:
+    """HTML table + PDF/Excel download (files in REPORT_DIR/assistant_web/<token>, token kept in session)."""
+    import secrets
+
+    from config import REPORT_DIR
+    from services import assistant_tables as at
+
+    text = ans.text
+    out: dict = {"answer_text": text, "tables": [], "downloads": []}
+    if not at.has_table(ans.table):
+        return out
+    # the text table (for Bale) is replaced by the HTML table on the web
+    out["answer_text"] = "\n".join(ln for ln in text.splitlines() if at.SEP not in ln and not ln.strip().startswith("─"))
+    from pdf.generator import SIMPLE_HEADER_FA, _format_simple_cell
+
+    for sec in ans.table["sections"]:
+        cols = list(sec.get("columns") or [])
+        if not cols:
+            continue
+        out["tables"].append({
+            "title": sec.get("title"),
+            "header": [SIMPLE_HEADER_FA.get(c, c) for c in cols],
+            "rows": [[_format_simple_cell(r.get(c), c) for c in cols] for r in (sec.get("rows") or [])[:300]],
+            "more": max(0, len(sec.get("rows") or []) - 300),
+        })
+    token = secrets.token_hex(8)
+    files = at.write_files(ans.table, Path(REPORT_DIR) / "assistant_web" / token)
+    if files:
+        toks = [t for t in request.session.get("asst_files", []) if isinstance(t, str)][-19:] + [token]
+        request.session["asst_files"] = toks
+        for kind, label in (("pdf", "📄 دانلود PDF"), ("xlsx", "📊 دانلود اکسل")):
+            if files.get(kind):
+                out["downloads"].append((label, f"/assistant/file/{token}/{kind}"))
+    return out
+
+
+@router.get("/assistant/file/{token}/{kind}")
+async def assistant_file(token: str, kind: str, request: Request, user=Depends(current_user)):
+    import re
+
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    from config import REPORT_DIR
+
+    if not re.fullmatch(r"[0-9a-f]{16}", token) or kind not in ("pdf", "xlsx") \
+            or token not in (request.session.get("asst_files") or []):
+        raise HTTPException(status_code=404)
+    d = Path(REPORT_DIR) / "assistant_web" / token
+    hits = sorted(d.glob(f"*.{kind}")) if d.is_dir() else []
+    if not hits:
+        raise HTTPException(status_code=404)
+    return FileResponse(hits[0], media_type="application/pdf" if kind == "pdf" else _XLSX, filename=hits[0].name)
+
+
+@router.post("/assistant/misfire")
+async def assistant_misfire(request: Request, user=Depends(current_user), db: Database = Depends(get_db)):
+    """Web «❌ منظورم این نبود»: log + intent choices (same as the bot)."""
+    from bot.activity import log_activity
+    from services import assistant_brain as ab
+    from services.main_source_approvals import is_approver
+
+    form = await request.form()
+    q = str(form.get("q") or "")[:200]
+    intent = str(form.get("intent") or "")[:40]
+    item = str(form.get("item") or "")[:30]
+    log_activity(db, user, "report_assistant_misfire", question=q, intent=intent, source="web")
+    ctx = _ctx(db, user)
+    ctx.update(question=q, misfire=True, followups=ab.intent_choices(item, approver=is_approver(user)))
     return render(request, "assistant.html", ctx)
