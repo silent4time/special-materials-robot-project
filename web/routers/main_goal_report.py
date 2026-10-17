@@ -98,7 +98,21 @@ def _ctx(
     }
 
 
+def require_main_goal_or_files(user=Depends(current_user)) -> dict:
+    """Photo + sequence uploads are also reachable from «📤 ورود فایل‌ها» (/files) — same as bot."""
+    from services import permissions as perm
+
+    if not (mg.can_run(user) or perm.can(user, perm.FILE_INPUTS)):
+        raise ForbiddenFa("دسترسی «ورود فایل‌ها» یا «هدف اصلی» ندارید.")
+    return user
+
+
 def _page(request: Request, db: Database, user: dict, *, status_code: int = 200, **kw):
+    if request.query_params.get("back") == "files" or not mg.can_run(user):
+        from web.routers.files import set_flash
+
+        set_flash(db, user, **{k: _user_text(kw.get(k)) for k in ("message", "error", "summary", "ocr_preview")})
+        return RedirectResponse("/files", status_code=303)
     return render(request, "main_goal_report.html", _ctx(db, user, **kw), status_code=status_code)
 
 
@@ -144,7 +158,7 @@ def _inventory(db: Database, user: dict):
 async def upload_production_photo(
     request: Request,
     photo: UploadFile = File(...),
-    user=Depends(require_main_goal),
+    user=Depends(require_main_goal_or_files),
     db: Database = Depends(get_db),
 ):
     batch = tehran_now().strftime("%Y%m%d_%H%M%S")
@@ -310,7 +324,7 @@ async def upload_consumption(
 async def upload_sequence(
     request: Request,
     file: UploadFile = File(...),
-    user=Depends(require_main_goal),
+    user=Depends(require_main_goal_or_files),
     db: Database = Depends(get_db),
 ):
     """«گزارش جامع تاندیش در سکوئنس»: one Excel for billet/bloom/slab (split by ماشین × month)."""

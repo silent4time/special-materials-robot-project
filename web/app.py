@@ -134,6 +134,10 @@ def create_app() -> FastAPI:
     app.include_router(settings_router.router)
     app.include_router(tundish_report_router.router)
     app.include_router(main_goal_report_router.router)
+    from web.routers import admin as admin_router, files as files_router
+
+    app.include_router(files_router.router)
+    app.include_router(admin_router.router)
 
     @app.get("/")
     async def root(request: Request):
