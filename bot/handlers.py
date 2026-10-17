@@ -46,6 +46,7 @@ from auth.rbac import (
 )
 from bot import keyboards as kb
 from bot.activity import log_activity, resolve_display_name
+from services import main_source_approvals as msa
 from bot.jalali import (
     TEHRAN,
     format_date,
@@ -1638,6 +1639,8 @@ class BotApp:
 
         new_kept = int(result.kept_row_count)
         merge_note = ""
+        stock_note = ""
+        source_guard_error = ""
         skipped_note = ""
         # t221u: «📥 موجودی انبار» (stock update) vs authorized full منبع اصلی upload.
         # Only stock updates feed the inbound report / move its baseline.
@@ -1673,11 +1676,18 @@ class BotApp:
                             "inventory upload: %d rows skipped (full_source=%s)",
                             len(skipped), full_source,
                         )
-                merged = merge_clean_frames(old_df, new_df, pending)
+                if is_stock_upload:
+                    merged, stock_info = main_source_svc.merge_stock_update(old_df, new_df)
+                    stock_note = main_source_svc.stock_update_note_fa(stock_info)
+                else:
+                    merged = merge_clean_frames(old_df, new_df, pending)
                 if pending == "product_inventory":
                     from excel.id_parse import apply_id_segment_rule
 
                     merged, _old_mism = apply_id_segment_rule(merged)
+                    if main_source_svc.rates_wiped(old_df, merged):
+                        source_guard_error = main_source_svc.RATES_WIPED_FA
+                        raise RuntimeError("rates would be wiped")
                 write_clean_excel(merged, result.clean_path, pending)
                 result.kept_row_count = int(len(merged))
                 merge_note = (
@@ -1685,6 +1695,24 @@ class BotApp:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("merge clean frames failed: %s", exc)
+                if pending == "product_inventory":
+                    # never save an unmerged/damaging file over منبع اصلی
+                    if previous_clean is not None and latest_inv and latest_inv.get("clean_path"):
+                        orig = Path(str(latest_inv["clean_path"]))
+                        try:
+                            if Path(previous_clean).resolve() != orig.resolve():
+                                shutil.copy2(previous_clean, orig)
+                            self.db.update_extracted_clean_path(int(latest_inv["id"]), str(orig))
+                        except Exception:  # noqa: BLE001
+                            logger.exception("could not restore منبع اصلی after refused upload")
+                    self.db.set_pending_file_type(user["bale_user_id"], None)
+                    self._reply(
+                        message,
+                        source_guard_error
+                        or user_errors.error_fa("همسان‌سازی منبع اصلی ناموفق بود؛ چیزی ذخیره نشد", exc),
+                        self._keyboard_for_upload_return(user, default="upload"),
+                    )
+                    return
                 merge_note = "\n(" + user_errors.error_fa("همسان‌سازی انجام نشد", exc) + ")"
 
         # Session slots point at CLEAN file so analytics/PDF use filtered data
@@ -1769,7 +1797,7 @@ class BotApp:
             from excel.id_parse import segment_mismatch_note_fa
 
             dropped_note += segment_mismatch_note_fa(result.segment_mismatches)
-            dropped_note += skipped_note
+            dropped_note += skipped_note + stock_note
         extra_cols_note = ""
         if result.extra_columns_dropped:
             extra_cols_note = "\nستون‌های اضافی کنار گذاشته شد."
@@ -2386,6 +2414,58 @@ class BotApp:
             kb.cancel_pending_menu(),
         )
 
+    def _submit_main_source_request(self, message: dict, user: dict, draft: dict, *, allow_update: bool) -> None:
+        """Non-admin add-record → pending request; approvers get ✅/❌ in Bale."""
+        req_id = msa.submit(self.db, user, draft, allow_update=allow_update)
+        req = msa.get(self.db, req_id)
+        log_activity(self.db, user, "main_source_request_submitted", item_id=str(draft.get("id") or ""))
+        sent = 0
+        for appr in msa.approvers(self.db):
+            try:
+                self.client.send_message(appr["bale_user_id"], msa.request_text_fa(req), msa.inline_markup(req_id))
+                sent += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("approval notify failed: %s", exc)
+        self._reply(
+            message,
+            f"📨 درخواست #{req_id} برای «{draft.get('id')}» ثبت شد و پس از تأیید مدیر/مالک در منبع اصلی اعمال می‌شود."
+            + ("" if sent else "\n⚠ مدیر/مالکی برای اطلاع‌رسانی یافت نشد."),
+            kb.inventory_edit_menu(user),
+        )
+
+    def _on_main_source_request_callback(self, data: str, message: dict, user: dict, answer) -> None:
+        try:
+            _p, rid, act = data.split("|")
+            req_id = int(rid)
+        except ValueError:
+            answer("داده نامعتبر", alert=True)
+            return
+        if act == "ok":
+            req, text = msa.approve(self.db, req_id, user)
+        else:
+            req, text = msa.reject(self.db, req_id, user)
+        answer(text[:190], alert=req is None)
+        if req is None:
+            return
+        chat_id = (message.get("chat") or {}).get("id")
+        try:
+            if chat_id and message.get("message_id"):
+                self.client.edit_message_text(
+                    chat_id, message["message_id"], msa.request_text_fa(req) + f"\n\n{text}\nبررسی: {resolve_display_name(user)}"
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("could not edit approval message: %s", exc)
+        if req.get("decided_by") == str(user["bale_user_id"]) and text.startswith(("✅", "❌", "اعمال")):
+            log_activity(self.db, user, "main_source_request_" + ("approved" if req["status"] == "approved" else "rejected"),
+                         item_id=str((req.get("record") or {}).get("id") or ""))
+            try:
+                self.client.send_message(
+                    req["requester_id"],
+                    f"درخواست #{req['id']} شما برای «{(req.get('record') or {}).get('id')}»: {text}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("requester notify failed: %s", exc)
+
     def on_main_source_flow_text(self, message: dict, text: str) -> bool:
         """Handle edit/add record free-text. Returns True if consumed."""
         uid = str(self._uid(message))
@@ -2508,6 +2588,10 @@ class BotApp:
                 self._reply(message, "افزودن رکورد لغو شد (شناسه تکراری).", kb.inventory_edit_menu(user))
                 return True
             draft = dict(pending.get("draft") or {})
+            if msa.needs_approval(user):
+                self._clear_main_source_pending(uid)
+                self._submit_main_source_request(message, user, draft, allow_update=True)
+                return True
             try:
                 result = main_source_svc.add_row(
                     self.db, draft, bale_user_id=uid, allow_update=True
@@ -2547,6 +2631,21 @@ class BotApp:
                 return True
             draft[field] = raw
             idx += 1
+            if idx >= len(fields) and msa.needs_approval(user):
+                frame = main_source_svc.load_primary_frame(self.db, bale_user_id=uid)
+                exists = frame is not None and main_source_svc.find_row_by_id(frame, draft.get("id"))[0] is not None
+                if exists:
+                    self._main_source_pending[uid] = {"mode": "add_confirm_overwrite", "draft": draft, "fields": fields}
+                    self._reply(
+                        message,
+                        f"شناسه «{draft.get('id')}» از قبل در منبع اصلی هست.\n\n"
+                        "برای درخواست جایگزینی کامل رکورد «بله» بفرستید؛ وگرنه انصراف.",
+                        kb.cancel_pending_menu(),
+                    )
+                    return True
+                self._clear_main_source_pending(uid)
+                self._submit_main_source_request(message, user, draft, allow_update=False)
+                return True
             if idx >= len(fields):
                 try:
                     result = main_source_svc.add_row(
@@ -4609,6 +4708,14 @@ class BotApp:
                 answer("شما در سیستم ثبت نشده‌اید.", alert=True)
                 return
             self._on_role_perm_callback(data, message, user, answer)
+            return
+
+        if data.startswith(msa.CB_PREFIX):
+            user = ensure_registered(self.db, uid, self._display_name(message))
+            if not user:
+                answer("شما در سیستم ثبت نشده‌اید.", alert=True)
+                return
+            self._on_main_source_request_callback(data, message, user, answer)
             return
 
         if data.startswith(kb.CB_CRITICAL_RENO_PREFIX):

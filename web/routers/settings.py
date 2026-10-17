@@ -21,6 +21,7 @@ from excel.processor import (
     merge_clean_frames,
 )
 from services import main_source as main_source_svc
+from services import main_source_approvals as msa
 from web.auth_web import set_credential
 from services import permissions as perm
 from web.deps import get_db, require_admin_web, require_catalog_admin, require_feature
@@ -50,6 +51,9 @@ def _main_source_context(
         "labels": main_source_svc.FIELD_LABELS_FA,
         "message": message,
         "error": error,
+        "is_approver": msa.is_approver(user),
+        "pending_requests": msa.list_pending(db) if msa.is_approver(user) else [],
+        "needs_approval": msa.needs_approval(user),
     }
 
 
@@ -186,6 +190,18 @@ async def main_source_add(
         if not record.get("priority"):
             record["priority"] = "1"
         overwrite = str(form.get("overwrite") or "").strip() in {"1", "on", "true", "yes"}
+        if msa.needs_approval(user):
+            if not overwrite:
+                frame = main_source_svc.load_primary_frame(db, bale_user_id=user["bale_user_id"])
+                if frame is not None and main_source_svc.find_row_by_id(frame, record.get("id"))[0] is not None:
+                    raise ValueError(f"شناسه «{record.get('id')}» از قبل در منبع اصلی هست؛ برای درخواست جایگزینی تیک جایگزینی را بزنید.")
+            req_id = msa.submit(db, user, record, allow_update=overwrite)
+            log_activity(db, user, "main_source_request_submitted", item_id=record.get("id") or "")
+            msa.bale_send([u["bale_user_id"] for u in msa.approvers(db)],
+                          msa.request_text_fa(msa.get(db, req_id)), msa.inline_markup(req_id))
+            message = f"📨 درخواست #{req_id} ثبت شد؛ پس از تأیید مدیر/مالک اعمال می‌شود."
+            return render(request, "settings_main_source.html",
+                          _main_source_context(db, user, message=message), status_code=200)
         result = main_source_svc.add_row(
             db,
             record,
@@ -206,6 +222,31 @@ async def main_source_add(
         _main_source_context(db, user, message=message, error=error),
         status_code=400 if error else 200,
     )
+
+
+@router.post("/main-source/requests/{req_id}/{action}")
+async def main_source_request_decide(
+    request: Request,
+    req_id: int,
+    action: str,
+    user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
+    db: Database = Depends(get_db),
+):
+    if action == "approve":
+        req, text = msa.approve(db, req_id, user)
+    elif action == "reject":
+        req, text = msa.reject(db, req_id, user)
+    else:
+        req, text = None, "عملیات نامعتبر."
+    ok = req is not None and req.get("decided_by") == str(user["bale_user_id"]) and text.startswith(("✅", "❌", "اعمال"))
+    if ok:
+        log_activity(db, user, "main_source_request_" + ("approved" if req["status"] == "approved" else "rejected"),
+                     item_id=str((req.get("record") or {}).get("id") or ""))
+        msa.bale_send([req["requester_id"]],
+                      f"درخواست #{req['id']} شما برای «{(req.get('record') or {}).get('id')}»: {text}")
+    return render(request, "settings_main_source.html",
+                  _main_source_context(db, user, message=text if ok else None, error=None if ok else text),
+                  status_code=200 if ok else 400)
 
 
 @router.post("/main-source/upload")
@@ -249,6 +290,8 @@ async def main_source_upload(
                 merged = merge_clean_frames(old, new_df, "product_inventory")
             else:
                 merged = new_df
+            if main_source_svc.rates_wiped(old, merged):
+                raise ValueError(main_source_svc.RATES_WIPED_FA)
             path = main_source_svc.persist_primary_frame(
                 db,
                 merged,
