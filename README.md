@@ -38,7 +38,7 @@
    bash <(curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh)
    ```
    (`curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash` هم کار می کند.)
-3. به ویزارد فارسی پاسخ دهید: توکن (با بررسی `getMe`)، نام کاربری ربات، شناسه مالک (اختیاری)، پورت/آدرس و ورود پنل وب. سپس بسته ها (tesseract فارسی و ...)، venv، دیتابیس و دو سرویس systemd (`nasoz-bot`، `nasoz-web`) نصب و تست سلامت می شود. ریپو در `/root/special-materials-robot-project` قرار می گیرد.
+3. لوگو و **منوی اصلی** نمایش داده می شود؛ **1** (نصب جدید) را بزنید و به ویزارد فارسی پاسخ دهید: توکن (با بررسی `getMe`)، نام کاربری ربات، شناسه مالک (اختیاری)، پورت/آدرس و ورود پنل وب. سپس بسته ها (tesseract فارسی و ...)، venv، دیتابیس و دو سرویس systemd (`nasoz-bot`، `nasoz-web`) نصب و تست سلامت می شود. ریپو در `/root/special-materials-robot-project` قرار می گیرد.
 4. به روزرسانی بعدی:
    ```bash
    cd /root/special-materials-robot-project
@@ -63,7 +63,7 @@
    ```bash
    tar -xzf nasoz_offline_X.tar.gz
    cd nasoz_offline_X
-   bash install_offline.sh
+   bash install_offline.sh      # منوی اصلی ← 1 (نصب جدید)؛ بدون منو: --install
    ```
 6. به روزرسانی با بسته جدید (`.env` و `data/` حفظ می شود):
    ```bash
@@ -71,6 +71,11 @@
    bash install_offline.sh --update
    # یا: bash /opt/nasoz/scripts/install.sh --update --offline /root/nasoz_offline_<جدید>.tar.gz
    ```
+
+### منوی اصلی
+اجرای `bash install.sh` (یا دستور curl بالا، یا `bash install_offline.sh`) **بدون پرچم** در ترمینال، لوگو و این منو را نشان می دهد:
+`1) نصب جدید  2) به روزرسانی  3) وضعیت  4) گرفتن بک آپ  5) بازیابی بک آپ  6) تعمیر  7) مدیریت سرویس ها  8) مشاهده لاگ ها  9) تغییر تنظیمات (.env)  0) خروج`.
+«وضعیت» نسخه، سرویس ها، اتصال به بله/GitHub/PyPI/mirror، حجم داده و آخرین بک آپ را نشان می دهد (توکن هرگز چاپ نمی شود). همه پرچم ها مثل قبل بدون منو کار می کنند؛ جزئیات در DEPLOY.md «منوی اصلی نصب کننده».
 
 ### بازگردانی بک آپ روی سرور
 فایل ZIP بک آپ را با WinSCP به `/root` بفرستید و در پوشه نصب اجرا کنید:
