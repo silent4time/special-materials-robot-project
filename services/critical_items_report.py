@@ -6,7 +6,11 @@ One code path (do not duplicate in bot/web):
   • rows split by «تأمین‌کننده» (شرکت/پیمانکار) (``analytics.critical_items`` segments)
   • mode «با نوسازی» (renovation + patching) / «بدون نوسازی» (patching only)
   • company PDF (primary, only «شرکت» items), contractor PDF (only «پیمانکار»),
-    one xlsx with separate sheets: شرکت | پیمانکار | توضیحات
+    one xlsx with one sheet per segment (شرکت | پیمانکار)
+  • TEMPLATE-LOCKED look (``excel.critical_template``): every sheet / PDF copies the
+    user's sample «140506» (2026-10-05) — title bar, per-column fills, «توضیحات» at
+    the bottom of the SAME sheet. Exempt from the shared Excel styler and from the
+    material base-columns rule (CONTRIBUTING.md → template-locked reports).
 """
 from __future__ import annotations
 
@@ -54,9 +58,7 @@ from config import REPORT_DIR, ensure_dirs
 from db.models import Database
 from services.units import unit_fa
 
-SEGMENT_HEADER_BG = {SEGMENT_COMPANY: "#b71c1c", SEGMENT_CONTRACTOR: "#e65100"}
 SEGMENT_FILE_SUFFIX = {SEGMENT_COMPANY: "شرکت", SEGMENT_CONTRACTOR: "پیمانکار"}
-NOTES_HEADER_BG = "#546e7a"
 RENO_FILE_SUFFIX = {RENO_WITH: "با_نوسازی", RENO_WITHOUT: "بدون_نوسازی"}
 
 
@@ -156,6 +158,7 @@ def build_critical_items_segments(
 
 
 def _segment_table_section(segment: str, df: pd.DataFrame, reno_mode: str) -> dict[str, Any]:
+    """Table of one segment in the sample's column set (no base material columns)."""
     label = SEGMENT_LABEL_FA[segment]
     mode = RENO_LABEL_FA[reno_mode]
     return {
@@ -163,16 +166,28 @@ def _segment_table_section(segment: str, df: pd.DataFrame, reno_mode: str) -> di
         "sheet_title": f"اقلام بحرانی — {label}",
         "columns": list(REPORT_COLUMNS),
         "rows": rows_for_simple_report(df),
-        # per 4-digit code (need is per code) → one row per code, the code's IDs of this
-        # segment joined; shared-group subtotal rows keep the group code only.
-        "material": {"code": "کد چهاررقمی", "segment": segment, "mode": "joined", "planning": True},
-        # Shared-need group subtotal rows are bold + shaded (PDF and xlsx).
         "bold_rows": group_row_indices(df),
         "empty_message": (
             f"قلم «{label}» با کسری (نیاز مثبت) در افق ۳/۶ ماه ({mode}) یافت نشد."
         ),
-        "header_bg": SEGMENT_HEADER_BG[segment],
     }
+
+
+def _notes_lines(
+    counts: TundishMonthCounts,
+    reno_mode: str,
+    audit: dict[str, list[str]] | None = None,
+    *,
+    segment: str | None = None,
+    row_count: int | None = None,
+) -> list[str]:
+    """«توضیحات» rows under the table (same sheet / page, like the sample)."""
+    head = f"حالت: {RENO_LABEL_FA[reno_mode]}"
+    if segment in SEGMENT_LABEL_FA:
+        head += f" | اقلام {SEGMENT_LABEL_FA[segment]}"
+        if row_count is not None:
+            head += f": {row_count} قلم"
+    return [head] + list(report_footer_notes(counts, reno_mode, audit))
 
 
 def _notes_section(
@@ -183,7 +198,37 @@ def _notes_section(
         "columns": ["توضیح"],
         "rows": [{"توضیح": n} for n in report_footer_notes(counts, reno_mode, audit)],
         "empty_message": "",
-        "header_bg": NOTES_HEADER_BG,
+    }
+
+
+def template_sheet_name(counts: TundishMonthCounts, segment: str) -> str:
+    """Sample sheet name is the Jalali «yyyymm» (e.g. 140506) + the segment."""
+    try:
+        y, m = (int(x) for x in str(counts.report_date).split("/")[:2])
+        ym = f"{y}{m:02d}"
+    except Exception:  # noqa: BLE001
+        ym = "اقلام بحرانی"
+    return f"{ym} {SEGMENT_FILE_SUFFIX[segment]}"
+
+
+def template_sheet(
+    counts: TundishMonthCounts,
+    segment: str,
+    df: pd.DataFrame | None,
+    reno_mode: str,
+    audit: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    sec = _segment_table_section(segment, df if df is not None else pd.DataFrame(), reno_mode)
+    return {
+        "name": template_sheet_name(counts, segment),
+        "title": report_title(counts, segment, reno_mode),
+        "columns": sec["columns"],
+        "rows": sec["rows"],
+        "bold_rows": sec["bold_rows"],
+        "empty_message": sec["empty_message"],
+        "notes": _notes_lines(
+            counts, reno_mode, audit, segment=segment, row_count=critical_item_count(df)
+        ),
     }
 
 
@@ -198,15 +243,15 @@ def generate_critical_items_files(
     inventory_df: pd.DataFrame | None = None,
     reno_mode: str = RENO_WITH,
 ) -> CriticalItemsResult:
-    """Build company PDF, contractor PDF (when it has rows) and a 3-sheet xlsx.
+    """Build company PDF, contractor PDF (when it has rows) and a 2-sheet xlsx
+    (شرکت | پیمانکار; each laid out like the sample with «توضیحات» at the bottom).
 
     ``reno_mode``: RENO_WITH «با نوسازی» (default) | RENO_WITHOUT «بدون نوسازی».
     ``report_date`` (default today, Jalali): titles / file names carry it; the tundish
     basis = 3 complete months before it (``critical_basis``) — no month selection.
     """
     from analytics.frames import load_primary_inventory
-    from excel.simple_report import generate_simple_report_xlsx
-    from pdf.generator import generate_simple_report_pdf
+    from excel.critical_template import write_critical_items_pdf, write_critical_items_xlsx
 
     reno_mode = normalize_reno_mode(reno_mode)
     res = CriticalItemsResult(reno_mode=reno_mode)
@@ -248,50 +293,21 @@ def generate_critical_items_files(
     if date_tag and date_tag not in prefix:
         prefix = f"{prefix}_{date_tag}"
     prefix = f"{prefix}_{RENO_FILE_SUFFIX[reno_mode]}"
-    notes = _notes_section(counts, reno_mode, res.audit)
-
+    sheets: list[dict[str, Any]] = []
     for seg in SEGMENTS:
         df = res.frames[seg]
         title = report_title(counts, seg, reno_mode)
         res.titles[seg] = title
+        sheet = template_sheet(counts, seg, df, reno_mode, res.audit)
+        sheets.append(sheet)
         if df is None or df.empty:
             continue
         pdf_path = out_dir / f"{prefix}_{SEGMENT_FILE_SUFFIX[seg]}.pdf"
-        generate_simple_report_pdf(
-            title,
-            subtitle=report_subtitle(
-                counts,
-                row_count=critical_item_count(df),
-                segment=seg,
-                reno_mode=reno_mode,
-            ),
-            sections=[_segment_table_section(seg, df, reno_mode), notes],
-            output_path=pdf_path,
-            filename_stem="critical_items",
-            letterhead_path=letterhead_path,
-        )
+        write_critical_items_pdf(sheet, pdf_path, letterhead_path=letterhead_path)
         res.pdfs[seg] = pdf_path
 
     xlsx_title = report_title(counts, None, reno_mode)
-    xlsx_sub = (
-        f"حالت: {RENO_LABEL_FA[reno_mode]} | "
-        f"شرکت: {res.row_count(SEGMENT_COMPANY)} قلم | "
-        f"پیمانکار: {res.row_count(SEGMENT_CONTRACTOR)} قلم | "
-        f"{horizon_header_note(counts)}"
-    )
-    res.xlsx = generate_simple_report_xlsx(
-        xlsx_title,
-        subtitle=xlsx_sub,
-        sections=[
-            _segment_table_section(SEGMENT_COMPANY, res.frames[SEGMENT_COMPANY], reno_mode),
-            _segment_table_section(
-                SEGMENT_CONTRACTOR, res.frames[SEGMENT_CONTRACTOR], reno_mode
-            ),
-            notes,
-        ],
-        output_path=out_dir / f"{prefix}.xlsx",
-        filename_stem="critical_items",
-    )
+    res.xlsx = write_critical_items_xlsx(sheets, out_dir / f"{prefix}.xlsx")
     res.titles["xlsx"] = xlsx_title
     return res
 

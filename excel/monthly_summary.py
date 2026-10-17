@@ -69,14 +69,22 @@ MONTH_SECTION_COLUMNS_FA = [
     "شرح",
 ]
 
+# TEMPLATE-LOCKED (approved sample «خلاصه مصرفی ماهیانه», 2026-09-26 = 1405/07/04,
+# templates/monthly_summary_approved_1405-07-04.xlsx): layout/fills/widths/heights are
+# exactly the sample's; the only change is the font (sample: Calibri 11 → Tahoma 11,
+# standing Excel rule). Never pass this workbook through excel.table_style.finalize_*.
+EXCEL_FONT_NAME = "Tahoma"
+EXCEL_FONT_SIZE = 11
+DATA_FONT = Font(name=EXCEL_FONT_NAME, size=EXCEL_FONT_SIZE)
+BOLD_FONT = Font(name=EXCEL_FONT_NAME, size=EXCEL_FONT_SIZE, bold=True)
 HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
-HEADER_FONT = Font(bold=True, color="FFFFFF")
+HEADER_FONT = Font(name=EXCEL_FONT_NAME, size=EXCEL_FONT_SIZE, bold=True, color="FFFFFF")
 YELLOW_FILL = PatternFill("solid", fgColor="FFF2CC")
 GREEN_FILL = PatternFill("solid", fgColor="C6EFCE")
 SECTION_FILL = PatternFill("solid", fgColor="7030A0")
-SECTION_FONT = Font(bold=True, color="FFFFFF")
+SECTION_FONT = Font(name=EXCEL_FONT_NAME, size=EXCEL_FONT_SIZE, bold=True, color="FFFFFF")
 MONTH_TITLE_FILL = PatternFill("solid", fgColor="2E75B6")
-MONTH_TITLE_FONT = Font(bold=True, color="FFFFFF")
+MONTH_TITLE_FONT = Font(name=EXCEL_FONT_NAME, size=EXCEL_FONT_SIZE, bold=True, color="FFFFFF")
 
 # Row colors by سفارش کار — distinguishable in grayscale / B&W print
 # اسلب: خاکستری روشن | بلوم: هاشور نقطه‌ای روشن | بیلت: خاکستری تیره | سایر نواحی: هاشور متراکم
@@ -462,8 +470,7 @@ def _style_row(ws, row_idx: int, fill: PatternFill | None = None, bold: bool = F
         cell.border = THIN
         if fill is not None:
             cell.fill = fill
-        if bold:
-            cell.font = Font(bold=True)
+        cell.font = BOLD_FONT if bold else DATA_FONT
 
 
 @dataclass
@@ -978,9 +985,10 @@ def build_monthly_summary(
     excel_out = Path(excel_out)
     excel_out.parent.mkdir(parents=True, exist_ok=True)
     wb = build_monthly_summary_workbook(data)
-    from excel.table_style import finalize_workbook
+    # template-locked: NOT finalize_workbook (no frozen header / autofit / page fit)
+    from excel.table_style import mark_template_locked
 
-    finalize_workbook(wb)
+    mark_template_locked(wb, "monthly_summary")
     wb.save(excel_out)
     return data, excel_out
 

@@ -215,6 +215,8 @@ def style_workbook_path(
     from openpyxl import load_workbook
 
     wb = load_workbook(path)
+    if template_locked_name(wb):
+        return
     if sheet_name and sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
     else:
@@ -349,7 +351,26 @@ def _autofit_and_freeze(ws: Worksheet, header: int | None) -> None:
         ws.freeze_panes = ws.cell(header + 1, 1)
 
 
+# ---------------------------------------------------------------------------
+# Template-locked workbooks (اقلام بحرانی, خلاصه مصرفی ماهیانه) copy a user-approved
+# sample cell by cell; the shared styler must leave them untouched.
+# ---------------------------------------------------------------------------
+TEMPLATE_LOCKED_PREFIX = "template-locked:"
+
+
+def mark_template_locked(wb, name: str) -> None:
+    """Tag ``wb`` (document keywords) so ``finalize_*`` / ``style_workbook_path`` skip it."""
+    wb.properties.keywords = f"{TEMPLATE_LOCKED_PREFIX}{name}"
+
+
+def template_locked_name(wb) -> str | None:
+    kw = str(getattr(wb.properties, "keywords", "") or "")
+    return kw[len(TEMPLATE_LOCKED_PREFIX):] if kw.startswith(TEMPLATE_LOCKED_PREFIX) else None
+
+
 def finalize_workbook(wb) -> None:
+    if template_locked_name(wb):
+        return  # user-sample layout: never restyled
     for ws in wb.worksheets:
         _autofit_and_freeze(ws, _first_table_row(ws))
         finalize_worksheet(ws)
@@ -359,5 +380,7 @@ def finalize_path(path: Any) -> None:
     from openpyxl import load_workbook
 
     wb = load_workbook(path)
+    if template_locked_name(wb):
+        return
     finalize_workbook(wb)
     wb.save(path)
