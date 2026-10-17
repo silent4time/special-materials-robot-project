@@ -42,6 +42,7 @@ from analytics.critical_items import (
     SEGMENTS,
     TundishMonthCounts,
     average_tundish_basis,
+    basis_counts_text,
     build_critical_items_rows,
     horizon_header_note,
     origin_audit,
@@ -72,6 +73,9 @@ class CriticalItemsResult:
     error: str | None = None
     reno_mode: str = RENO_WITH
     audit: dict[str, list[str]] = field(default_factory=dict)
+    # template sheets (rows + fixed notes, no user notes) — the draft/approve
+    # workflow (services.critical_report_archive) re-renders files from these.
+    sheets: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def header_note(self) -> str:
@@ -157,15 +161,26 @@ def build_critical_items_segments(
     }
 
 
+# Columns of the user's sample «140506» ONLY (1405/07/25 follow-up): the 4 helper
+# columns (مبدأ، افق، میانگین مصرف ماهانه، مصرف پیش‌بینی‌شده) stay internal — the need
+# is still computed from them in analytics.critical_items, they are just not printed.
+TEMPLATE_COLUMNS = ["کد چهاررقمی", "ردیف", "کد و شرح کالا", "موجودی", "واحد", COL_NEED, COL_DAYS]
+# «توضیحات» block: the essential notes + the user's own notes, padded with empty
+# bordered lines (sample style) up to this many rows.
+MIN_NOTE_ROWS = 5
+HORIZON_NOTE = "افق محاسبه: اجناس داخلی ۳ ماه، اجناس وارداتی ۶ ماه."
+
+
 def _segment_table_section(segment: str, df: pd.DataFrame, reno_mode: str) -> dict[str, Any]:
     """Table of one segment in the sample's column set (no base material columns)."""
     label = SEGMENT_LABEL_FA[segment]
     mode = RENO_LABEL_FA[reno_mode]
+    rows = [{c: r.get(c) for c in TEMPLATE_COLUMNS} for r in rows_for_simple_report(df)]
     return {
         "title": f"اقلام بحرانی — {label} ({mode})",
         "sheet_title": f"اقلام بحرانی — {label}",
-        "columns": list(REPORT_COLUMNS),
-        "rows": rows_for_simple_report(df),
+        "columns": list(TEMPLATE_COLUMNS),
+        "rows": rows,
         "bold_rows": group_row_indices(df),
         "empty_message": (
             f"قلم «{label}» با کسری (نیاز مثبت) در افق ۳/۶ ماه ({mode}) یافت نشد."
@@ -173,21 +188,27 @@ def _segment_table_section(segment: str, df: pd.DataFrame, reno_mode: str) -> di
     }
 
 
-def _notes_lines(
-    counts: TundishMonthCounts,
-    reno_mode: str,
-    audit: dict[str, list[str]] | None = None,
-    *,
-    segment: str | None = None,
-    row_count: int | None = None,
-) -> list[str]:
-    """«توضیحات» rows under the table (same sheet / page, like the sample)."""
-    head = f"حالت: {RENO_LABEL_FA[reno_mode]}"
-    if segment in SEGMENT_LABEL_FA:
-        head += f" | اقلام {SEGMENT_LABEL_FA[segment]}"
-        if row_count is not None:
-            head += f": {row_count} قلم"
-    return [head] + list(report_footer_notes(counts, reno_mode, audit))
+def fixed_notes(counts: TundishMonthCounts) -> list[str]:
+    """The only printed notes: the horizon + the report date / tundish basis."""
+    basis = counts.basis_label()
+    basis_txt = (
+        f" — مبنا: مصرف هر تاندیش (منبع اصلی) × میانگین ماهانه تعداد تاندیش {basis} "
+        f"({basis_counts_text(counts)})"
+        if basis else ""
+    )
+    return [HORIZON_NOTE, f"تاریخ گزارش: {counts.report_date or counts.month_label()}{basis_txt}."]
+
+
+def user_note_lines(text: str | None) -> list[str]:
+    """User's typed notes → one line per non-empty line (whitespace trimmed)."""
+    return [ln.strip() for ln in str(text or "").replace("\r", "\n").split("\n") if ln.strip()]
+
+
+def compose_notes(fixed: list[str], user_notes: str | None = None,
+                  min_rows: int = MIN_NOTE_ROWS) -> list[str]:
+    """fixed notes + user notes, then "" (empty bordered rows) up to ``min_rows``."""
+    lines = [n for n in fixed if str(n).strip()] + user_note_lines(user_notes)
+    return lines + [""] * max(0, min_rows - len(lines))
 
 
 def _notes_section(
@@ -217,19 +238,72 @@ def template_sheet(
     df: pd.DataFrame | None,
     reno_mode: str,
     audit: dict[str, list[str]] | None = None,
+    user_notes: str | None = None,
 ) -> dict[str, Any]:
     sec = _segment_table_section(segment, df if df is not None else pd.DataFrame(), reno_mode)
+    fixed = fixed_notes(counts)
     return {
+        "segment": segment,
         "name": template_sheet_name(counts, segment),
         "title": report_title(counts, segment, reno_mode),
         "columns": sec["columns"],
         "rows": sec["rows"],
         "bold_rows": sec["bold_rows"],
         "empty_message": sec["empty_message"],
-        "notes": _notes_lines(
-            counts, reno_mode, audit, segment=segment, row_count=critical_item_count(df)
-        ),
+        "fixed_notes": fixed,
+        "notes": compose_notes(fixed, user_notes),
     }
+
+
+def _json_safe(v: Any) -> Any:
+    if hasattr(v, "item"):
+        try:
+            v = v.item()
+        except Exception:  # noqa: BLE001
+            pass
+    if isinstance(v, float) and v != v:  # NaN
+        return None
+    return v
+
+
+def sheets_payload(sheets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """JSON-safe copy of template sheets (stored with a draft / approved report)."""
+    out = []
+    for sh in sheets:
+        d = {k: v for k, v in sh.items() if k != "notes"}
+        d["rows"] = [{k: _json_safe(v) for k, v in r.items()} for r in sh.get("rows") or []]
+        d["bold_rows"] = [int(i) for i in sh.get("bold_rows") or []]
+        out.append(d)
+    return out
+
+
+def render_critical_files(
+    sheets: list[dict[str, Any]],
+    *,
+    out_dir: Path,
+    prefix: str,
+    user_notes: str | None = None,
+    letterhead_path: Path | str | None = None,
+) -> tuple[Path, dict[str, Path]]:
+    """(xlsx, {segment: pdf}) from template sheets + the user's notes (same notes in
+    every sheet / PDF). A segment without rows gets a sheet but no PDF."""
+    from excel.critical_template import write_critical_items_pdf, write_critical_items_xlsx
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ready = []
+    pdfs: dict[str, Path] = {}
+    for sh in sheets:
+        sheet = dict(sh)
+        sheet["notes"] = compose_notes(sh.get("fixed_notes") or [], user_notes)
+        ready.append(sheet)
+        seg = sh.get("segment")
+        if sheet.get("rows") and seg in SEGMENT_FILE_SUFFIX:
+            pdf_path = out_dir / f"{prefix}_{SEGMENT_FILE_SUFFIX[seg]}.pdf"
+            write_critical_items_pdf(sheet, pdf_path, letterhead_path=letterhead_path)
+            pdfs[seg] = pdf_path
+    xlsx = write_critical_items_xlsx(ready, out_dir / f"{prefix}.xlsx")
+    return xlsx, pdfs
 
 
 def generate_critical_items_files(
@@ -242,6 +316,7 @@ def generate_critical_items_files(
     letterhead_path: Path | str | None = None,
     inventory_df: pd.DataFrame | None = None,
     reno_mode: str = RENO_WITH,
+    user_notes: str | None = None,
 ) -> CriticalItemsResult:
     """Build company PDF, contractor PDF (when it has rows) and a 2-sheet xlsx
     (شرکت | پیمانکار; each laid out like the sample with «توضیحات» at the bottom).
@@ -251,7 +326,6 @@ def generate_critical_items_files(
     basis = 3 complete months before it (``critical_basis``) — no month selection.
     """
     from analytics.frames import load_primary_inventory
-    from excel.critical_template import write_critical_items_pdf, write_critical_items_xlsx
 
     reno_mode = normalize_reno_mode(reno_mode)
     res = CriticalItemsResult(reno_mode=reno_mode)
@@ -293,21 +367,15 @@ def generate_critical_items_files(
     if date_tag and date_tag not in prefix:
         prefix = f"{prefix}_{date_tag}"
     prefix = f"{prefix}_{RENO_FILE_SUFFIX[reno_mode]}"
-    sheets: list[dict[str, Any]] = []
     for seg in SEGMENTS:
-        df = res.frames[seg]
-        title = report_title(counts, seg, reno_mode)
-        res.titles[seg] = title
-        sheet = template_sheet(counts, seg, df, reno_mode, res.audit)
-        sheets.append(sheet)
-        if df is None or df.empty:
-            continue
-        pdf_path = out_dir / f"{prefix}_{SEGMENT_FILE_SUFFIX[seg]}.pdf"
-        write_critical_items_pdf(sheet, pdf_path, letterhead_path=letterhead_path)
-        res.pdfs[seg] = pdf_path
-
+        res.titles[seg] = report_title(counts, seg, reno_mode)
+        res.sheets.append(template_sheet(counts, seg, res.frames[seg], reno_mode, res.audit,
+                                         user_notes=user_notes))
+    res.xlsx, res.pdfs = render_critical_files(
+        res.sheets, out_dir=out_dir, prefix=prefix, user_notes=user_notes,
+        letterhead_path=letterhead_path,
+    )
     xlsx_title = report_title(counts, None, reno_mode)
-    res.xlsx = write_critical_items_xlsx(sheets, out_dir / f"{prefix}.xlsx")
     res.titles["xlsx"] = xlsx_title
     return res
 
@@ -316,8 +384,8 @@ BOT_TOP_ROWS = 8
 
 
 def critical_items_bot_lines(res: CriticalItemsResult, top: int = BOT_TOP_ROWS) -> list[str]:
-    """Bot summary text: per segment count + the most urgent rows (with the
-    «میانگین مصرف ماهانه بر اساس ۳ ماه گذشته» column), plus origin flags."""
+    """Bot summary text: per segment count + the most urgent rows in the sample's
+    columns (کد، شرح، موجودی، نیاز، حد تحمل), plus origin flags."""
     lines: list[str] = []
     for seg, tag in ((SEGMENT_COMPANY, "شرکت (گزارش اصلی)"),
                      (SEGMENT_CONTRACTOR, "پیمانکار (گزارش جداگانه)")):
@@ -335,10 +403,7 @@ def critical_items_bot_lines(res: CriticalItemsResult, top: int = BOT_TOP_ROWS) 
             shown += 1
             lines.append(
                 f"  {r.get('کد چهاررقمی', '')} {r.get('کد و شرح کالا', '')} — "
-                f"{r.get(COL_ORIGIN, '')}، افق {r.get(COL_HORIZON, '')} ماه | "
                 f"موجودی {r.get('موجودی', '')} {unit_fa(r.get('واحد', ''))} | "
-                f"{COL_MONTHLY}: {r.get(COL_MONTHLY, '')} | "
-                f"{COL_FORECAST}: {r.get(COL_FORECAST, '')} | "
                 f"{COL_NEED}: {r.get(COL_NEED, '')} | {COL_DAYS}: {r.get(COL_DAYS, '')}"
             )
         if n > shown:
