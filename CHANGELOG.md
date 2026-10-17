@@ -2,6 +2,10 @@
 
 ## ۱۴۰۵/۰۷/۲۵ (2026-10-17)
 
+### گزینه های مدل دستیار در نصب کننده
+- `bash install.sh --with-assistant --model qwen2.5:1.5b` خطای «پرچم ناشناخته: --model» می داد. حالا `scripts/install.sh` گزینه های `--model X` / `--model=X`، `--whisper X` / `--whisper=X`، `--no-piper` و `--no-whisper` را می پذیرد و به `scripts/install_assistant.sh` می دهد (همراه `--with-assistant`، `--assistant-offline` یا `--install --with-assistant`)؛ `install.sh` ریشه و `install_offline.sh` آن ها را عبور می دهند. مقدار خالی با پیام فارسی رد می شود.
+- منو، گزینه 10: حافظه سرور نشان داده می شود؛ اگر کمتر از ۶ گیگ باشد `qwen2.5:1.5b` پیش فرض و پیشنهاد می شود و می پرسد کدام مدل نصب شود. با بسته آفلاین همان مدل بسته نصب می شود و اگر با `--model` فرق داشته باشد هشدار داده می شود.
+
 ### دستیار هوشمند صوتی: نصب از سرور ایران بدون ollama.com
 - اسکریپت جدید `scripts/install_assistant.sh` (با `--with-assistant`، گزینه 10 منو یا مستقیم): باینری رسمی Ollama از GitHub releases (`ollama-linux-amd64.tar.zst`، فقط کتابخانه های CPU، در `/usr/local`) با کاربر `ollama` و سرویس systemd روی `127.0.0.1:11434`؛ مدل `qwen2.5:3b` به صورت GGUF (Qwen2.5-3B-Instruct q4_k_m) از hf-mirror.com سپس huggingface.co و ساخت با `ollama create` و Modelfile (قالب ChatML)، و در آخر registry.ollama.ai؛ `faster-whisper`، `av<19`، `requests` و `piper-tts` از PyPI؛ مدل `Systran/faster-whisper-small` و صدای فارسی `fa_IR-amir-medium` از hf-mirror.com سپس huggingface.co (با لینک `fa_IR-donya-medium` که ربات انتظار دارد).
 - ترتیب و آدرس همه منبع ها قابل تنظیم است (`ASSISTANT_OLLAMA_SOURCES`، `ASSISTANT_MODEL_SOURCES`، `ASSISTANT_HF_SOURCES`، `ASSISTANT_PIP_INDEXES`، ...). هر منبع اول با یک درخواست کوچک بررسی می شود؛ `--check` کد HTTP و مقصد ریدایرکت همه منبع ها را چاپ می کند.
