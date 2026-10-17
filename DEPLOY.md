@@ -196,6 +196,8 @@ bash scripts/install.sh --restore /root/nasoz_backup_1405-07-25_0200.zip    # ه
 | `bash install.sh --dry-run` | فقط نمایش بسته‌ها، دستورهای apt/git/پشتیبان و فایل‌های systemd، بدون تغییر (با هر پرچم دیگر ترکیب می‌شود) |
 | `sudo bash install.sh --with-assistant` | نصب دستیار هوشمند صوتی (روی سرور نصب شده فقط دستیار؛ در نصب تازه یک مرحله اختیاری) |
 | `sudo bash install.sh --assistant-offline FILE.tar` | نصب دستیار از بسته آفلاین `nasoz_assistant_*.tar` |
+| `... --with-assistant --model qwen2.5:1.5b` | مدل زبانی دیگر (`--model=X` هم درست است؛ پیش فرض `qwen2.5:3b`، با RAM کمتر از ۶ گیگ `qwen2.5:1.5b`، ضعیف ترین `qwen2.5:0.5b`) |
+| `... --with-assistant --whisper base --no-piper` | مدل Whisper دیگر (`small` پیش فرض، `base` یا `tiny` سبک تر)، بدون Piper؛ `--no-whisper` هم هست |
 | `bash scripts/install_assistant.sh --check` | فقط بررسی دسترسی منابع دستیار (کد HTTP هر منبع) |
 | `sudo systemctl status nasoz-bot nasoz-web` | وضعیت |
 | `sudo systemctl restart nasoz-bot nasoz-web` | ری‌استارت |
@@ -267,7 +269,10 @@ cd /opt/nasoz                          # یا پوشه نصب شما
 sudo bash install.sh --update          # فقط اگر نسخه برنامه قدیمی است (این قابلیت را ندارد)
 bash scripts/install_assistant.sh --check     # اختیاری: کد HTTP همه منبع ها
 sudo bash install.sh --with-assistant  # یا منوی نصب کننده: گزینه 10
+sudo bash install.sh --with-assistant --model qwen2.5:1.5b   # سرور با RAM کمتر از ۶ گیگ
 ```
+
+گزینه های `--model X`، `--whisper X`، `--no-piper` و `--no-whisper` همراه `--with-assistant` (و در نصب تازه همراه `--install --with-assistant`) به نصب کننده دستیار داده می شوند؛ `install.sh` ریشه و `install_offline.sh` هم آن ها را عبور می دهند. گزینه 10 منو حافظه سرور را نشان می دهد، اگر کمتر از ۶ گیگ باشد `qwen2.5:1.5b` را پیشنهاد می کند و می پرسد کدام مدل نصب شود (با بسته آفلاین همان مدل داخل بسته نصب می شود).
 
 روی سرور نصب شده `--with-assistant` فقط دستیار را نصب می کند و بعد ربات را ری استارت می کند؛ در نصب تازه یک مرحله اختیاری است (ویزارد سوال ۱۰). نوار پیشرفت `[دستیار ۴/۷] ۵۷٪ █████░░░░░` و برای هر دانلود درصد، حجم و سرعت نشان داده می شود؛ دانلودها قابل ادامه اند (`curl -C -`) و در `/var/cache/nasoz-assistant` می مانند تا کامل شوند. لاگ کامل در `data/logs/`. هر بخش جدا است: اگر مثلا Piper نصب نشد، بقیه نصب می شود و در آخر خلاصه ✓/✗ چاپ می شود.
 
@@ -323,7 +328,7 @@ curl -s http://127.0.0.1:11434/api/generate -d '{"model":"qwen2.5:3b","prompt":"
 |------|-----|
 | در بله «دستیار صوتی روی سرور نصب نیست» | `systemctl status ollama`؛ `bash scripts/install_assistant.sh --check`؛ دوباره `sudo bash install.sh --with-assistant` |
 | دانلود نیمه کاره ماند | همان دستور را دوباره اجرا کنید؛ از همان جا ادامه می دهد |
-| کندی یا کمبود حافظه | `sudo bash install.sh --with-assistant` با `ASSISTANT_MODEL=qwen2.5:1.5b`، یا `bash scripts/install_assistant.sh --model qwen2.5:1.5b` با sudo |
+| کندی یا کمبود حافظه | `sudo bash install.sh --with-assistant --model qwen2.5:1.5b` (و در صورت نیاز `--whisper base`) |
 | حذف | `systemctl disable --now ollama; rm -rf /usr/local/bin/ollama /usr/local/lib/ollama /usr/share/ollama /etc/systemd/system/ollama.service` |
 
 ## داشبورد وب (فرآیند جدا)

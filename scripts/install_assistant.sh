@@ -42,6 +42,7 @@ while (( $# )); do
     --model) MODEL="${2:-}"; shift ;;
     --model=*) MODEL="${1#--model=}" ;;
     --whisper) WHISPER_SIZE="${2:-small}"; shift ;;
+    --whisper=*) WHISPER_SIZE="${1#--whisper=}" ;;
     --voice) VOICE="${2:-$VOICE}"; shift ;;
     --workdir) WORKDIR="${2:-$WORKDIR}"; shift ;;
     --no-piper) DO_PIPER=0 ;;
@@ -148,6 +149,7 @@ env_set() {  # upsert, keeps chmod 600
   awk -v k="$key" -v v="$value" 'BEGIN{d=0} $0 ~ "^"k"=" { if(!d){print k"="v; d=1}; next } {print} END{ if(!d) print k"="v }' "$f" > "$tmp"
   chmod 600 "$tmp"; mv "$tmp" "$f"
 }
+MODEL_GIVEN=0; [[ -n "$MODEL" ]] && MODEL_GIVEN=1
 [[ -n "$MODEL" ]] || MODEL="$(env_get OLLAMA_MODEL)"
 [[ -n "$MODEL" ]] || MODEL="qwen2.5:3b"
 have_systemd() { [[ -d /run/systemd/system ]] && need_cmd systemctl; }
@@ -253,7 +255,10 @@ open_bundle() {
       || { warn "SHA256SUMS بسته دستیار مطابقت ندارد؛ فایل خراب است."; return 1; }
   fi
   local m; m="$(sed -n 's/^MODEL=//p' "$BUNDLE/MANIFEST" | head -n1)"
-  if [[ -n "$m" && "$m" != "$MODEL" ]]; then log "$IND  مدل بسته: $m"; MODEL="$m"; fi
+  if [[ -n "$m" && "$m" != "$MODEL" ]]; then
+    if (( MODEL_GIVEN )); then warn "بسته آفلاین مدل $m دارد؛ همین مدل به جای $MODEL نصب می شود."; else log "$IND  مدل بسته: $m"; fi
+    MODEL="$m"
+  fi
   ok "بسته آفلاین دستیار: $BUNDLE"
 }
 

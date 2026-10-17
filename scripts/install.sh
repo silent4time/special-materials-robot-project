@@ -45,6 +45,10 @@ Usage: bash install.sh [options]
   --with-assistant / --no-assistant   دستیار هوشمند صوتی (Ollama از GitHub + مدل از hf-mirror/HF + Whisper/Piper
                      از PyPI)؛ روی سرور نصب شده فقط دستیار را نصب می کند. پیش فرض: نصب نشود
   --assistant-offline FILE.tar|DIR  نصب دستیار از بسته آفلاین (ساخت: bash scripts/build_assistant_bundle.sh)
+  --model NAME       مدل زبانی دستیار (پیش فرض qwen2.5:3b؛ با RAM کمتر از ۶ گیگ: qwen2.5:1.5b؛ همچنین qwen2.5:0.5b)
+  --whisper SIZE     مدل گفتار به متن (پیش فرض small؛ مثلا base یا tiny برای سرور ضعیف)
+  --no-piper / --no-whisper  بدون Piper (متن به گفتار) / بدون Whisper
+                     این چهار گزینه همراه --with-assistant یا --assistant-offline به کار می روند
   --seed-admin       (قدیمی) — ساخت ورود وب برای مالک ADMIN_BALE_USER_ID
   --dry-run          هیچ چیز نصب/استارت نمی شود؛ بسته ها و فایل های systemd فقط چاپ می شوند
   -h, --help
@@ -60,7 +64,12 @@ HELP
 }
 
 _want_restore=0; _want_offline=0; _want_abundle=0; ASSISTANT_BUNDLE_ARG=""; WANT_MENU=0; NASOZ_ARGC=$#; EXPLICIT_INSTALL=0
+_want_aopt=""; ASSISTANT_ARGS=()   # --model / --whisper / --no-piper / --no-whisper → scripts/install_assistant.sh
 for arg in "$@"; do
+  if [[ -n "$_want_aopt" ]]; then
+    [[ -n "$arg" && "$arg" != --* ]] || { echo "مقدار $_want_aopt را بدهید (مثلا $_want_aopt qwen2.5:1.5b)" >&2; exit 2; }
+    ASSISTANT_ARGS+=("$_want_aopt" "$arg"); _want_aopt=""; continue
+  fi
   if (( _want_abundle )); then ASSISTANT_BUNDLE_ARG="$arg"; _want_abundle=0; continue; fi
   if (( _want_restore )); then RESTORE_FILE="$arg"; _want_restore=0; continue; fi
   if (( _want_offline )); then OFFLINE_SRC="$arg"; _want_offline=0; continue; fi
@@ -87,11 +96,15 @@ for arg in "$@"; do
     --assistant-offline) DO_ASSISTANT=1; _want_abundle=1 ;;
     --assistant-offline=*) DO_ASSISTANT=1; ASSISTANT_BUNDLE_ARG="${arg#--assistant-offline=}" ;;
     --no-assistant) DO_ASSISTANT=2 ;;
+    --model|--whisper) _want_aopt="$arg" ;;
+    --model=*|--whisper=*) [[ -n "${arg#*=}" ]] || { echo "مقدار ${arg%%=*} خالی است" >&2; exit 2; }; ASSISTANT_ARGS+=("${arg%%=*}" "${arg#*=}") ;;
+    --no-piper|--no-whisper) ASSISTANT_ARGS+=("$arg") ;;
     -h|--help) usage; exit 0 ;;
     *) echo "پرچم ناشناخته: $arg (bash install.sh --help)" >&2; exit 2 ;;
   esac
 done
 
+if [[ -n "$_want_aopt" ]]; then echo "مقدار $_want_aopt را بدهید (مثلا $_want_aopt qwen2.5:1.5b)" >&2; exit 2; fi
 if (( _want_abundle )); then echo "مسیر بسته دستیار را بدهید: --assistant-offline nasoz_assistant_….tar" >&2; exit 2; fi
 if [[ -n "$ASSISTANT_BUNDLE_ARG" ]]; then
   [[ -e "$ASSISTANT_BUNDLE_ARG" ]] || { echo "بسته دستیار پیدا نشد: $ASSISTANT_BUNDLE_ARG" >&2; exit 2; }
@@ -761,6 +774,7 @@ run_assistant_installer() {  # → 0 ready, 3 partial, other = unexpected; never
   [[ -f "$script" ]] || { assistant_failed "فایل scripts/install_assistant.sh پیدا نشد"; return 0; }
   [[ -n "$ASSISTANT_BUNDLE" ]] && args+=(--offline "$ASSISTANT_BUNDLE")
   (( DRY_RUN )) && args+=(--dry-run)
+  args+=("${ASSISTANT_ARGS[@]}")
   local -a envs=(WORKDIR="$WORKDIR" _NASOZ_INSTALL_LOG="$INSTALL_LOG" _NASOZ_ASSIST_NESTED=1) v
   for v in $(compgen -e); do   # sources/paths/proxy survive sudo (sudo resets the environment)
     case "$v" in ASSISTANT_*|HTTPS_PROXY|HTTP_PROXY|NO_PROXY|https_proxy|http_proxy|no_proxy|ALL_PROXY|NO_COLOR|TERM) envs+=("$v=${!v}") ;; esac
@@ -1059,10 +1073,24 @@ menu_assistant() {
   src="$(ask "مسیر بسته آفلاین دستیار (nasoz_assistant_….tar)؛ خالی = دانلود آنلاین" "$def")"
   if [[ -n "$src" ]]; then
     [[ -e "$src" ]] || { warn "بسته پیدا نشد: $src"; return 0; }
+    log "  مدل زبانی همان مدل داخل بسته است."
     menu_run "$MENU_DIR/scripts/install.sh" --assistant-offline "$src" "${MENU_DRY[@]}"
-  else
-    menu_run "$MENU_DIR/scripts/install.sh" --with-assistant "${MENU_DRY[@]}"
+    return 0
   fi
+  local mem_kb mem_gb model defm="qwen2.5:3b"
+  mem_kb="${_NASOZ_TEST_MEM_KB:-$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)}"   # test hook
+  mem_gb="$(awk -v k="${mem_kb:-0}" 'BEGIN{printf "%.1f", k/1048576}')"
+  if (( ${mem_kb:-0} > 0 && mem_kb < 6291456 )); then
+    defm="qwen2.5:1.5b"
+    warn "حافظه این سرور ${mem_gb} گیگ است (کمتر از ۶ گیگ)؛ مدل سبک تر qwen2.5:1.5b پیشنهاد می شود."
+  else
+    log "  حافظه این سرور: ${mem_gb} گیگ"
+  fi
+  log "  مدل ها: qwen2.5:3b (حدود ۲ گیگ، ۴ گیگ RAM) | qwen2.5:1.5b (حدود ۱ گیگ، ۲ تا ۳ گیگ RAM) | qwen2.5:0.5b (۵۰۰ مگ، ضعیف)"
+  model="$(ask "کدام مدل نصب شود؟" "$defm")"
+  model="$(printf '%s' "$model" | tr -d '[:space:]')"
+  [[ -n "$model" ]] || model="$defm"
+  menu_run "$MENU_DIR/scripts/install.sh" --with-assistant --model "$model" "${MENU_DRY[@]}"
 }
 
 main_menu() {
