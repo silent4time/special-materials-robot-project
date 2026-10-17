@@ -168,6 +168,7 @@ class BotApp:
 
         self.reminder_settings = ReminderSettingsFlow(self)
         ensure_dirs()
+        self._sync_assistant_menu()
 
     # ---------- helpers ----------
     def _uid(self, message: dict) -> str:
@@ -4609,17 +4610,32 @@ class BotApp:
             return None
         return user
 
+    def _assistant_on(self) -> bool:
+        from services import voice_assistant as va
+
+        try:
+            return self.db.get_setting(va.SETTING_ENABLED) == "1"
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _sync_assistant_menu(self) -> None:
+        kb.set_assistant_provider(self._assistant_on)
+        kb.set_assistant_menu(self._assistant_on())
+
     def on_assistant_settings(self, message: dict) -> None:
         """فقط مالک: تنظیمات دستیار هوشمند صوتی."""
+        from services import assistant_brain as ab
         from services import voice_assistant as va
 
         user = self._owner_or_deny(message)
         if not user:
             return
         enabled = self.db.get_setting(va.SETTING_ENABLED) == "1"
+        rephrase = self.db.get_setting(ab.SETTING_REPHRASE) == "1"
         self._reply(
             message,
-            va.status_text_fa(enabled, self.db.get_setting(va.SETTING_MODEL)),
+            va.status_text_fa(enabled, self.db.get_setting(va.SETTING_MODEL))
+            + f"\nبازنویسی روان پاسخ با مدل (اعداد کنترل می‌شوند): {'روشن' if rephrase else 'خاموش'}",
             kb.assistant_settings_menu(),
         )
 
@@ -4629,13 +4645,124 @@ class BotApp:
         user = self._owner_or_deny(message)
         if not user:
             return
-        if enable and not va.is_installed():
-            self.db.set_setting(va.SETTING_ENABLED, "0", updated_by=user["bale_user_id"])
-            self._reply(message, "⚠ " + va.NOT_INSTALLED_FA + " دستیار غیرفعال ماند.", kb.assistant_settings_menu())
-            return
+        note = ""
+        if enable:
+            a = va.availability()
+            if not a["ollama"] or not a["whisper"]:
+                # rules path answers text questions without Ollama/Whisper
+                note = "\n⚠ " + va.PARTIAL_FA(a)
         self.db.set_setting(va.SETTING_ENABLED, "1" if enable else "0", updated_by=user["bale_user_id"])
+        self._sync_assistant_menu()
         log_activity(self.db, user, "assistant_enabled" if enable else "assistant_disabled")
-        self._reply(message, f"دستیار هوشمند {'فعال شد' if enable else 'غیرفعال شد'}.", kb.assistant_settings_menu())
+        self._reply(
+            message,
+            f"دستیار هوشمند {'فعال شد' if enable else 'غیرفعال شد'}." + note
+            + (f"\nدکمهٔ «{kb.BTN_ASK_ASSISTANT}» در منوی اصلی اضافه شد." if enable else ""),
+            kb.assistant_settings_menu(),
+        )
+
+    def on_assistant_rephrase_toggle(self, message: dict, enable: bool) -> None:
+        from services import assistant_brain as ab
+
+        user = self._owner_or_deny(message)
+        if not user:
+            return
+        self.db.set_setting(ab.SETTING_REPHRASE, "1" if enable else "0", updated_by=user["bale_user_id"])
+        self._reply(
+            message,
+            "بازنویسی روان پاسخ " + ("روشن شد (فقط اگر همهٔ اعداد دست‌نخورده بمانند؛ وگرنه متن اصلی)." if enable
+                                     else "خاموش شد (پاسخ قالبی مستقیم از داده)."),
+            kb.assistant_settings_menu(),
+        )
+
+    # ---------- 🤖 از دستیار بپرس (services.assistant_brain; web parity: /assistant) ----------
+    def on_assistant_ask_start(self, message: dict) -> None:
+        from services import assistant_brain as ab
+
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if not self._assistant_on():
+            self._reply(message, "دستیار هوشمند غیرفعال است (فعال‌سازی: مالک، ⚙️ تنظیمات).", kb.main_menu(user))
+            return
+        self._reply(
+            message,
+            ab.help_text_fa(user) + "\n\nسؤالتان را بنویسید یا پیام صوتی بفرستید.",
+            kb.assistant_answer_menu(),
+        )
+
+    def _assistant_answer(self, message: dict, user: dict, text: str, *, transcript: str | None = None,
+                          voice_reply: bool = False) -> None:
+        """Brain answer (text) + optional Piper voice. Runs in the background pool."""
+        from services import assistant_brain as ab
+
+        def work() -> bool:
+            ans = ab.answer(self.db, user, text, channel="bot_voice" if transcript else "bot")
+            body = (f"🗣 {transcript}\n\n" if transcript else "") + ans.text
+            self._reply_chunked(message, body, kb.assistant_answer_menu(ans.buttons))
+            if voice_reply and ans.ok:
+                self._send_assistant_voice(message, ans.text)
+            return True
+
+        self._heavy(message, "دستیار هوشمند", False, work)
+
+    def _send_assistant_voice(self, message: dict, text: str) -> None:
+        """Piper TTS (optional). Never raises; text reply was already sent."""
+        import tempfile
+
+        from services import voice_assistant as va
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                wav = Path(tmp) / "answer.wav"
+                if not va.synthesize(va.speakable_fa(text), wav):
+                    return
+                ogg = va.to_ogg(wav)
+                if ogg is not None:
+                    self.client.send_voice(self._chat_id(message), ogg)
+                else:
+                    self.client.send_audio(self._chat_id(message), wav)
+        except Exception:  # noqa: BLE001
+            logger.warning("assistant voice reply failed")
+
+    def on_voice_message(self, message: dict) -> None:
+        """Voice/audio → Whisper → assistant brain (same permissions as menus). Never crashes."""
+        from services import voice_assistant as va
+
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if not self._assistant_on():
+            self._reply(message, "پیام صوتی پشتیبانی نمی‌شود؛ لطفاً از دکمه‌ها یا متن استفاده کنید.")
+            return
+        if not va.availability()["whisper"]:
+            self._reply(message, "تبدیل گفتار به متن (Whisper) روی سرور نصب نیست؛ سؤال را بنویسید.")
+            return
+        voice = message.get("voice") or message.get("audio") or {}
+        if not voice.get("file_id"):
+            self._reply(message, "فایل صوتی معتبر دریافت نشد.")
+            return
+
+        def work() -> bool:
+            import tempfile
+
+            try:
+                with tempfile.TemporaryDirectory() as tmp:
+                    audio_in = Path(tmp) / "in.ogg"
+                    self.client.download_file(voice["file_id"], audio_in)
+                    text = va.transcribe(audio_in)
+            except Exception:  # noqa: BLE001
+                logger.exception("voice transcription failed")
+                self._reply(message, "خطا در پردازش صوت. لطفاً دوباره تلاش کنید.")
+                return True
+            if not text:
+                self._reply(message, "متن صوت تشخیص داده نشد.")
+                return True
+            self._assistant_answer(message, user, text, transcript=text, voice_reply=True)
+            return True
+
+        self._reply(message, "⏳ در حال پردازش صوت…")
+        self._heavy(message, "دستیار صوتی", False, work)
 
     # ---------- 💾 بک‌آپ (services.backup; web parity: /settings/backups) ----------
     @property
@@ -4818,45 +4945,6 @@ class BotApp:
             self._reply(message, text, kb.backup_menu(user))
             return
         answer("این مرحله منقضی شده است؛ دوباره از «♻️ بازگردانی» شروع کنید.", alert=True)
-
-    def on_voice_message(self, message: dict) -> None:
-        """Voice/audio: only the owner, only when enabled AND installed. Never crashes."""
-        from services import voice_assistant as va
-
-        user = self._user_or_deny(message)
-        if not user:
-            return
-        if not perm.is_owner(user) or self.db.get_setting(va.SETTING_ENABLED) != "1":
-            self._reply(message, "پیام صوتی پشتیبانی نمی‌شود؛ لطفاً از دکمه‌ها یا متن استفاده کنید.")
-            return
-        if not va.is_installed():
-            self._reply(message, va.NOT_INSTALLED_FA)
-            return
-        voice = message.get("voice") or message.get("audio") or {}
-        if not voice.get("file_id"):
-            self._reply(message, "فایل صوتی معتبر دریافت نشد.")
-            return
-
-        def work() -> bool:
-            import tempfile
-
-            try:
-                with tempfile.TemporaryDirectory() as tmp:
-                    audio_in = Path(tmp) / "in.ogg"
-                    self.client.download_file(voice["file_id"], audio_in)
-                    text = va.transcribe(audio_in)
-                    if not text:
-                        self._reply(message, "متن صوت تشخیص داده نشد.")
-                        return True
-                    answer = va.ask_ollama(text, model=self.db.get_setting(va.SETTING_MODEL) or va.DEFAULT_LLM)
-                    self._reply(message, f"🗣 {text}\n\n🤖 {answer or 'پاسخی از مدل دریافت نشد.'}")
-            except Exception:  # noqa: BLE001
-                logger.exception("voice assistant failed")
-                self._reply(message, "خطا در پردازش صوت. لطفاً دوباره تلاش کنید.")
-            return True
-
-        self._reply(message, "⏳ در حال پردازش صوت…")
-        self._heavy(message, "دستیار صوتی", False, work)
 
     def on_bot_settings_menu(self, message: dict) -> None:
         user = self._require_bot_settings_user(message)
@@ -6539,6 +6627,10 @@ class BotApp:
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))
         if self._expired_flow_notice(message, user):
             return
+        # free text that matched no menu/flow → 🤖 دستیار (only when the owner enabled it)
+        if user and self._assistant_on() and raw_text.strip():
+            self._assistant_answer(message, user, raw_text.strip())
+            return
         self._reply(
             message,
             "لطفاً از دکمه‌های منو استفاده کنید یا /help را بزنید.",
@@ -6571,6 +6663,9 @@ class BotApp:
             kb.BTN_ASSISTANT_STATUS: self.on_assistant_settings,
             kb.BTN_ASSISTANT_ON: lambda m: self.on_assistant_toggle(m, True),
             kb.BTN_ASSISTANT_OFF: lambda m: self.on_assistant_toggle(m, False),
+            kb.BTN_ASSISTANT_REPHRASE_ON: lambda m: self.on_assistant_rephrase_toggle(m, True),
+            kb.BTN_ASSISTANT_REPHRASE_OFF: lambda m: self.on_assistant_rephrase_toggle(m, False),
+            kb.BTN_ASK_ASSISTANT: self.on_assistant_ask_start,
             kb.BTN_SETTINGS_CLEAR_STOCK_GROUP: self.on_bot_settings_clear_stock_group,
             kb.BTN_SETTINGS_UPLOAD_LETTERHEAD: self.on_bot_settings_upload_letterhead_start,
             kb.BTN_SETTINGS_CLEAR_LETTERHEAD: self.on_bot_settings_clear_letterhead,

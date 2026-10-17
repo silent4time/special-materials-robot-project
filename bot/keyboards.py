@@ -52,6 +52,7 @@ MENU_PARENT: dict[str, str | None] = {
     "stock_group": "settings",
     "appearance": "settings",
     "assistant": "settings",
+    "assistant_ask": "main",
     "backup": "settings",
     "appearance_item": "appearance",
     "role_perms": "settings",
@@ -222,6 +223,40 @@ BTN_ASSISTANT = "🤖 دستیار هوشمند صوتی"
 BTN_ASSISTANT_ON = "✅ فعال‌سازی دستیار"
 BTN_ASSISTANT_OFF = "⏸ غیرفعال‌سازی دستیار"
 BTN_ASSISTANT_STATUS = "📋 وضعیت فعلی دستیار"
+BTN_ASK_ASSISTANT = "🤖 از دستیار بپرس"
+BTN_ASSISTANT_REPHRASE_ON = "✍️ بازنویسی روان پاسخ: روشن"
+BTN_ASSISTANT_REPHRASE_OFF = "✍️ بازنویسی روان پاسخ: خاموش"
+
+# «🤖 از دستیار بپرس» appears in the main menu only while the owner has enabled the
+# assistant. The bot registers a DB-backed provider (cached a few seconds, so a web
+# toggle shows up too); ``set_assistant_menu`` refreshes the cache immediately.
+_ASSISTANT_MENU: dict = {"on": False, "provider": None, "at": 0.0}
+_ASSISTANT_TTL = 15.0
+
+
+def set_assistant_provider(provider) -> None:
+    _ASSISTANT_MENU["provider"] = provider
+    _ASSISTANT_MENU["at"] = 0.0
+
+
+def set_assistant_menu(on: bool) -> None:
+    import time
+
+    _ASSISTANT_MENU["on"] = bool(on)
+    _ASSISTANT_MENU["at"] = time.monotonic()
+
+
+def assistant_menu_on() -> bool:
+    import time
+
+    prov = _ASSISTANT_MENU["provider"]
+    if prov is not None and time.monotonic() - _ASSISTANT_MENU["at"] > _ASSISTANT_TTL:
+        try:
+            _ASSISTANT_MENU["on"] = bool(prov())
+        except Exception:  # noqa: BLE001
+            pass
+        _ASSISTANT_MENU["at"] = time.monotonic()
+    return _ASSISTANT_MENU["on"]
 BTN_APPEARANCE = "🎨 ظاهر"
 BTN_SET_INVITE = "📝 متن دعوت‌نامه کاربران"
 BTN_SET_WELCOME = "👋 پیام خوشامدگویی"
@@ -530,6 +565,8 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
         ]
         if row:
             rows.append(row)
+    if assistant_menu_on() and u.get("role"):
+        rows.insert(len(rows) - 1 if rows and rows[-1] == [BTN_BOT_SETTINGS] else len(rows), [BTN_ASK_ASSISTANT])
     # «❓ راهنما» shares the settings row when it exists
     if rows and rows[-1] == [BTN_BOT_SETTINGS]:
         rows[-1].append(BTN_HELP)
@@ -823,14 +860,21 @@ def backup_menu(user: dict | None = None) -> dict:
 
 
 def assistant_settings_menu() -> dict:
-    """فقط مالک: فعال/غیرفعال و انتخاب مدل دستیار."""
+    """فقط مالک: فعال/غیرفعال و بازنویسی روان پاسخ دستیار."""
     return _kb(
         [
             [BTN_ASSISTANT_ON, BTN_ASSISTANT_OFF],
+            [BTN_ASSISTANT_REPHRASE_ON, BTN_ASSISTANT_REPHRASE_OFF],
             [BTN_ASSISTANT_STATUS],
         ],
         "assistant",
     )
+
+
+def assistant_answer_menu(buttons: list[str] | None = None) -> dict:
+    """Answer keyboard: suggested follow-ups (item choices / report buttons) + nav."""
+    rows = _pairs(list(dict.fromkeys(b for b in (buttons or []) if b)))
+    return _kb(rows, "assistant_ask")
 
 def appearance_menu() -> dict:
     """«🎨 ظاهر»: invite / welcome / logo / letterhead."""

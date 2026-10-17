@@ -131,17 +131,23 @@ def main() -> int:
     assert "دستیار هوشمند صوتی" in out[-1][1] and kb.BTN_ASSISTANT_ON in _btns(out[-1][2])
     out = send(9901, kb.BTN_BACK)
     assert kb.BTN_ASSISTANT in _btns(out[-1][2]), _btns(out[-1][2])
-    installed = va.is_installed()
+    avail = va.availability()
     out = send(9901, kb.BTN_ASSISTANT_ON)
-    if not installed:
-        assert va.NOT_INSTALLED_FA in out[-1][1] and db.get_setting(va.SETTING_ENABLED) == "0"
+    # enabling always works now (text questions use the Persian rules even without Ollama)
+    assert db.get_setting(va.SETTING_ENABLED) == "1" and "فعال شد" in out[-1][1], out[-1][1]
+    if not (avail["whisper"] and avail["ollama"]):
+        assert "قواعد فارسی" in out[-1][1], out[-1][1]
+    assert kb.BTN_ASK_ASSISTANT in _btns(kb.main_menu(owner))
+    out = send(9901, kb.BTN_ASSISTANT_OFF)
+    assert db.get_setting(va.SETTING_ENABLED) == "0"
+    assert kb.BTN_ASK_ASSISTANT not in _btns(kb.main_menu(owner))
     voice = {"voice": {"file_id": "V1", "duration": 2}}
     out = send(9902, **voice)
     assert "پیام صوتی پشتیبانی نمی‌شود" in out[-1][1]
     db.set_setting(va.SETTING_ENABLED, "1")
     out = send(9901, **voice)
-    if not installed:
-        assert out[-1][1] == va.NOT_INSTALLED_FA, out[-1][1]
+    if not avail["whisper"]:
+        assert "Whisper" in out[-1][1], out[-1][1]
     db.set_setting(va.SETTING_ENABLED, "0")
 
     # web: sequence form + guide image route needs login
