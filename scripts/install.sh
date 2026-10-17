@@ -36,6 +36,8 @@ Usage: bash install.sh [options]
   WEB_ADMIN_USERNAME(admin)  WEB_ADMIN_PASSWORD(خودکار)  CRITICAL_DAYS(3)
   INSTALL_SYSTEMD=y|n  NONINTERACTIVE=1  SKIP_GETME=1  SKIP_APT=1  INSTALL_DIR=/path
   SERVICE_USER=کاربر‌سرویس (پیش‌فرض: SUDO_USER یا کاربر فعلی)
+
+مالک با اولین /start: اگر ADMIN_BALE_USER_ID خالی باشد، اولین کسی که در بله به ربات /start بزند مالک می‌شود.
 HELP
 }
 

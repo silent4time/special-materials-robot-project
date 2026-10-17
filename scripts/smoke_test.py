@@ -122,8 +122,9 @@ def _test_first_owner_claim() -> None:
 def _test_install_help_soft_seed() -> None:
     help_txt = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     assert "مالک با اولین /start" in help_txt
-    assert "env_looks_configured" in help_txt
-    assert "run_env_wizard" in help_txt
+    # installer rewrite (159de67): env check + interactive .env wizard renamed
+    assert "env_configured()" in help_txt
+    assert "run_wizard()" in help_txt
 
 
 
