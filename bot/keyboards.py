@@ -139,6 +139,7 @@ BTN_INBOUND = "📄 گزارش اقلام ورودی به انبار"
 BTN_MONTHLY_SUMMARY = "📄 دریافت خلاصه مصرف ماهیانه"
 BTN_CRITICAL_COUNTS = "📝 ثبت تعداد تاندیش ماهانه"
 BTN_CRITICAL_REPORT = "📄 تولید گزارش اقلام بحرانی"
+BTN_CRITICAL_ARCHIVE = "🗂 گزارش‌های تأییدشده اقلام بحرانی"
 
 # section step (مصرف روزانه / گزارش جامع / مصرف بازه‌ای) + N-tundish
 BTN_SEC_ALL = "همه بخش‌ها"
@@ -654,7 +655,38 @@ def inbound_history_menu(labels: list[str] | None = None) -> dict:
 
 
 def critical_items_menu() -> dict:
-    return _kb([[BTN_CRITICAL_COUNTS, BTN_CRITICAL_REPORT]], "critical")
+    return _kb([[BTN_CRITICAL_COUNTS, BTN_CRITICAL_REPORT], [BTN_CRITICAL_ARCHIVE]], "critical")
+
+
+# draft → notes → تأیید (services.critical_report_archive)
+CB_CRITICAL_DRAFT_PREFIX = "crd|"
+
+
+def critical_draft_inline_keyboard(report_id: int, has_notes: bool = False) -> dict:
+    rid = int(report_id)
+    rows = [
+        [{"text": "✍️ ویرایش توضیحات" if has_notes else "✍️ نوشتن توضیحات",
+          "callback_data": f"{CB_CRITICAL_DRAFT_PREFIX}notes|{rid}"}],
+        [{"text": "✅ تأیید و ذخیره" if has_notes else "✅ تأیید بدون توضیحات",
+          "callback_data": f"{CB_CRITICAL_DRAFT_PREFIX}ok|{rid}"}],
+    ]
+    if has_notes:
+        rows.append([{"text": "🧹 حذف توضیحات", "callback_data": f"{CB_CRITICAL_DRAFT_PREFIX}clr|{rid}"}])
+    rows.append([{"text": "🗑 لغو پیش‌نویس", "callback_data": f"{CB_CRITICAL_DRAFT_PREFIX}del|{rid}"}])
+    return BaleClient.inline_keyboard(rows)
+
+
+def critical_archive_inline_keyboard(approved: list[dict], drafts: list[dict]) -> dict:
+    rows = [
+        [{"text": f"📝 ادامهٔ پیش‌نویس #{d['id']} — {d['report_date']} — {d['reno_label']}",
+          "callback_data": f"{CB_CRITICAL_DRAFT_PREFIX}open|{int(d['id'])}"}]
+        for d in drafts
+    ] + [
+        [{"text": f"📥 #{r['id']} — {r['report_date']} — {r['reno_label']}",
+          "callback_data": f"{CB_CRITICAL_DRAFT_PREFIX}get|{int(r['id'])}"}]
+        for r in approved
+    ]
+    return BaleClient.inline_keyboard(rows)
 
 
 BTN_CRITICAL_RENO_WITH = "با نوسازی"
@@ -1213,6 +1245,7 @@ def _button_features() -> dict[str, tuple[str, ...]]:
         BTN_COMPREHENSIVE: (P.REPORT_COMPREHENSIVE,),
         BTN_REMAINING: (P.REPORT_SHORT_COVER,),
         BTN_CRITICAL_ITEMS: (P.REPORT_CRITICAL,),
+        BTN_CRITICAL_ARCHIVE: (P.REPORT_CRITICAL,),
         BTN_N_TUNDISH: (P.REPORT_N_TUNDISH,),
         BTN_SURPLUS: (P.REPORT_SURPLUS,),
         BTN_INBOUND: (P.REPORT_INBOUND,),

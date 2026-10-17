@@ -50,6 +50,8 @@ NOTE_MIN_HEIGHT = 30.75
 NUMBER_FORMATS = {
     "کد چهاررقمی": "@",
     "ردیف": "@",
+    "واحد": "@",
+    "حد تحمل(روز)": "@",  # the sample stores the tolerance days as text ("45")
     "موجودی": "#,##0",
     "نیاز": "#,##0",
     "مصرف پیش‌بینی‌شده در افق": "#,##0",
@@ -67,6 +69,7 @@ PDF_COLUMN_BG = {
     "G": "#FF5353",
 }
 
+BLANK_NOTE_PDF_HEIGHT = 18.0  # pt — empty bordered notes line in the PDF
 MEDIUM = Side(style="medium")
 THIN = Side(style="thin")
 
@@ -139,7 +142,8 @@ def _note_height(text: str, width_chars: float) -> float:
 def _fill_sheet(wb, proto, ws, sheet: dict[str, Any]) -> None:
     columns: list[str] = list(sheet["columns"])
     rows: list[dict[str, Any]] = list(sheet.get("rows") or [])
-    notes: list[str] = [str(n) for n in (sheet.get("notes") or []) if str(n).strip()]
+    # "" = an empty bordered notes line (sample style) for the user's handwriting
+    notes: list[str] = [str(x or "").strip() for x in (sheet.get("notes") or [])]
     n = len(columns)
 
     ws.sheet_view.rightToLeft = True
@@ -197,6 +201,8 @@ def _fill_sheet(wb, proto, ws, sheet: dict[str, Any]) -> None:
             fmt = NUMBER_FORMATS.get(col)
             if fmt == "@":
                 v = _text(v) or None
+                if col == "واحد" and v and v.lower() == "no":
+                    v = "NO"  # sample spelling (Kg / NO)
             cell.value = v
             if fmt is None and isinstance(v, (int, float)) and not isinstance(v, bool):
                 fmt = "#,##0" if float(v).is_integer() else "#,##0.0#"
@@ -231,7 +237,9 @@ def _fill_sheet(wb, proto, ws, sheet: dict[str, Any]) -> None:
                 proto_c = proto["C17"]
             else:
                 proto_c = proto["C16"]
-            ws.row_dimensions[rr].height = _note_height(text, width_chars)
+            ws.row_dimensions[rr].height = (
+                _note_height(text, width_chars) if text else NOTE_MIN_HEIGHT
+            )
             for c in range(1, n + 1):
                 cell = ws.cell(rr, c)
                 if c == 1:
@@ -242,7 +250,7 @@ def _fill_sheet(wb, proto, ws, sheet: dict[str, Any]) -> None:
                     cell._style = copy(proto_c._style)
                 else:
                     cell._style = copy(proto["G15"]._style)
-            ws.cell(rr, 3, text)
+            ws.cell(rr, 3, text or None)
             if note_end > 3:
                 ws.merge_cells(start_row=rr, start_column=3, end_row=rr, end_column=note_end)
         ws.cell(first, 2, "توضیحات")
@@ -307,7 +315,7 @@ def write_critical_items_pdf(
     g._register_fonts()
     columns: list[str] = list(sheet["columns"])
     rows: list[dict[str, Any]] = list(sheet.get("rows") or [])
-    notes: list[str] = [str(n) for n in (sheet.get("notes") or []) if str(n).strip()]
+    notes: list[str] = [str(x or "").strip() for x in (sheet.get("notes") or [])]
     n = len(columns)
 
     size = landscape(A4)
@@ -379,6 +387,8 @@ def write_critical_items_pdf(
                 txt = f"{v:,.0f}"
             else:
                 txt = _text(v)
+                if c == "واحد" and txt.lower() == "no":
+                    txt = "NO"  # same spelling as the xlsx/template (Kg / NO)
             cells.append(P(txt, desc_st if c == "کد و شرح کالا" else cell_st, widths[i]))
         data.append(vrow(cells))
     if not rows:
@@ -398,6 +408,7 @@ def write_critical_items_pdf(
         ("LINEBELOW", (0, body_end), (-1, body_end), 1.4, colors.black),
     ]
     # notes block
+    row_heights: list = []
     if notes:
         nb = len(data)
         lo, hi = 2, max(2, n - 2)
@@ -406,8 +417,10 @@ def write_critical_items_pdf(
             cells = [""] * n
             if j == 0:
                 cells[1] = P("توضیحات", cell_st, widths[1])
-            cells[hi] = P(text, cell_st, nw)  # top-left cell of the RTL span
+            if text:
+                cells[hi] = P(text, cell_st, nw)  # top-left cell of the RTL span
             data.append(vrow(cells))
+            row_heights.append(None if text else BLANK_NOTE_PDF_HEIGHT)
             style.append(("SPAN", (vx(hi), nb + j), (vx(lo), nb + j)))
         ne = len(data) - 1
         # The sample merges A/B over the notes rows; a vertical SPAN would stop
@@ -420,7 +433,8 @@ def write_critical_items_pdf(
             ("LINEAFTER", (vx(1), nb), (vx(1), ne), 1.4, colors.black),
             ("LINEBEFORE", (vx(lo), nb), (vx(lo), ne), 1.4, colors.black),
         ]
-    tbl = Table(data, colWidths=vw, repeatRows=2)
+    row_heights = [None] * (len(data) - len(row_heights)) + row_heights if notes else None
+    tbl = Table(data, colWidths=vw, rowHeights=row_heights, repeatRows=2)
     tbl.setStyle(TableStyle(style))
     doc.build([tbl])
     return g.apply_letterhead(out, letterhead_path)

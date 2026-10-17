@@ -1625,7 +1625,9 @@ class BotApp:
             f"{kb.BTN_N_TUNDISH}\n"
             "بخش را انتخاب کنید (اسلب / بلوم / بیلت).\n"
             "میان‌بُر: یک‌جا بنویسید، مثلاً «اسلب ۴».\n"
-            "مبنا: همان نرخ‌ها و قواعد «اقلام بحرانی» از منبع اصلی؛ گزارش فقط‌خواندنی است.",
+            "ترکیب چند بخش: مثلاً «بیلت ۷۰ بلوم ۲۰ اسلب ۱۰۰» — مصرف هر تاندیش هر نوع و نیاز کل.\n"
+            "مبنا: همان نرخ‌ها و قواعد «اقلام بحرانی» از منبع اصلی (مصرف هر تاندیش هر نوع)؛ "
+            "گزارش فقط‌خواندنی است.",
             kb.n_tundish_section_menu(),
         )
 
@@ -1637,6 +1639,18 @@ class BotApp:
         if not p:
             return False
         step = p.get("await")
+        mix = nt.parse_mix(text) if step in ("section", "count") else None
+        if mix:
+            p.pop("section", None)
+            p["mix"], p["await"] = mix, "mode"
+            self._reply(
+                message,
+                f"{nt.mix_label(mix)} تاندیش — حالت را انتخاب کنید:\n"
+                f"• {kb.BTN_NT_WITH}: نرخ نوسازی + پچینگ\n• {kb.BTN_NT_WITHOUT}: فقط پچینگ\n"
+                "(سطح ریخته‌گری × کل تاندیش‌ها در هر دو حالت)",
+                kb.n_tundish_mode_menu(),
+            )
+            return True
         if step == "section":
             short = nt.parse_shortcut(text)
             if short:
@@ -1670,7 +1684,10 @@ class BotApp:
                 self._reply(message, f"«{kb.BTN_NT_WITH}» یا «{kb.BTN_NT_WITHOUT}» را انتخاب کنید.", kb.n_tundish_mode_menu())
                 return True
             self._n_tundish_pending.pop(uid, None)
-            self._run_n_tundish(message, p["section"], int(p["n"]), mode)
+            if p.get("mix"):
+                self._run_n_tundish_mix(message, dict(p["mix"]), mode)
+            else:
+                self._run_n_tundish(message, p["section"], int(p["n"]), mode)
             return True
         if p.get("await") == "mode":
             self._reply(
@@ -1709,6 +1726,33 @@ class BotApp:
                 logger.warning("send n_tundish file failed: %s", exc)
         self._reply(message, res.bot_text(), kb.analytics_menu(user))
         log_activity(self.db, user, "report_n_tundish", section=section, n=n, renovation=mode)
+
+    @heavy("گزارش نیاز ترکیب تاندیش", notice=False)
+    def _run_n_tundish_mix(self, message: dict, mix: dict, mode: str) -> None:
+        """«بیلت ۷۰ بلوم ۲۰ اسلب ۱۰۰»: per-tundish rate of each type + total need (shared core)."""
+        from services import n_tundish_report as nt
+
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        self._reply(message, "در حال ساخت گزارش…")
+        try:
+            res = nt.generate_mix_files(self.db, user, mix, mode, letterhead_path=self._letterhead_path())
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("n_tundish mix report failed")
+            self._reply(message, user_errors.error_fa("خطا در ساخت گزارش", exc), kb.analytics_menu(user))
+            return
+        if res.error:
+            self._reply(message, res.error, kb.analytics_menu(user))
+            return
+        chat = self._chat_id(message)
+        for path, cap in ((res.pdf, res.title), (res.xlsx, f"نسخه اکسل — {res.title}")):
+            try:
+                self.client.send_document(chat, path, caption=cap)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("send n_tundish mix file failed: %s", exc)
+        self._reply(message, res.bot_text(), kb.analytics_menu(user))
+        log_activity(self.db, user, "report_n_tundish_mix", mix=nt.mix_label(mix), renovation=mode)
 
     # ---------- 📦 جایگزینی کامل منبع اصلی (warning + confirm) ----------
     def on_full_replace_start(self, message: dict) -> None:
@@ -2583,12 +2627,13 @@ class BotApp:
             message,
             f"{kb.BTN_CRITICAL_ITEMS}\n"
             "۱) (اختیاری) تعداد تاندیش بیلت/بلوم/اسلب ماه را ثبت کنید — فقط وقتی لاگ توالی تاندیش نیست\n"
-            "۲) گزارش را بگیرید: PDF اصلی (فقط اقلام شرکت)، PDF جداگانه "
-            "اقلام پیمانکار و اکسل با دو شیت جدا؛ حالت "
-            "«با نوسازی» یا «بدون نوسازی» را انتخاب کنید\n"
-            "تاریخ گزارش = امروز؛ مبنا: میانگین تعداد تاندیش ۳ ماه کامل گذشته (لاگ توالی "
-            "تاندیش، در نبود آن ثبت دستی)؛ نیاز = مصرف پیش‌بینی‌شده در افق "
-            "(داخلی ۳ ماه، وارداتی ۶ ماه) − موجودی؛ فقط اقلام با نیاز مثبت.\n"
+            "۲) گزارش را بگیرید (حالت «با نوسازی» یا «بدون نوسازی»): پیش‌نویس PDF اصلی (فقط اقلام شرکت)، "
+            "PDF جداگانهٔ اقلام پیمانکار و اکسل دو شیتی، همه به شکل قالب «140506»\n"
+            "۳) (اختیاری) توضیحات خودتان را بنویسید، بعد «تأیید» بزنید تا نسخهٔ نهایی ذخیره شود\n"
+            f"۴) گزارش‌های تأییدشده همیشه از «{kb.BTN_CRITICAL_ARCHIVE}» (و وب) قابل دریافت‌اند\n"
+            "تاریخ گزارش = امروز؛ مبنا: مصرف هر تاندیش هر نوع (منبع اصلی) × میانگین تعداد تاندیش "
+            "۳ ماه کامل گذشته (لاگ توالی تاندیش، در نبود آن ثبت دستی)؛ نیاز = مصرف پیش‌بینی‌شده "
+            "در افق (اجناس داخلی ۳ ماه، اجناس وارداتی ۶ ماه) − موجودی؛ فقط اقلام با نیاز مثبت.\n"
             "نقش‌های مجاز: مالک، مدیر، کاردان مسئول."
             f"{extra}",
             kb.critical_items_menu(),
@@ -2636,6 +2681,7 @@ class BotApp:
             return False
         await_kind = pending.get("await")
         if await_kind not in {
+            "draft_notes",
             "year",
             "month",
             "reno_mode",
@@ -2662,11 +2708,16 @@ class BotApp:
             kb.BTN_CRITICAL_ITEMS,
             kb.BTN_CRITICAL_COUNTS,
             kb.BTN_CRITICAL_REPORT,
+            kb.BTN_CRITICAL_ARCHIVE,
         }:
             return False  # let button handlers take over
 
         mode = pending.get("mode")
         raw = (text or "").strip()
+
+        if await_kind == "draft_notes":
+            self._on_critical_draft_notes_text(message, user, pending, raw)
+            return True
 
         if await_kind == "year":
             digits = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
@@ -2872,11 +2923,7 @@ class BotApp:
         code path as the web panel; ledger applied once by load_primary_inventory).
         """
         from analytics.critical_items import RENO_LABEL_FA, normalize_reno_mode
-        from services.critical_items_report import (
-            SEGMENT_COMPANY,
-            SEGMENT_CONTRACTOR,
-            generate_critical_items_files,
-        )
+        from services.critical_items_report import SEGMENT_COMPANY, SEGMENT_CONTRACTOR
 
         reno_mode = normalize_reno_mode(reno_mode)
         reno_label = RENO_LABEL_FA[reno_mode]
@@ -2884,14 +2931,12 @@ class BotApp:
         uid = str(user["bale_user_id"])
         self._clear_critical_pending(uid)
         menu = kb.critical_items_menu()
+        from services import critical_report_archive as cra
+
         try:
-            res = generate_critical_items_files(
-                self.db,
-                user,
-                output_dir=REPORT_DIR / "critical_items" / uid,
-                file_prefix="لیست_اقلام_بحرانی",
+            report, res = cra.create_draft(
+                self.db, user, reno_mode=reno_mode, source="bot",
                 letterhead_path=self._letterhead_path(),
-                reno_mode=reno_mode,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("critical items report failed")
@@ -2909,43 +2954,181 @@ class BotApp:
             self._reply(message, text, menu)
             return
 
-        chat_id = self._chat_id(message)
-        sent: list[str] = []
-        try:
-            for seg, tag in ((SEGMENT_COMPANY, "۱) گزارش اصلی — اقلام شرکت"),
-                             (SEGMENT_CONTRACTOR, "۲) گزارش جداگانه — اقلام پیمانکار")):
-                path = res.pdfs.get(seg)
-                if path is None:
-                    continue
-                self.client.send_document(
-                    chat_id, path, caption=f"{tag}\n{res.titles.get(seg, '')}"
-                )
-                sent.append(seg)
-            if res.xlsx is not None:
-                self.client.send_document(
-                    chat_id,
-                    res.xlsx,
-                    caption=(
-                        f"نسخه اکسل اقلام بحرانی ({reno_label}) — "
-                        "شیت «شرکت» و شیت «پیمانکار» جدا"
-                    ),
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("critical items send failed")
-            self._reply(message, user_errors.error_fa("خطا در ارسال گزارش اقلام بحرانی", exc), menu)
+        if report is None:
+            self._reply(message, "خطا در ذخیرهٔ پیش‌نویس اقلام بحرانی.", menu)
+            return
+        if not self._send_critical_report_files(message, report, menu):
             return
         from services.critical_items_report import critical_items_bot_lines
 
         label = res.counts.report_date if res.counts is not None else ""
-        lines = [f"گزارش اقلام بحرانی (تاریخ گزارش {label}) — حالت «{reno_label}» ارسال شد.", res.header_note]
+        lines = [f"پیش‌نویس گزارش اقلام بحرانی #{report['id']} (تاریخ گزارش {label}) — حالت «{reno_label}» ارسال شد.",
+                 res.header_note]
         lines.extend(critical_items_bot_lines(res))
         self._reply(message, "\n".join(lines), menu)
-        if SEGMENT_COMPANY in sent:
+        self._ask_critical_draft_action(message, report)
+        log_activity(self.db, user, "report_critical_items_draft", report_id=int(report["id"]),
+                     renovation=reno_mode)
+        if res.pdfs.get(SEGMENT_COMPANY):
             log_activity(self.db, user, "report_critical_items", renovation=reno_mode)
-        if SEGMENT_CONTRACTOR in sent:
-            log_activity(
-                self.db, user, "report_critical_items_contractor", renovation=reno_mode
+        if res.pdfs.get(SEGMENT_CONTRACTOR):
+            log_activity(self.db, user, "report_critical_items_contractor", renovation=reno_mode)
+
+    # ---------- اقلام بحرانی: draft → توضیحات → تأیید → بایگانی ----------
+    def _send_critical_report_files(self, message: dict, report: dict, menu: dict | None = None) -> bool:
+        """Company PDF, contractor PDF, xlsx of a draft or approved report."""
+        from services import critical_report_archive as cra
+
+        chat_id = self._chat_id(message)
+        final = report["status"] == cra.STATUS_APPROVED
+        tag = "✅ نسخهٔ تأییدشده" if final else "📝 پیش‌نویس"
+        try:
+            files = cra.report_files(self.db, report, letterhead_path=self._letterhead_path())
+            for kind, cap in (("company", "گزارش اصلی — اقلام شرکت"),
+                              ("contractor", "گزارش جداگانه — اقلام پیمانکار"),
+                              ("xlsx", "نسخه اکسل — شیت «شرکت» و شیت «پیمانکار»")):
+                path = files.get(kind)
+                if path is None:
+                    continue
+                self.client.send_document(
+                    chat_id, path,
+                    caption=f"{tag} #{report['id']} — {cap}\n{report.get('title') or ''} ({report['reno_label']})",
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("critical items send failed")
+            self._reply(message, user_errors.error_fa("خطا در ارسال گزارش اقلام بحرانی", exc),
+                        menu or kb.critical_items_menu())
+            return False
+        return True
+
+    def _ask_critical_draft_action(self, message: dict, report: dict) -> None:
+        notes = (report.get("user_notes") or "").strip()
+        shown = f"\nتوضیحات شما:\n{notes}" if notes else "\nهنوز توضیحی ننوشته‌اید (بلوک «توضیحات» فقط افق محاسبه و تاریخ/مبنا را دارد)."
+        self._reply(
+            message,
+            f"پیش‌نویس #{report['id']}: می‌توانید توضیحات خودتان را بنویسید (به بلوک «توضیحات» "
+            "زیر جدول اضافه می‌شود)، بعد «تأیید» بزنید تا نسخهٔ نهایی ذخیره و بایگانی شود؛ "
+            f"یا بدون توضیحات تأیید کنید.{shown}",
+            kb.critical_draft_inline_keyboard(int(report["id"]), has_notes=bool(notes)),
+        )
+
+    def on_critical_archive(self, message: dict) -> None:
+        from services import critical_report_archive as cra
+
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user, perm.REPORT_CRITICAL):
+            return
+        approved = cra.list_approved(self.db, limit=10)
+        drafts = cra.list_drafts(self.db, limit=5)
+        if not approved and not drafts:
+            self._reply(message, "هنوز گزارش اقلام بحرانی تأییدشده‌ای نیست. ابتدا «تولید گزارش اقلام بحرانی» "
+                                 "را بزنید و پیش‌نویس را تأیید کنید.", kb.critical_items_menu())
+            return
+        lines = [kb.BTN_CRITICAL_ARCHIVE]
+        if drafts:
+            lines.append("پیش‌نویس‌های باز (تأیید نشده):")
+            lines += [f"• {cra.summary_fa(d)}" for d in drafts]
+        if approved:
+            lines.append("تأییدشده (برای دریافت دوباره بزنید):")
+            lines += [f"• {cra.summary_fa(r)} — تأیید {r.get('approved_at', '')[:16].replace('T', ' ')}"
+                      for r in approved]
+        self._reply(message, "\n".join(lines), kb.critical_archive_inline_keyboard(approved, drafts))
+
+    def _on_critical_draft_callback(self, cq_data: str, message: dict, user: dict, answer) -> None:
+        from services import critical_report_archive as cra
+
+        if self._deny_technician(message, user, perm.REPORT_CRITICAL):
+            answer()
+            return
+        try:
+            _p, action, rid_s = cq_data.split("|", 2)
+            rid = int(rid_s)
+        except ValueError:
+            answer("دکمهٔ نامعتبر.", alert=True)
+            return
+        uid = str(user["bale_user_id"])
+        report = cra.get_report(self.db, rid)
+        if report is None:
+            answer("گزارش یافت نشد.", alert=True)
+            return
+        if action == "get":
+            if report["status"] != cra.STATUS_APPROVED:
+                answer("این گزارش هنوز تأیید نشده است.", alert=True)
+                return
+            answer(f"ارسال گزارش #{rid}")
+            if self._send_critical_report_files(message, report):
+                log_activity(self.db, user, "report_critical_items_archive", report_id=rid)
+            return
+        if report["status"] != cra.STATUS_DRAFT:
+            answer(f"گزارش #{rid} {report['status_fa']} است.", alert=True)
+            return
+        if action == "open":
+            answer()
+            self._send_critical_report_files(message, report)
+            self._ask_critical_draft_action(message, report)
+            return
+        if action == "notes":
+            self._critical_pending[uid] = {"mode": "draft", "await": "draft_notes", "report_id": rid}
+            answer()
+            current = (report.get("user_notes") or "").strip()
+            self._reply(
+                message,
+                f"توضیحات پیش‌نویس #{rid} را بنویسید و بفرستید (هر خط یک سطر بلوک «توضیحات»؛ "
+                f"حداکثر {cra.MAX_NOTE_LINES} سطر). متن تازه جایگزین متن قبلی می‌شود."
+                + (f"\nمتن فعلی:\n{current}" if current else ""),
+                kb.critical_items_menu(),
             )
+            return
+        if action == "clr":
+            answer("توضیحات حذف شد")
+            report, err = cra.set_notes(self.db, rid, "", user, letterhead_path=self._letterhead_path())
+            if err:
+                self._reply(message, err, kb.critical_items_menu())
+                return
+            self._ask_critical_draft_action(message, report)
+            return
+        if action == "del":
+            answer("پیش‌نویس لغو شد")
+            self._clear_critical_pending(uid)
+            _r, err = cra.cancel(self.db, rid, user)
+            self._reply(message, err or f"پیش‌نویس #{rid} لغو شد.", kb.critical_items_menu())
+            if not err:
+                log_activity(self.db, user, "report_critical_items_cancelled", report_id=rid)
+            return
+        if action == "ok":
+            answer("در حال ذخیرهٔ نسخهٔ نهایی…")
+            self._clear_critical_pending(uid)
+            report, err = cra.approve(self.db, rid, user, letterhead_path=self._letterhead_path())
+            if err:
+                self._reply(message, err, kb.critical_items_menu())
+                return
+            if self._send_critical_report_files(message, report):
+                self._reply(
+                    message,
+                    f"✅ گزارش اقلام بحرانی #{rid} تأیید و ذخیره شد. از «{kb.BTN_CRITICAL_ARCHIVE}» "
+                    "(ربات) یا بخش گزارش‌های وب همیشه قابل دریافت است.",
+                    kb.critical_items_menu(),
+                )
+            log_activity(self.db, user, "report_critical_items_approved", report_id=rid)
+            return
+        answer()
+
+    def _on_critical_draft_notes_text(self, message: dict, user: dict, pending: dict, text: str) -> None:
+        from services import critical_report_archive as cra
+
+        uid = str(user["bale_user_id"])
+        rid = int(pending.get("report_id") or 0)
+        self._clear_critical_pending(uid)
+        report, err = cra.set_notes(self.db, rid, text, user, letterhead_path=self._letterhead_path())
+        if err:
+            self._reply(message, err, kb.critical_items_menu())
+            return
+        log_activity(self.db, user, "report_critical_items_notes", report_id=rid)
+        self._reply(message, f"توضیحات پیش‌نویس #{rid} ثبت شد؛ پیش‌نویس به‌روز:", kb.critical_items_menu())
+        self._send_critical_report_files(message, report)
+        self._ask_critical_draft_action(message, report)
 
     def on_remaining_critical(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -4511,6 +4694,14 @@ class BotApp:
                 answer("شما در سیستم ثبت نشده‌اید.", alert=True)
                 return
             self._on_main_source_request_callback(data, message, user, answer)
+            return
+
+        if data.startswith(kb.CB_CRITICAL_DRAFT_PREFIX):
+            user = ensure_registered(self.db, uid, self._display_name(message))
+            if not user:
+                answer("شما در سیستم ثبت نشده‌اید.", alert=True)
+                return
+            self._on_critical_draft_callback(data, message, user, answer)
             return
 
         if data.startswith(kb.CB_CRITICAL_RENO_PREFIX):
@@ -6772,6 +6963,7 @@ class BotApp:
             kb.BTN_CRITICAL_ITEMS: self.on_critical_items_menu,
             kb.BTN_CRITICAL_COUNTS: self.on_critical_counts_start,
             kb.BTN_CRITICAL_REPORT: self.on_critical_report_start,
+            kb.BTN_CRITICAL_ARCHIVE: self.on_critical_archive,
             kb.BTN_N_TUNDISH: self.on_n_tundish_start,
             kb.BTN_SURPLUS: self.on_surplus_report,
             kb.BTN_INBOUND: self.on_inbound_report,
