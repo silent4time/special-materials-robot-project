@@ -17,6 +17,7 @@ RECONFIGURE=0
 DO_SYSUP=0                              # 0=ask (fresh install, default yes), 1=yes, 2=no
 DO_SYSUP_ONLY=0
 RESTORE_FILE=""
+OFFLINE_SRC="${_NASOZ_OFFLINE_DIR:-}"     # --offline DIR|bundle.tar.gz (no GitHub/PyPI)
 
 usage() {
   cat <<'HELP'
@@ -29,6 +30,8 @@ Usage: bash install.sh [options]
                      پیکربندی موجود حفظ می‌شوند) + restart سرویس‌ها
   --full-update      هر دو: --system-upgrade و سپس --update
   --no-system-upgrade  در نصب تازه ارتقای سیستم را نپرس/انجام نده
+  --offline DIR|FILE.tar.gz  نصب/به‌روزرسانی بدون GitHub/PyPI از بستهٔ آفلاین (wheels/ و کد)؛
+                     با --update کد جایگزین می‌شود (.env و data/ می‌ماند). ساخت بسته: bash scripts/build_offline_bundle.sh
   --restore FILE.zip بازگردانی بک‌آپ (فقط سرور): توقف سرویس‌ها ← بک‌آپ خودکار «پیش از بازگردانی» ←
                      بررسی manifest/sha256 ← بازگردانی DB + uploads + bot_assets ← migrate ← استارت ← تست سلامت
   --repair           فقط خودترمیم: بسته‌های apt (tesseract و ...) + venv + restart
@@ -51,12 +54,15 @@ Usage: bash install.sh [options]
 HELP
 }
 
-_want_restore=0
+_want_restore=0; _want_offline=0
 for arg in "$@"; do
   if (( _want_restore )); then RESTORE_FILE="$arg"; _want_restore=0; continue; fi
+  if (( _want_offline )); then OFFLINE_SRC="$arg"; _want_offline=0; continue; fi
   case "$arg" in
     --restore) _want_restore=1 ;;
     --restore=*) RESTORE_FILE="${arg#--restore=}" ;;
+    --offline) _want_offline=1 ;;
+    --offline=*) OFFLINE_SRC="${arg#--offline=}" ;;
     --seed-admin) DO_SEED=1 ;;
     --systemd) SYSTEMD_CHOICE=y ;;
     --no-systemd) SYSTEMD_CHOICE=n ;;
@@ -218,6 +224,7 @@ missing_apt_pkgs() {
   # Ubuntu/Debian: ensurepip lives in python3.X-venv
   if [[ -n "$pyv" ]] && apt-cache show "python${pyv}-venv" >/dev/null 2>&1; then pkgs+=("python${pyv}-venv"); fi
   for p in "${pkgs[@]}"; do
+    [[ -n "$OFFLINE_DIR" && "$p" == git ]] && continue
     dpkg -s "$p" >/dev/null 2>&1 || out+=("$p")
   done
   ((${#out[@]})) && printf '%s\n' "${out[@]}"
@@ -234,6 +241,21 @@ ensure_system_packages() {
   if ((${#missing[@]} == 0)); then ok "بسته‌های سیستم کامل است (python3-venv، tesseract fas/eng، ...)"; return 0; fi
   if (( DRY_RUN )); then log "[dry-run] apt-get install -y ${missing[*]}"; return 0; fi
   log "نصب بسته‌های سیستم: ${missing[*]}"
+  if [[ -n "$OFFLINE_DIR" ]]; then
+    if run_long "apt-get update (حداکثر ۹۰ ثانیه)" maybe_sudo env DEBIAN_FRONTEND=noninteractive timeout 90 apt-get update -y -o Acquire::http::Timeout=20 \
+       && run_long "نصب ${#missing[@]} بستهٔ سیستمی" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"; then
+      ok "بسته‌های سیستم نصب شد"; return 0
+    fi
+    [[ -f "$OFFLINE_DIR/debs/Packages" ]] || die "apt به mirror نرسید و بستهٔ آفلاین .deb ندارد. یک mirror ایرانی در /etc/apt/sources.list تنظیم کنید."
+    warn "apt به mirror نرسید — نصب از .deb های بسته"
+    local lists src; lists="$(mktemp -d)"; mkdir -p "$lists/partial"; src="$lists/offline.list"
+    echo "deb [trusted=yes] file:$OFFLINE_DIR/debs ./" > "$src"
+    local o=(-o "Dir::Etc::SourceList=$src" -o Dir::Etc::SourceParts=/dev/null -o "Dir::State::Lists=$lists")
+    run_long "فهرست .deb های بسته" maybe_sudo apt-get "${o[@]}" update || die "خواندن .deb های بسته ناموفق بود."
+    run_long "نصب از .deb های بسته" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get "${o[@]}" install -y --no-install-recommends "${missing[@]}" \
+      || die "نصب از .deb های بسته ناموفق بود."
+    ok "بسته‌های سیستم از بستهٔ آفلاین نصب شد"; return 0
+  fi
   run_long "apt-get update" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y || die "به‌روزرسانی فهرست بسته‌ها ناموفق بود."
   run_long "نصب ${#missing[@]} بستهٔ سیستمی" maybe_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}" \
     || die "نصب بسته‌های سیستمی ناموفق بود."
@@ -311,7 +333,9 @@ venv_healthy() { [[ -x "$1/.venv/bin/python" ]] && "$1/.venv/bin/python" -m pip 
 setup_venv() {
   local root="$1"
   VENV_PY="$root/.venv/bin/python"
-  if (( DRY_RUN )); then log "[dry-run] python3 -m venv .venv && pip install -r requirements.txt"; return 0; fi
+  local pipx=()
+  [[ -n "$OFFLINE_DIR" ]] && pipx=(--no-index --find-links "$OFFLINE_DIR/wheels")
+  if (( DRY_RUN )); then log "[dry-run] python3 -m venv .venv && pip install ${pipx[*]} -r requirements.txt"; return 0; fi
   if [[ -d "$root/.venv" ]] && ! venv_healthy "$root"; then
     warn ".venv خراب است (مثلاً بعد از ارتقای python) — ساخت دوباره"
     rm -rf "$root/.venv"
@@ -320,8 +344,8 @@ setup_venv() {
     log "ساخت محیط مجازی .venv ..."
     run_long "ساخت .venv" python3 -m venv "$root/.venv" || { rm -rf "$root/.venv"; die "ساخت venv ناموفق بود. بسته python3-venv را نصب کنید: sudo apt install python3-venv"; }
   fi
-  run_long "به‌روزرسانی pip" "$VENV_PY" -m pip install -U pip wheel || die "به‌روزرسانی pip ناموفق بود."
-  run_long "نصب وابستگی‌های Python (چند دقیقه)" "$VENV_PY" -m pip install -r "$root/requirements.txt" \
+  run_long "به‌روزرسانی pip" "$VENV_PY" -m pip install "${pipx[@]}" -U pip wheel || die "به‌روزرسانی pip ناموفق بود."
+  run_long "نصب وابستگی‌های Python (چند دقیقه)" "$VENV_PY" -m pip install "${pipx[@]}" -r "$root/requirements.txt" \
     || die "نصب وابستگی‌های Python ناموفق بود."
   ok "وابستگی‌های Python نصب شد"
 }
@@ -768,7 +792,25 @@ plan_total() {
 STEP_TOTAL="$(plan_total)"
 if (( DO_WEB_LOGIN )); then STEP_TOTAL=0; fi
 
-need_cmd git || ensure_system_packages
+OFFLINE_DIR=""
+if [[ -n "${_NASOZ_REEXEC:-}" && -n "${_NASOZ_OFFLINE_DIR:-}" ]]; then OFFLINE_SRC="$_NASOZ_OFFLINE_DIR"; fi
+if [[ -n "$OFFLINE_SRC" ]]; then
+  if [[ -f "$OFFLINE_SRC" ]]; then   # bundle.tar.gz → extract next to it
+    _x="$(mktemp -d "${TMPDIR:-/tmp}/nasoz_offline.XXXXXX")"
+    tar -xzf "$OFFLINE_SRC" -C "$_x" || die "باز کردن بستهٔ آفلاین ناموفق بود: $OFFLINE_SRC"
+    OFFLINE_SRC="$(find "$_x" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  fi
+  [[ -d "$OFFLINE_SRC/wheels" && -d "$OFFLINE_SRC/app" ]] || die "بستهٔ آفلاین نامعتبر است (wheels/ و app/ لازم است): $OFFLINE_SRC"
+  OFFLINE_DIR="$(cd "$OFFLINE_SRC" && pwd)"
+  if [[ -z "${_NASOZ_REEXEC:-}" && -f "$OFFLINE_DIR/SHA256SUMS" ]]; then
+    (cd "$OFFLINE_DIR" && sha256sum -c --quiet SHA256SUMS) || die "SHA256SUMS بستهٔ آفلاین مطابقت ندارد — فایل خراب است."
+  fi
+  export _NASOZ_OFFLINE_DIR="$OFFLINE_DIR"
+  if (( DO_SYSUP == 0 )); then DO_SYSUP=2; fi   # offline: no OS upgrade unless asked (--system-upgrade/--full-update)
+  if (( ! DO_WEB_LOGIN )); then STEP_TOTAL="$(plan_total)"; fi
+  ok "حالت آفلاین: $OFFLINE_DIR (بدون GitHub/PyPI)"
+fi
+if [[ -z "$OFFLINE_DIR" ]]; then need_cmd git || ensure_system_packages; fi
 WORKDIR="$(resolve_workdir)"
 export WORKDIR
 cd "$WORKDIR"
@@ -834,9 +876,20 @@ fi
 if [[ -z "${_NASOZ_REEXEC:-}" ]]; then   # (a re-exec after git pull continues the same numbering)
   if (( DO_UPDATE && DO_SYSUP == 1 )); then step "ارتقای سیستم‌عامل"; system_upgrade; fi   # --full-update
   if (( DO_UPDATE )); then step "پشتیبان پایگاه داده"; backup_db "$WORKDIR"; fi
-  if (( DO_UPDATE )); then step "دریافت آخرین نسخه (git pull)"; fi
-  if (( DO_UPDATE )) && (( DRY_RUN )); then log "[dry-run] git -C $WORKDIR pull --ff-only"; fi
-  if (( DO_UPDATE )) && [[ -d "$WORKDIR/.git" ]] && (( ! DRY_RUN )); then
+  if (( DO_UPDATE )) && [[ -n "$OFFLINE_DIR" ]]; then
+    step "جایگزینی کد از بستهٔ آفلاین ($(cat "$OFFLINE_DIR/app/.offline_commit" 2>/dev/null || echo '?'))"
+    if (( DRY_RUN )); then log "[dry-run] کپی $OFFLINE_DIR/app → $WORKDIR (.env، data/، uploads/، .venv دست نمی‌خورد)"
+    else
+      tar -C "$OFFLINE_DIR/app" --exclude=./.env --exclude=./data --exclude=./uploads --exclude=./.venv -cf - . | tar -C "$WORKDIR" -xf - \
+        || die "جایگزینی کد ناموفق بود."
+      ok "کد به نسخهٔ بسته به‌روز شد"
+      export _NASOZ_REEXEC=1 _NASOZ_STEP_N="$STEP_N" _NASOZ_INSTALL_LOG="$INSTALL_LOG"
+      trap - EXIT; exec bash "$WORKDIR/scripts/install.sh" "$@"
+    fi
+  fi
+  if (( DO_UPDATE )) && [[ -z "$OFFLINE_DIR" ]]; then step "دریافت آخرین نسخه (git pull)"; fi
+  if (( DO_UPDATE )) && [[ -z "$OFFLINE_DIR" ]] && (( DRY_RUN )); then log "[dry-run] git -C $WORKDIR pull --ff-only"; fi
+  if (( DO_UPDATE )) && [[ -z "$OFFLINE_DIR" ]] && [[ -d "$WORKDIR/.git" ]] && (( ! DRY_RUN )); then
     run_long "git pull" git -C "$WORKDIR" pull --ff-only || warn "git pull ناموفق بود (تغییرات محلی؟) — با نسخهٔ فعلی ادامه می‌دهیم. git -C $WORKDIR status"
     # the script on disk may have changed; re-exec the new version once
     export _NASOZ_REEXEC=1 _NASOZ_STEP_N="$STEP_N" _NASOZ_INSTALL_LOG="$INSTALL_LOG"
