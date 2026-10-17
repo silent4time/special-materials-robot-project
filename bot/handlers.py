@@ -316,6 +316,7 @@ class BotApp:
             "tr_settings": self.tundish_report.open_settings,
             "reminders": self.reminder_settings.open_menu,
             "appearance": self.on_appearance_menu,
+            "assistant": self.on_assistant_settings,
             "appearance_item": self.on_appearance_menu,
             "letterhead": self.on_appearance_menu,
             "stock_group": self.on_bot_settings_menu,
@@ -1419,6 +1420,7 @@ class BotApp:
             "upload", "main_source", "main"
         } else "upload"
         self.db.set_pending_file_type(user["bale_user_id"], file_type)
+        self._file_guide_kind[uid] = file_type
         label = FILE_TYPES[file_type]["label_fa"]
         if file_type == "product_inventory" and return_menu != "main_source":
             # «📥 به‌روزرسانی موجودی انبار» = stock update (not a full منبع اصلی replacement)
@@ -1995,7 +1997,22 @@ class BotApp:
             if pending in ("product_inventory", "monthly_consumption"):
                 kind = pending
         # keep the current keyboard: re-send the guide without changing nav state
-        self.client.send_message(self._chat_id(message), file_guides.guide_text(kind))
+        chat_id = self._chat_id(message)
+        self.client.send_message(chat_id, file_guides.guide_text(kind))
+        imgs = file_guides.guide_images(kind)
+        if not imgs:
+            return
+        caps = [f"مرحلهٔ {i}" for i in range(1, len(imgs) + 1)]
+        try:
+            self.client.send_media_group(chat_id, imgs, caps)
+        except Exception as exc:  # noqa: BLE001  album unsupported → one by one
+            logger.info("file guide album failed (%s); sending photos one by one", exc)
+            for path, cap in zip(imgs, caps):
+                try:
+                    self.client.send_photo(chat_id, path, caption=cap)
+                except Exception as exc2:  # noqa: BLE001
+                    logger.warning("file guide photo failed: %s", exc2)
+                    break
 
     # ---------- ⚙️ تنظیمات → 🎨 ظاهر / 🔐 دسترسی نقش‌ها ----------
     def on_appearance_menu(self, message: dict) -> None:
@@ -2074,26 +2091,12 @@ class BotApp:
     # ---------- آپلود فایل / فایل منبع اصلی ----------
 
     def on_sequence_report_upload(self, message: dict) -> None:
-        """شروع آپلود گزارش جامع تاندیش در سکوئنس از منوی ورود فایل‌ها."""
-        user = ensure_registered(self.db, self._uid(message), self._display_name(message))
-        if not user or not perm.can(user, perm.FILE_INPUTS):
-            self._reply(message, "دسترسی آپلود فایل ندارید.", kb.main_menu(user) if user else None)
-            return
-        uid = self._uid(message)
-        self._file_guide_kind[uid] = "sequence_report"
-        # Route to main goal flow for processing
-        self.main_goal_report.start_sequence_xlsx(message)
+        """«📤 گزارش جامع تاندیش در سکوئنس» از منوی «📤 ورود فایل‌ها» (مجوز FILE_INPUTS)."""
+        self.main_goal_report.start_sequence_xlsx(message, via_files=True)
 
     def on_production_photos_upload(self, message: dict) -> None:
-        """شروع آپلود عکس‌های آمار تولید از منوی ورود فایل‌ها."""
-        user = ensure_registered(self.db, self._uid(message), self._display_name(message))
-        if not user or not perm.can(user, perm.FILE_INPUTS):
-            self._reply(message, "دسترسی آپلود فایل ندارید.", kb.main_menu(user) if user else None)
-            return
-        uid = self._uid(message)
-        self._file_guide_kind[uid] = "production_photos"
-        # Route to main goal flow for processing
-        self.main_goal_report.start_prod_photo(message)
+        """«📸 عکس‌های آمار تولید» (فقط عکس تب ریخته‌گری) از منوی «📤 ورود فایل‌ها»."""
+        self.main_goal_report.start_prod_photo(message, via_files=True)
 
     def on_upload_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -4716,29 +4719,81 @@ class BotApp:
         return "تصویر: ❌ تنظیم نشده"
 
 
+    def _owner_or_deny(self, message: dict) -> dict | None:
+        user = self._user_or_deny(message)
+        if not user:
+            return None
+        if not perm.is_owner(user):
+            self._reply(message, "این تنظیمات فقط برای مالک در دسترس است.", kb.main_menu(user))
+            return None
+        return user
+
     def on_assistant_settings(self, message: dict) -> None:
         """فقط مالک: تنظیمات دستیار هوشمند صوتی."""
-        user = ensure_registered(self.db, self._uid(message), self._display_name(message))
-        if not user or user.get("role") != "owner":
-            self._reply(message, "این تنظیمات فقط برای مالک در دسترس است.", kb.main_menu(user) if user else None)
+        from services import voice_assistant as va
+
+        user = self._owner_or_deny(message)
+        if not user:
             return
-        enabled = self.db.get_setting("assistant_enabled") == "1"
-        model = self.db.get_setting("assistant_model") or "qwen2.5:3b"
-        status = "فعال" if enabled else "غیرفعال"
+        enabled = self.db.get_setting(va.SETTING_ENABLED) == "1"
         self._reply(
             message,
-            f"🤖 دستیار هوشمند صوتی\nوضعیت: {status}\nمدل فعلی: {model}\n\n"
-            "فقط مالک می‌تواند این تنظیمات را تغییر دهد.",
+            va.status_text_fa(enabled, self.db.get_setting(va.SETTING_MODEL)),
             kb.assistant_settings_menu(),
         )
 
     def on_assistant_toggle(self, message: dict, enable: bool) -> None:
-        user = ensure_registered(self.db, self._uid(message), self._display_name(message))
-        if not user or user.get("role") != "owner":
+        from services import voice_assistant as va
+
+        user = self._owner_or_deny(message)
+        if not user:
             return
-        self.db.set_setting("assistant_enabled", "1" if enable else "0")
-        state = "فعال شد" if enable else "غیرفعال شد"
-        self._reply(message, f"دستیار هوشمند {state}.", kb.assistant_settings_menu())
+        if enable and not va.is_installed():
+            self.db.set_setting(va.SETTING_ENABLED, "0", updated_by=user["bale_user_id"])
+            self._reply(message, "⚠ " + va.NOT_INSTALLED_FA + " دستیار غیرفعال ماند.", kb.assistant_settings_menu())
+            return
+        self.db.set_setting(va.SETTING_ENABLED, "1" if enable else "0", updated_by=user["bale_user_id"])
+        log_activity(self.db, user, "assistant_enabled" if enable else "assistant_disabled")
+        self._reply(message, f"دستیار هوشمند {'فعال شد' if enable else 'غیرفعال شد'}.", kb.assistant_settings_menu())
+
+    def on_voice_message(self, message: dict) -> None:
+        """Voice/audio: only the owner, only when enabled AND installed. Never crashes."""
+        from services import voice_assistant as va
+
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if not perm.is_owner(user) or self.db.get_setting(va.SETTING_ENABLED) != "1":
+            self._reply(message, "پیام صوتی پشتیبانی نمی‌شود؛ لطفاً از دکمه‌ها یا متن استفاده کنید.")
+            return
+        if not va.is_installed():
+            self._reply(message, va.NOT_INSTALLED_FA)
+            return
+        voice = message.get("voice") or message.get("audio") or {}
+        if not voice.get("file_id"):
+            self._reply(message, "فایل صوتی معتبر دریافت نشد.")
+            return
+
+        def work() -> bool:
+            import tempfile
+
+            try:
+                with tempfile.TemporaryDirectory() as tmp:
+                    audio_in = Path(tmp) / "in.ogg"
+                    self.client.download_file(voice["file_id"], audio_in)
+                    text = va.transcribe(audio_in)
+                    if not text:
+                        self._reply(message, "متن صوت تشخیص داده نشد.")
+                        return True
+                    answer = va.ask_ollama(text, model=self.db.get_setting(va.SETTING_MODEL) or va.DEFAULT_LLM)
+                    self._reply(message, f"🗣 {text}\n\n🤖 {answer or 'پاسخی از مدل دریافت نشد.'}")
+            except Exception:  # noqa: BLE001
+                logger.exception("voice assistant failed")
+                self._reply(message, "خطا در پردازش صوت. لطفاً دوباره تلاش کنید.")
+            return True
+
+        self._reply(message, "⏳ در حال پردازش صوت…")
+        self._heavy(message, "دستیار صوتی", False, work)
 
     def on_bot_settings_menu(self, message: dict) -> None:
         user = self._require_bot_settings_user(message)
@@ -6239,6 +6294,9 @@ class BotApp:
         if message.get("photo"):
             self.main_goal_report.handle_photo(message)
             return
+        if message.get("voice") or message.get("audio"):
+            self.on_voice_message(message)
+            return
         if not text:
             return
 
@@ -6441,6 +6499,9 @@ class BotApp:
             kb.BTN_SET_LETTERHEAD: lambda m: self.on_bot_settings_section(m, "letterhead"),
             kb.BTN_SET_STOCK_GROUP: lambda m: self.on_bot_settings_section(m, "stock_group"),
             kb.BTN_ASSISTANT: self.on_assistant_settings,
+            kb.BTN_ASSISTANT_STATUS: self.on_assistant_settings,
+            kb.BTN_ASSISTANT_ON: lambda m: self.on_assistant_toggle(m, True),
+            kb.BTN_ASSISTANT_OFF: lambda m: self.on_assistant_toggle(m, False),
             kb.BTN_SETTINGS_CLEAR_STOCK_GROUP: self.on_bot_settings_clear_stock_group,
             kb.BTN_SETTINGS_UPLOAD_LETTERHEAD: self.on_bot_settings_upload_letterhead_start,
             kb.BTN_SETTINGS_CLEAR_LETTERHEAD: self.on_bot_settings_clear_letterhead,

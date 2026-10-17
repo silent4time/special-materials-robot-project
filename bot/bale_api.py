@@ -148,6 +148,28 @@ class BaleClient:
             files = {"photo": (path.name, fh, mime)}
             return self._call("sendPhoto", data=data, files=files)
 
+    def send_media_group(
+        self, chat_id: int | str, file_paths: list[Path | str], captions: list[str] | None = None
+    ) -> Any:
+        """Send up to 10 local images as one album (sendMediaGroup, attach://)."""
+        paths = [Path(p) for p in file_paths][:10]
+        media, files, handles = [], {}, []
+        try:
+            for i, p in enumerate(paths):
+                key = f"photo{i}"
+                item: dict[str, Any] = {"type": "photo", "media": f"attach://{key}"}
+                if captions and i < len(captions) and captions[i]:
+                    item["caption"] = captions[i]
+                media.append(item)
+                fh = p.open("rb")
+                handles.append(fh)
+                files[key] = (p.name, fh, "image/jpeg" if p.suffix.lower() in (".jpg", ".jpeg") else "image/png")
+            data = {"chat_id": str(chat_id), "media": json.dumps(media, ensure_ascii=False)}
+            return self._call("sendMediaGroup", data=data, files=files)
+        finally:
+            for fh in handles:
+                fh.close()
+
     def try_set_my_photo(self, file_path: Path | str) -> tuple[bool, str]:
         """Attempt to set the bot profile photo. Bale may not support this.
 

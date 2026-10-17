@@ -107,6 +107,7 @@ class MainGoalReportFlow:
 
     def clear(self, uid: str) -> None:
         self.pending.pop(str(uid), None)
+        self.app._file_guide_kind.pop(str(uid), None)
 
     def _reply(self, message: dict, text: str, markup: dict | None = None) -> None:
         # Bale messages max ~4096 chars
@@ -118,6 +119,9 @@ class MainGoalReportFlow:
         user = self.app._user_or_deny(message)
         if not user:
             return None
+        p = self.pending.get(str(user["bale_user_id"])) or {}
+        if p.get("via_files") and perm.can(user, perm.FILE_INPUTS):
+            return user
         if self.app._deny_technician(message, user, perm.MAIN_GOAL):
             return None
         if not mg.can_run(user):
@@ -128,6 +132,12 @@ class MainGoalReportFlow:
             )
             return None
         return user
+
+    def _done_menu(self, p: dict | None, user: dict | None = None) -> dict:
+        """Where an input step returns: «📤 ورود فایل‌ها» if started there, else ورودی‌ها."""
+        if (p or {}).get("via_files"):
+            return kb.upload_files_menu(user)
+        return kb.main_goal_inputs_menu()
 
     def _inventory(self, user: dict):
         try:
@@ -236,6 +246,13 @@ class MainGoalReportFlow:
                 kb.main_goal_upload_menu(),
             )
             return True
+        if mode == "seq_xlsx":
+            self._reply(
+                message,
+                "در انتظار فایل Excel «گزارش جامع تاندیش در سکوئنس» (.xlsx) هستید.",
+                kb.main_goal_upload_menu(),
+            )
+            return True
         if mode == "prod_correct":
             return self._on_prod_correct(message, p, text)
         if mode == "range_pick":
@@ -280,11 +297,15 @@ class MainGoalReportFlow:
                 kb.main_goal_inputs_menu(),
             )
             return
-        back_inputs = p.get("await") in {"prod_photo", "prod_xlsx", "cons_xlsx", "prod_correct"}
+        back_inputs = p.get("await") in {"prod_photo", "prod_xlsx", "cons_xlsx", "seq_xlsx", "prod_correct"}
+        if p.get("via_files"):
+            markup = kb.upload_files_menu(user)
+        else:
+            markup = kb.main_goal_inputs_menu() if back_inputs else kb.main_goal_menu()
         self._reply(
             message,
             "لغو شد؛ چیزی ذخیره نشد.",
-            kb.main_goal_inputs_menu() if back_inputs else kb.main_goal_menu(),
+            markup,
         )
 
     # ------------------------------------------------------------ menu / history
@@ -420,9 +441,9 @@ class MainGoalReportFlow:
         """Return True if this document belonged to a هدف اصلی upload step."""
         uid = self.app._uid(message)
         p = self.pending.get(uid)
-        if not p or p.get("await") not in {"bulk", "prod_xlsx", "cons_xlsx", "prod_photo"}:
+        if not p or p.get("await") not in {"bulk", "prod_xlsx", "cons_xlsx", "seq_xlsx", "prod_photo"}:
             return False
-        if p.get("await") in {"prod_xlsx", "cons_xlsx"}:
+        if p.get("await") in {"prod_xlsx", "cons_xlsx", "seq_xlsx"}:
             return self._handle_input_document(message, p)
         if p.get("await") == "prod_photo":
             return self.handle_photo(message)
@@ -781,7 +802,8 @@ class MainGoalReportFlow:
         overview = mgp.month_completeness(self.db)
         lines = [
             f"{kb.BTN_MG_INPUTS}",
-            "عکس تب «ریخته‌گری» آمار تولید → OCR | اکسل آمار تولید | اکسل مصرف تاندیش هر بخش",
+            f"آپلود ورودی‌ها از «{kb.BTN_UPLOAD_MENU}»: موجودی انبار، مصرف ماهیانه، "
+            "عکس آمار تولید (تب ریخته‌گری) و «گزارش جامع تاندیش در سکوئنس».",
             f"چند فایل/چند ماه با هم: «{kb.BTN_MG_BULK}» | راهنما: «{kb.BTN_FILE_GUIDE}»",
             "",
         ]
@@ -800,12 +822,45 @@ class MainGoalReportFlow:
             lines.append("هنوز ورودی‌ای ذخیره نشده است.")
         self._reply(message, "\n".join(lines), kb.main_goal_inputs_menu())
 
-    def start_prod_photo(self, message: dict) -> None:
-        user = self._user(message)
+    def _start_user(self, message: dict, via_files: bool) -> dict | None:
+        if not via_files:
+            return self._user(message)
+        user = self.app._user_or_deny(message)
+        if not user:
+            return None
+        if not perm.can(user, perm.FILE_INPUTS):
+            self._reply(message, "دسترسی «ورود فایل‌ها» ندارید.", kb.main_menu(user))
+            return None
+        return user
+
+    def start_sequence_xlsx(self, message: dict, via_files: bool = True) -> None:
+        """«📤 گزارش جامع تاندیش در سکوئنس»: one aggregated log for billet/bloom/slab.
+
+        Rows are split by the «ماشین» column (section) and by heat-start month; each
+        (month, section) pair replaces only its own previous data.
+        """
+        user = self._start_user(message, via_files)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        batch = tehran_now().strftime("%Y%m%d_%H%M%S")
+        self.pending[uid] = {"await": "seq_xlsx", "batch": batch, "via_files": via_files}
+        self.app._file_guide_kind[uid] = "mg_sequence"
+        self._reply(
+            message,
+            "📤 فایل Excel «گزارش جامع تاندیش در سکوئنس» (خروجی Excel صفحهٔ "
+            "otsteel.ksc.ir/ccssequence) را بفرستید.\n"
+            "یک فایل برای هر سه بخش کافی است: بخش از ستون «ماشین» (اسلب ۱/۲، بلوم، بیلت ۱/۲) و "
+            "ماه از تاریخ شروع ریخته‌گری تشخیص داده می‌شود؛ هر ماه/بخش جداگانه جایگزین می‌شود.",
+            kb.main_goal_upload_menu(),
+        )
+
+    def start_prod_photo(self, message: dict, via_files: bool = False) -> None:
+        user = self._start_user(message, via_files)
         if not user:
             return
         batch = tehran_now().strftime("%Y%m%d_%H%M%S")
-        self.pending[str(user["bale_user_id"])] = {"await": "prod_photo", "batch": batch}
+        self.pending[str(user["bale_user_id"])] = {"await": "prod_photo", "batch": batch, "via_files": via_files}
         self.app._file_guide_kind[str(user["bale_user_id"])] = "mg_production_photo"
         self._reply(
             message,
@@ -937,7 +992,7 @@ class MainGoalReportFlow:
             return True
         self.clear(uid)
         log_activity(self.db, user, "main_goal_store_production_ocr")
-        self._reply(message, out.summary + "\n" + self._remaining_line(out), kb.main_goal_inputs_menu())
+        self._reply(message, out.summary + "\n" + self._remaining_line(out), self._done_menu(p, user))
         return True
 
     def _handle_input_document(self, message: dict, p: dict) -> bool:
@@ -954,7 +1009,9 @@ class MainGoalReportFlow:
             return True
         dest_dir = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / str(p["batch"])
         dest_dir.mkdir(parents=True, exist_ok=True)
-        kind = "production" if p["await"] == "prod_xlsx" else f"{p.get('section')}_consumption"
+        kind = {"prod_xlsx": "production", "seq_xlsx": "tundish_sequence"}.get(
+            p["await"], f"{p.get('section')}_consumption"
+        )
         dest = dest_dir / f"{kind}.xlsx"
         try:
             self.app.client.download_file(file_id, dest)
@@ -962,7 +1019,12 @@ class MainGoalReportFlow:
             self._reply(message, user_errors.error_fa("دانلود ناموفق", exc), kb.main_goal_upload_menu())
             return True
         try:
-            if p["await"] == "prod_xlsx":
+            if p["await"] == "seq_xlsx":
+                out = mgp.store_sequences_from_excel(
+                    self.db, dest, user=user, source="bot", filename=file_name, section=None
+                )
+                act = "main_goal_store_sequences"
+            elif p["await"] == "prod_xlsx":
                 out = mgp.store_production_from_excel(
                     self.db, dest, user=user, source="bot", filename=file_name
                 )
@@ -1001,10 +1063,10 @@ class MainGoalReportFlow:
             return True
         self.clear(uid)
         if not out.ok:
-            self._reply(message, out.error_fa or "خطا", kb.main_goal_inputs_menu())
+            self._reply(message, out.error_fa or "خطا", self._done_menu(p, user))
             return True
         log_activity(self.db, user, act)
-        self._reply(message, out.summary + "\n" + self._remaining_line(out), kb.main_goal_inputs_menu())
+        self._reply(message, out.summary + "\n" + self._remaining_line(out), self._done_menu(p, user))
         return True
 
     def _on_prod_correct(self, message: dict, p: dict, text: str) -> bool:

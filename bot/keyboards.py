@@ -51,6 +51,7 @@ MENU_PARENT: dict[str, str | None] = {
     "reminders": "settings",
     "stock_group": "settings",
     "appearance": "settings",
+    "assistant": "settings",
     "appearance_item": "appearance",
     "role_perms": "settings",
     "letterhead": "appearance",
@@ -217,6 +218,9 @@ BTN_TR_SETTINGS = "🧾 اقلام فرم گزارش تاندیش"
 BTN_SET_REMINDERS = "🔔 یادآورها"
 BTN_SET_STOCK_GROUP = "📣 گروه گزارش موجودی"
 BTN_ASSISTANT = "🤖 دستیار هوشمند صوتی"
+BTN_ASSISTANT_ON = "✅ فعال‌سازی دستیار"
+BTN_ASSISTANT_OFF = "⏸ غیرفعال‌سازی دستیار"
+BTN_ASSISTANT_STATUS = "📋 وضعیت فعلی دستیار"
 BTN_APPEARANCE = "🎨 ظاهر"
 BTN_SET_INVITE = "📝 متن دعوت‌نامه کاربران"
 BTN_SET_WELCOME = "👋 پیام خوشامدگویی"
@@ -368,6 +372,7 @@ LEGACY_ALIASES: dict[str, str] = {
     "📥 ثبت ورودی (عکس تولید / اکسل تاندیش)": BTN_MG_INPUTS,
     "📦 آپلود گروهی چند ماه (تشخیص خودکار)": BTN_MG_BULK,
     "📄 آپلود اکسل آمار تولید": BTN_MG_INPUT_PROD_XLSX,
+    "📥 مصرف ماهیانه": BTN_MONTHLY,  # before 1405/07/20
     # settings
     "⚙️ تنظیمات گزارش تاندیش": BTN_TR_SETTINGS,
     "🔔 یادآور گزارش‌های الزامی": BTN_SET_REMINDERS,
@@ -790,7 +795,7 @@ def bot_settings_menu(user: dict | None = None) -> dict:
     ]
     labels = [lbl for feat, lbl in items if user is None or perm.can(user, feat)]
     # دستیار هوشمند فقط برای مالک
-    if user is None or (user.get("role") == "owner"):
+    if perm.is_owner(user):
         labels.append(BTN_ASSISTANT)
     return _kb(_pairs(labels), "settings")
 
@@ -800,8 +805,8 @@ def assistant_settings_menu() -> dict:
     """فقط مالک: فعال/غیرفعال و انتخاب مدل دستیار."""
     return _kb(
         [
-            ["✅ فعال‌سازی دستیار", "⏸ غیرفعال‌سازی دستیار"],
-            ["🔄 تغییر مدل", "📋 وضعیت فعلی"],
+            [BTN_ASSISTANT_ON, BTN_ASSISTANT_OFF],
+            [BTN_ASSISTANT_STATUS],
         ],
         "assistant",
     )
@@ -1146,6 +1151,8 @@ def _button_features() -> dict[str, tuple[str, ...]]:
         BTN_MONTHLY_SUMMARY: (P.REPORT_MONTHLY_SUMMARY,),
         BTN_WAREHOUSE_STOCK: (P.FILE_INPUTS,),
         BTN_MONTHLY: (P.FILE_INPUTS,),
+        BTN_SEQUENCE_REPORT: (P.FILE_INPUTS,),
+        BTN_PRODUCTION_PHOTOS: (P.FILE_INPUTS,),
         BTN_MAIN_SOURCE_FILE: (P.FILE_INPUTS, P.MAIN_SOURCE_EDIT),
         BTN_INV_DOWNLOAD: (P.FILE_INPUTS, P.MAIN_SOURCE_EDIT),
         BTN_INV_LIST_CATEGORIES: (P.FILE_INPUTS, P.MAIN_SOURCE_EDIT),
