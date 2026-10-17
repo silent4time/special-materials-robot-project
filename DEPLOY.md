@@ -322,6 +322,26 @@ curl -s http://127.0.0.1:11434/api/generate -d '{"model":"qwen2.5:3b","prompt":"
 
 منوی نصب کننده، گزینه 3 (وضعیت)، بخش «دستیار هوشمند» هم Ollama، مدل، Whisper و Piper را نشان می دهد.
 
+### سرور بدون systemd (کانتینر، sandbox)
+
+نصب کننده به جای سرویس systemd یک ناظر جدا با `setsid nohup` اجرا می کند (`scripts/ollama_ensure.sh`): `ollama serve` فقط روی `127.0.0.1:11434` و با کاربر `ollama` (اگر root باشد) بالا می آید، با بسته شدن ترمینال/SSH از کار نمی افتد و اگر پروسه بمیرد بعد از ۳ ثانیه دوباره اجرا می شود (مثل `Restart=always`). اسکریپت تکرارپذیر است؛ اگر Ollama جواب بدهد کاری نمی کند. `scripts/preflight.sh` هم اگر Ollama نصب باشد ولی جواب ندهد آن را بالا می آورد.
+
+```bash
+sudo bash scripts/ollama_ensure.sh            # بعد از ریبوت یا اگر خاموش بود
+bash scripts/ollama_ensure.sh --status        # وضعیت + pid ناظر
+sudo bash scripts/ollama_ensure.sh --stop     # توقف
+# لاگ و pid (root): /var/lib/nasoz-ollama/ollama.log و supervisor.pid
+```
+
+بسته های پایتون دستیار (faster-whisper، piper-tts) در `.venv` نصب می شوند؛ پس ربات و وب را با `.venv/bin/python` و با محیط تمیز (فقط `.env`) اجرا کنید تا متغیرهای تست وارد نشوند:
+
+```bash
+cd /path/to/bot
+CLEAN=(env -i HOME="$HOME" USER="$USER" LANG=C.UTF-8 PATH="$PWD/.venv/bin:/usr/local/bin:/usr/bin:/bin")
+setsid nohup "${CLEAN[@]}" .venv/bin/python main.py    >> data/bot_stdout.log 2>&1 </dev/null & echo $! > data/bot.pid
+setsid nohup "${CLEAN[@]}" .venv/bin/python web_main.py >> data/web_stdout.log 2>&1 </dev/null & echo $! > data/web.pid
+```
+
 ### رفع اشکال
 
 | مشکل | کار |

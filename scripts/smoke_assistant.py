@@ -442,6 +442,15 @@ def run_wiring() -> None:
     check(r.status_code == 200 and "از دستیار بپرس" in r.text, "web /assistant page")
     r = own.post("/assistant/ask", data={"q": "درخواست‌های در انتظار تأیید"})
     check(r.status_code == 200 and ("در انتظار تأیید" in r.text), "web ask (owner)")
+    # voice upload: request.form() returns starlette's UploadFile (regression: fastapi's class never matched)
+    _tr, _av = va.transcribe, va.availability
+    va.transcribe = lambda p, *a, **k: "درخواست‌های در انتظار تأیید" if Path(p).read_bytes() == b"RIFFfake" else ""
+    va.availability = lambda: {**_av(), "whisper": True}
+    try:
+        r = own.post("/assistant/ask", files={"audio": ("q.wav", b"RIFFfake", "audio/wav")})
+    finally:
+        va.transcribe, va.availability = _tr, _av
+    check(r.status_code == 200 and "🗣" in r.text and "در انتظار تأیید" in r.text, "web ask by voice upload")
     r = tech.post("/assistant/ask", data={"q": "درخواست‌های در انتظار تأیید"})
     check(r.status_code == 200 and "⛔" in r.text, "web ask denied for technician (same gate)")
     check("/assistant" in own.get("/home").text, "nav link when on")

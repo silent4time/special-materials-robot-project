@@ -341,7 +341,8 @@ def walk_role(app, client, catcher, uid: str, role: str, max_depth: int = 4) -> 
             assert all(FALLBACK not in t for t in texts), (role, path, b, texts)
             assert all(DENIED_MARK not in t for t in texts), (role, path, b, "shown but denied", texts)
             assert len(catcher.records) == n_err, (role, path, b, catcher.records[n_err:])
-            if nb and nb != root:
+            # the walk may toggle the assistant (settings → 🤖), which adds/removes «از دستیار بپرس»
+            if nb and [x for x in nb if x != kb.BTN_ASK_ASSISTANT] != [x for x in root if x != kb.BTN_ASK_ASSISTANT]:
                 if not (nb[-1] in (kb.BTN_HOME, kb.BTN_CANCEL) or kb.BTN_CANCEL in nb or kb.BTN_BACK in nb):
                     nav_bad.add((b, tuple(nb[-2:])))
             if nb and tuple(nb) not in seen_kb:

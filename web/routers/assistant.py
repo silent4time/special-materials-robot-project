@@ -6,7 +6,8 @@ import logging
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Request, UploadFile
+from fastapi import APIRouter, Depends, Request
+from starlette.datastructures import UploadFile  # request.form() yields starlette (not fastapi) UploadFile
 
 from db.models import Database
 from web.deps import current_user, get_db
