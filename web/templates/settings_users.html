@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}کاربران{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>👥 کاربران</h1>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  {% if invite_url %}
+  <div class="alert ok" style="white-space:pre-line">{{ invite_text }}
+
+لینک دعوت (برای فرد بفرستید): <a href="{{ invite_url }}">{{ invite_url }}</a></div>
+  {% endif %}
+  <h2>➕ اضافه کردن کاربر (لینک دعوت ۷ روزه)</h2>
+  <form method="post" action="/settings/users/invite" class="form-grid">
+    <label>نقش<select name="role">{% for r in roles %}<option value="{{ r }}">{{ role_label(r) }}</option>{% endfor %}</select></label>
+    <button class="btn" type="submit">ساخت لینک دعوت</button>
+  </form>
+</div>
+<div class="card">
+  <h2>📋 لیست کاربران</h2>
+  <table class="table">
+    <tr><th>وضعیت</th><th>شناسه</th><th>نام</th><th>نقش</th><th>✏️ اصلاح نقش</th><th>🗑 حذف</th></tr>
+    {% for u in users %}
+    <tr>
+      <td>{{ "🟢" if u.active else "🔴" }}</td><td>{{ u.bale_user_id }}</td><td>{{ u.display_name or "" }}</td><td>{{ role_label(u.role) }}</td>
+      <td>{% if u.active %}<form method="post" action="/settings/users/{{ u.bale_user_id }}/role" style="display:inline">
+        <select name="role">{% for r in roles %}<option value="{{ r }}"{% if r == u.role %} selected{% endif %}>{{ role_label(r) }}</option>{% endfor %}</select>
+        <button type="submit">ثبت</button></form>{% endif %}</td>
+      <td>{% if u.active %}<form method="post" action="/settings/users/{{ u.bale_user_id }}/delete" style="display:inline" onsubmit="return confirm('غیرفعال شود؟')"><button type="submit">🗑</button></form>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

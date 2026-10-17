@@ -205,6 +205,29 @@ def main() -> int:
     pre, diff = ms.sibling_defaults(old6, "1603")
     assert pre.get("unit") == "No" and not diff
 
+    # 7) web parity: /files/stock runs the SAME pipeline (3-column file keeps every column)
+    from fastapi.testclient import TestClient
+
+    from web.app import create_app
+    from web.auth_web import set_credential
+    from web.deps import get_db
+
+    wapp = create_app()
+    wapp.dependency_overrides[get_db] = lambda: db
+    set_credential(db, bale_user_id="901", username="own901", password="secret901")
+    wc = TestClient(wapp)
+    assert wc.post("/login", data={"username": "own901", "password": "secret901"}, follow_redirects=False).status_code in (302, 303)
+    before = ms.load_primary_frame(db, bale_user_id="901").set_index("id")
+    p3 = _stock_xlsx(tmp / "w3.xlsx", [(1203, A, "نوآوران C85", 150), (1203, B, "رایان 85BT", 40)])
+    r = wc.post("/files/stock", files={"file": ("w3.xlsx", p3.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert r.status_code == 200 and "دریافت شد" in r.text, r.text[-800:]
+    after = ms.load_primary_frame(db, bale_user_id="901").set_index("id")
+    assert float(after.at[A, "quantity"]) == 150
+    for col in ("unit", "slab_renovation", "keyword", "work_order", "priority", "critical_point"):
+        assert str(after.at[A, col]) == str(before.at[A, col]), (col, after.at[A, col], before.at[A, col])
+    assert "/files/inbound/" in r.text  # inbound report links like the bot sends files
+
     print("smoke_source_guard OK")
     return 0
 

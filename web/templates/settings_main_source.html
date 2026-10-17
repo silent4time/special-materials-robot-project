@@ -15,6 +15,20 @@
   {% if message %}<div class="alert ok" style="white-space:pre-line">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
   <p>تعداد ردیف: <strong>{{ row_count }}</strong></p>
+  <p><a class="btn" href="/settings/main-source/download.xlsx">📄 دانلود اکسل منبع اصلی</a>
+     {% if can(user, "file_inputs") %}<a class="btn" href="/files">📤 ورود فایل‌ها (موجودی انبار، مصرف ماهیانه، آمار تولید، سکوئنس)</a>{% endif %}</p>
+</div>
+
+<div class="card" id="categories">
+  <h2>📋 کدهای دسته ({{ category_codes|length }})</h2>
+  <p class="muted">{% for c in category_codes %}{{ c.code }}{% if c.label %} ({{ c.label }}){% endif %}{% if not loop.last %}، {% endif %}{% endfor %}</p>
+  {% if can_edit %}
+  <form method="post" action="/settings/main-source/categories/add" class="form-grid">
+    <label>➕ افزودن کد دسته (۴ رقم)<input name="code" pattern="[0-9]{4}" required></label>
+    <label>عنوان (اختیاری)<input name="label"></label>
+    <button type="submit" class="btn">ثبت</button>
+  </form>
+  {% endif %}
 </div>
 
 {% if can(user, "main_source_edit") %}
@@ -59,15 +73,44 @@
   <h2>اضافه کردن رکورد</h2>
   <form method="post" action="/settings/main-source/add">
     {% for key in columns %}
-    {% set required = key in ['category_code', 'id', 'product_name', 'quantity'] %}
+    {% set required = key in ['category_code', 'id', 'product_name', 'quantity', 'priority'] %}
     <label for="add_{{ key }}">{{ labels.get(key, key) }}{% if required %} *{% endif %}</label>
-    <input id="add_{{ key }}" name="{{ key }}" type="text"{% if required %} required{% endif %}{% if key == 'priority' %} value="1"{% endif %}>
+    <input id="add_{{ key }}" name="{{ key }}" type="text"{% if required %} required{% endif %}>
     {% endfor %}
+    <div id="prefill_note" class="muted" style="white-space:pre-line"></div>
     <label><input type="checkbox" name="overwrite" value="1"> اگر شناسه تکراری بود، رکورد قبلی جایگزین شود</label>
     {% if needs_approval %}<p class="muted">رکورد شما پس از تأیید مدیر یا مالک در منبع اصلی اعمال می‌شود.</p>{% endif %}
     <p style="margin-top:1rem"><button type="submit">افزودن رکورد</button></p>
   </form>
 </div>
+
+<script>
+(function () {
+  const code = document.getElementById("add_category_code"), id = document.getElementById("add_id");
+  const note = document.getElementById("prefill_note");
+  if (!code) return;
+  const touched = new Set();
+  document.querySelectorAll("[id^=add_]").forEach(el => el.addEventListener("input", () => touched.add(el.id)));
+  async function load() {
+    const c = (code.value || "").trim();
+    if (!/^\d{4}$/.test(c)) return;
+    const r = await fetch(`/settings/main-source/sibling-defaults?code=${c}&item_id=${encodeURIComponent(id.value || "")}`, {credentials: "same-origin"});
+    if (!r.ok) return;
+    const d = await r.json();
+    for (const [k, v] of Object.entries(d.prefill || {})) {
+      const el = document.getElementById("add_" + k);
+      if (el && !touched.has(el.id)) { el.value = v; el.style.background = "#fffbe6"; }
+    }
+    const co = document.getElementById("add_contractor_or_company");
+    if (co && d.contractor_or_company && !touched.has(co.id)) co.value = d.contractor_or_company;
+    let t = d.known ? "پیشنهاد از ردیف‌های هم‌کد (قابل ویرایش)." : "⛔ این کد دسته در منبع اصلی ثبت نشده است.";
+    if ((d.differing_fa || []).length) t += "\nمتفاوت بین هم‌کدها — خودتان پر کنید: " + d.differing_fa.join("، ");
+    t += "\nاولویت را حتماً تعیین کنید.";
+    note.textContent = t;
+  }
+  code.addEventListener("change", load); id.addEventListener("change", load);
+})();
+</script>
 
 {% else %}
 <div class="card"><p class="muted">ویرایش منبع اصلی برای نقش شما فعال نیست؛ فقط مشاهده.</p></div>
