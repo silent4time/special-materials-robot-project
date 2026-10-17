@@ -196,18 +196,20 @@ def part_b() -> None:
     if res.error:
         print("  (critical:", res.error[:80], ")")
     else:
-        collect("اقلام بحرانی", list(res.pdfs.values()) + [res.xlsx])
-        # base «موجودی» (per code, segment IDs) == the report's own computed stock
-        for seg, df in res.frames.items():
-            for _, r in df.iterrows():
-                code = str(r["کد چهاررقمی"])
-                if "/" in code:
-                    continue
-                base = sum(x[mc.B_QTY] or 0 for x in idx.for_code(code, seg, planning=True))
-                if abs(base - float(r["موجودی"] or 0)) > 1e-6:
-                    check(False, f"critical {seg} {code}: base {base} ≠ report {r['موجودی']}")
-                    break
-        check(True, "critical: base stock = report stock (per segment)")
+        # TEMPLATE-LOCKED exception (1405/07/25 user decision): اقلام بحرانی follows the
+        # user's sample «140506» — NO base material columns, not the shared styler.
+        from openpyxl import load_workbook as _lw
+
+        from analytics.critical_items import REPORT_COLUMNS as _RC
+        from excel.table_style import template_locked_name
+
+        spy.take()
+        _wb = _lw(res.xlsx)
+        check(template_locked_name(_wb) == "critical_items", "critical: xlsx template-locked")
+        for _ws in _wb.worksheets:
+            _hdr = [c.value for c in _ws[2]]
+            check(_hdr == list(_RC), f"critical {_ws.title}: sample columns, no base columns {_hdr[:3]}")
+            check(mc.B_ID not in _hdr, f"critical {_ws.title}: no «{mc.B_ID}»")
     r = nt.generate_files(db, owner, "slab", 4, output_dir=out / "nt", inventory_df=inv)
     if getattr(r, "pdf", None):
         collect("نیاز N تاندیش", [r.pdf, r.xlsx])

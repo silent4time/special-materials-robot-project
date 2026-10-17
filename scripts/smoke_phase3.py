@@ -191,8 +191,22 @@ def check_xlsx(path: Path) -> list[str]:
 
     assert EXCEL_FONT == "Tahoma", EXCEL_FONT
 
+    from excel.table_style import template_locked_name
+
     bad: list[str] = []
     wb = load_workbook(path)
+    if template_locked_name(wb):
+        # اقلام بحرانی / خلاصه مصرفی ماهیانه copy the user's sample cell by cell (own
+        # fills/alignment, no frozen header) — only RTL + Tahoma are checked here; the
+        # layout itself is checked against the sample by smoke_template_reports.py.
+        for ws in wb.worksheets:
+            if not ws.sheet_view.rightToLeft:
+                bad.append(f"{path.name}/{ws.title}: not RTL")
+            for row in ws.iter_rows():
+                for c in row:
+                    if c.value not in (None, "") and c.font.name != EXCEL_FONT:
+                        bad.append(f"{path.name}/{ws.title}!{c.coordinate} font {c.font.name}")
+        return bad[:5]
     for ws in wb.worksheets:
         if not ws.sheet_view.rightToLeft:
             bad.append(f"{path.name}/{ws.title}: not RTL")
