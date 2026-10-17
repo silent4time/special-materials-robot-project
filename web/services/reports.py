@@ -45,6 +45,7 @@ def _df_rows(df: pd.DataFrame | None, cols: list[str]) -> list[dict[str, Any]]:
 _STEM_FA = {
     "remaining_critical": ("پوشش کوتاه‌مدت موجودی سایت", True),
     "surplus": ("گزارش مواد مازاد", True),
+    "daily_rates": ("مصرف روزانه مواد", True),
     "user_activity": ("گزارش فعالیت کاربران", True),
     "critical_items": ("لیست اقلام بحرانی", False),  # the report appends its own date
 }
@@ -361,3 +362,36 @@ def generate_critical_items_files(
 
         logger.exception("critical items web failed")
         return CriticalItemsResult(error=user_errors.error_fa("خطا در تولید گزارش اقلام بحرانی", exc))
+
+
+def generate_daily_files(
+    db: Database, user: dict[str, Any], *, days: int = 30, section: str = ""
+) -> tuple[Path | None, Path | None, str | None]:
+    """«📈 مصرف روزانه مواد» — same data/columns/basis as the bot (_run_daily_report)."""
+    from services import comprehensive_report as comprehensive_svc
+
+    frames = comprehensive_svc.section_frames(load_frames(db, user), section or None)
+    if frames.get("tank_consumption") is None and frames.get("monthly_consumption") is None:
+        return None, None, "داده‌ای نیست: ابتدا موجودی روزانه سایت یا فایل مصرف ماهیانه را ثبت کنید."
+    end = date.today()
+    start = end - timedelta(days=max(0, days - 1))
+    rates = daily_rates(frames.get("tank_consumption"), frames.get("monthly_consumption"), start=start, end=end)
+    range_label = f"{days} روز اخیر"
+    sec_label = comprehensive_svc.section_label(section or None)
+    if rates is None or rates.empty:
+        return None, None, f"در بازهٔ {range_label} داده‌ای برای این گزارش نیست."
+    cols = ["material_name", "tundish_type", "tundish_id", "avg_daily", "total_qty", "days_span", "unit", "source"]
+    title = f"مصرف روزانه مواد — {range_label} — {sec_label}"
+    subtitle = (
+        f"بخش: {sec_label} | مبنا: میانگین مصرف روزانه هر ماده/تاندیش = مصرف ثبت‌شده در {range_label} ÷ "
+        "تعداد روزهای دارای داده (موجودی روزانه سایت و مصرف ماهیانه)"
+    )
+    rows = _df_rows(rates, cols)
+    stem = _stamp_stem("daily_rates")
+    pdf_path = REPORT_DIR / f"{stem}.pdf"
+    xlsx_path = REPORT_DIR / f"{stem}.xlsx"
+    kw = dict(title=title, subtitle=subtitle, columns=cols, rows=rows,
+              empty_message="در این بازه داده‌ای برای این گزارش نیست.", filename_stem="daily_rates")
+    generate_simple_report_pdf(output_path=pdf_path, letterhead_path=letterhead_path(db), **kw)
+    generate_simple_report_xlsx(output_path=xlsx_path, **kw)
+    return pdf_path, xlsx_path, None

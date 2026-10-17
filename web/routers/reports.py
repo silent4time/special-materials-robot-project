@@ -252,6 +252,34 @@ async def remaining_critical_xlsx(
     return FileResponse(path, media_type=_XLSX, filename=path.name)
 
 
+@router.get("/daily")
+async def daily_pdf(
+    days: int = 30,
+    section: str = "",
+    user=Depends(require_feature(perm.REPORT_DAILY)),
+    db: Database = Depends(get_db),
+):
+    path, _x, err = report_svc.generate_daily_files(db, user, days=max(1, min(days, 365)), section=section)
+    if err or not path:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#daily", status_code=303)
+    log_activity(db, user, "report_daily")
+    return FileResponse(path, media_type="application/pdf", filename=path.name)
+
+
+@router.get("/daily.xlsx")
+async def daily_xlsx(
+    days: int = 30,
+    section: str = "",
+    user=Depends(require_feature(perm.REPORT_DAILY)),
+    db: Database = Depends(get_db),
+):
+    _p, path, err = report_svc.generate_daily_files(db, user, days=max(1, min(days, 365)), section=section)
+    if err or not path:
+        return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#daily", status_code=303)
+    log_activity(db, user, "report_daily")
+    return FileResponse(path, media_type=_XLSX, filename=path.name)
+
+
 @router.get("/surplus")
 async def surplus(
     user=Depends(require_feature(perm.REPORT_SURPLUS)),

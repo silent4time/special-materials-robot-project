@@ -54,6 +54,8 @@ def _main_source_context(
         "is_approver": msa.is_approver(user),
         "pending_requests": msa.list_pending(db) if msa.is_approver(user) else [],
         "needs_approval": msa.needs_approval(user),
+        "category_codes": db.list_category_codes(active_only=True),
+        "can_edit": perm.can(user, perm.MAIN_SOURCE_EDIT),
     }
 
 
@@ -188,7 +190,7 @@ async def main_source_add(
             for key in main_source_svc.INVENTORY_COLUMNS
         }
         if not record.get("priority"):
-            record["priority"] = "1"
+            raise ValueError("اولویت الزامی است؛ مقدار اولویت را تعیین کنید.")
         overwrite = str(form.get("overwrite") or "").strip() in {"1", "on", "true", "yes"}
         if msa.needs_approval(user):
             if not overwrite:
@@ -256,74 +258,84 @@ async def main_source_upload(
     db: Database = Depends(get_db),
     file: UploadFile = File(...),
 ):
-    error = None
-    message = None
-    try:
-        suffix = Path(file.filename or "upload.xlsx").suffix.lower() or ".xlsx"
-        if suffix not in {".xlsx", ".xlsm"}:
-            raise ValueError("فقط فایل Excel با پسوند .xlsx پذیرفته می‌شود.")
-        allowlist = db.active_category_code_set()
-        if not allowlist:
-            raise ValueError(
-                "لیست کدهای دسته‌بندی خالی است. ابتدا از ربات کد دسته اضافه کنید."
-            )
-        old = main_source_svc.load_primary_frame(db, bale_user_id=user["bale_user_id"])
-        with tempfile.TemporaryDirectory() as tmp:
-            raw_path = Path(tmp) / f"product_inventory{suffix}"
-            content = await file.read()
-            raw_path.write_bytes(content)
-            # Peek / normalize so FA headers (محل استفاده) map correctly
-            _ = load_excel(raw_path, strict_tundish=False)
-            result = extract_and_save_clean(
-                raw_path,
-                "product_inventory",
-                category_allowlist=allowlist,
-                clean_dir=Path(tmp) / "cleaned",
-            )
-            new_df = pd.read_excel(result.clean_path, engine="openpyxl")
-            # Authorized (require_catalog_admin) full-source upload: new 4-digit codes
-            # and new کد 1800 rows are added (t215u, same shared rule as bot).
-            new_df, skipped = main_source_svc.filter_inventory_upload(
-                old, new_df, allow_new_codes=True
-            )
-            if old is not None and not old.empty:
-                merged = merge_clean_frames(old, new_df, "product_inventory")
-            else:
-                merged = new_df
-            if main_source_svc.rates_wiped(old, merged):
-                raise ValueError(main_source_svc.RATES_WIPED_FA)
-            path = main_source_svc.persist_primary_frame(
-                db,
-                merged,
-                bale_user_id=user["bale_user_id"],
-                raw_path=raw_path,
-            )
-            # Keep a copy of raw under uploads for audit
-            try:
-                session = db.get_or_create_session(user["bale_user_id"])
-                audit = Path(path).parent.parent / "product_inventory_upload.xlsx"
-                shutil.copy2(raw_path, audit)
-            except Exception:
-                pass
-        log_activity(db, user, "web_upload_main_source")
-        from excel.id_parse import segment_mismatch_note_fa
+    """«📦 جایگزینی کامل منبع اصلی» — same shared pipeline as the bot (services.file_upload)."""
+    from web.routers.files import run_excel_upload
 
-        message = (
-            f"✅ فایل منبع اصلی دریافت و همسان‌سازی شد "
-            f"({int(len(merged))} ردیف)."
-            + segment_mismatch_note_fa(result.segment_mismatches)
-            + main_source_svc.skipped_rows_note_fa(skipped)
-        )
-    except (ExcelValidationError, ValueError, KeyError) as exc:
-        error = str(exc)
-    except Exception as exc:  # noqa: BLE001
-        error = user_errors.error_fa("آپلود ناموفق بود", exc)
+    out = await run_excel_upload(db, user, file, "product_inventory", origin="main_source")
     return render(
         request,
         "settings_main_source.html",
-        _main_source_context(db, user, message=message, error=error),
-        status_code=400 if error else 200,
+        _main_source_context(db, user, message=out.text if out.ok else None, error=None if out.ok else out.text),
+        status_code=200 if out.ok else 400,
     )
+
+
+@router.get("/main-source/download.xlsx")
+async def main_source_download(
+    user=Depends(require_feature(perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT)),
+    db: Database = Depends(get_db),
+):
+    """«📄 دانلود اکسل منبع اصلی» — same export as the bot."""
+    from fastapi.responses import FileResponse, RedirectResponse
+
+    from analytics.frames import load_primary_inventory
+    from config import REPORT_DIR
+    from excel.simple_report import export_dataframe_xlsx
+    from services.file_names import fa_stem, unique_dir
+
+    frame = load_primary_inventory(db, user)
+    if frame is None or frame.empty:
+        return RedirectResponse("/settings/main-source", status_code=303)
+    out = unique_dir(REPORT_DIR, "main_source") / f"{fa_stem('منبع اصلی')}.xlsx"
+    export_dataframe_xlsx(frame, out, columns=list(main_source_svc.INVENTORY_COLUMNS),
+                          header_map=main_source_svc.FIELD_LABELS_FA, sheet_name="ریز اطلاعات")
+    log_activity(db, user, "download_main_source")
+    return FileResponse(out, filename=out.name,
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@router.get("/main-source/sibling-defaults")
+async def main_source_sibling_defaults(
+    code: str = "",
+    item_id: str = "",
+    user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
+    db: Database = Depends(get_db),
+):
+    """JSON for the add-record form: values shared by ALL rows of the 4-digit code (same rule as bot)."""
+    from fastapi.responses import JSONResponse
+
+    from excel.id_parse import contractor_or_company_for_id
+
+    frame = main_source_svc.load_primary_frame(db, bale_user_id=user["bale_user_id"])
+    prefill, differing = main_source_svc.sibling_defaults(frame, code)
+    prefill = {k: (v.item() if hasattr(v, "item") else v) for k, v in prefill.items()}
+    contractor = contractor_or_company_for_id(item_id) if item_id.strip() else ""
+    return JSONResponse({
+        "code": code, "known": code.strip() in db.active_category_code_set(),
+        "prefill": prefill, "differing": differing,
+        "differing_fa": [main_source_svc.FIELD_LABELS_FA.get(c, c) for c in differing],
+        "contractor_or_company": contractor,
+    })
+
+
+@router.post("/main-source/categories/add")
+async def main_source_category_add(
+    request: Request,
+    user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
+    db: Database = Depends(get_db),
+):
+    """«➕ افزودن کد دسته» (same db.add_category_code as bot)."""
+    form = await request.form()
+    try:
+        row = db.add_category_code(str(form.get("code") or "").strip(),
+                                   label=str(form.get("label") or "").strip() or None,
+                                   created_by=user["bale_user_id"])
+        log_activity(db, user, "add_category_code", code=row.get("code"))
+        msg, err = f"✅ کد دسته «{row.get('code')}» ثبت شد.", None
+    except (ValueError, KeyError) as exc:
+        msg, err = None, str(exc)
+    return render(request, "settings_main_source.html", _main_source_context(db, user, message=msg, error=err),
+                  status_code=400 if err else 200)
 
 
 # ---------------------------------------------------------------- یادآور گزارش‌های الزامی
