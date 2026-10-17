@@ -886,11 +886,17 @@ def merge_stock_update(
             info["updated"] += 1
         else:
             rec = {c: (row.get(c) if c in new.columns else None) for c in out.columns}
+            pre, diff = sibling_defaults(old, row.get("category_code"))
+            for col, val in pre.items():
+                if _blank(rec.get(col)):
+                    rec[col] = val
             added_rows.append(rec)
             info["added"].append({
                 "id": _cell_str(row.get("id")),
                 "category_code": _norm_code4(row.get("category_code")),
                 "product_name": _cell_str(row.get("product_name")),
+                "prefilled": sorted(pre),
+                "differing": diff,
             })
     if added_rows:
         out = pd.concat([out, pd.DataFrame(added_rows, columns=out.columns)], ignore_index=True)
@@ -932,11 +938,51 @@ def stock_update_note_fa(info: dict[str, Any], *, limit: int = 15) -> str:
     added = info.get("added") or []
     if added:
         lines.append(
-            f"➕ {len(added)} شناسهٔ جدید (با کد ۴ رقمی موجود) اضافه شد — نرخ مصرف، واحد و "
-            "نقطه بحرانی این‌ها خالی است؛ از «📦 منبع اصلی ← ✏️ ویرایش رکورد» تکمیل کنید:"
+            f"➕ {len(added)} شناسهٔ جدید (با کد ۴ رقمی موجود) اضافه شد. ستون‌هایی که در همهٔ "
+            "ردیف‌های همان کد یکسان بود کپی شد؛ ستون‌های متفاوت خالی ماند. تأمین‌کننده از شناسه "
+            "تعیین شد. «اولویت» را حتماً تنظیم کنید (پیش‌فرض ۱). تکمیل از «📦 منبع اصلی ← ✏️ ویرایش رکورد»:"
         )
         for a in added[:limit]:
-            lines.append(f"• {a['id']} ({a['category_code']}) {a['product_name']}")
+            lab = lambda cols: "، ".join(FIELD_LABELS_FA.get(c, c) for c in cols)  # noqa: E731
+            line = f"• {a['id']} ({a['category_code']}) {a['product_name']}"
+            if a.get("differing"):
+                line += f"\n   خالی (متفاوت بین هم‌کدها): {lab(a['differing'])}"
+            if a.get("prefilled"):
+                line += f"\n   کپی‌شده: {lab(a['prefilled'])}"
+            lines.append(line)
         if len(added) > limit:
             lines.append(f"… و {len(added) - limit} مورد دیگر")
     return "\n".join(lines)
+
+
+# ---- sibling prefill for new ids (1405/07/25) ----
+NO_PREFILL_COLS = frozenset({"id", "product_name", "quantity", "priority", "contractor_or_company", "category_code"})
+
+
+def sibling_defaults(df: pd.DataFrame | None, code: object) -> tuple[dict[str, Any], list[str]]:
+    """Values shared by ALL منبع اصلی rows of a 4-digit code → (prefill, differing cols).
+
+    A column is prefilled only when every sibling row has the same non-blank value.
+    If siblings disagree (blank vs filled counts as disagreement) the column is listed
+    in ``differing``; all-blank columns are neither prefilled nor listed.
+    """
+    c4 = _norm_code4(code)
+    if df is None or df.empty or not c4 or "category_code" not in df.columns:
+        return {}, []
+    sib = df[df["category_code"].map(_norm_code4) == c4]
+    if sib.empty:
+        return {}, []
+    values: dict[str, Any] = {}
+    differing: list[str] = []
+    for col in INVENTORY_COLUMNS:
+        if col in NO_PREFILL_COLS or col not in sib.columns:
+            continue
+        cells = ["" if _blank(v) else _cell_str(v) for v in sib[col]]
+        uniq = set(cells)
+        if uniq == {""}:
+            continue
+        if len(uniq) == 1:
+            values[col] = sib[col].iloc[0]
+        else:
+            differing.append(col)
+    return values, differing

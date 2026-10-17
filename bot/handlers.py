@@ -2619,6 +2619,9 @@ class BotApp:
                 return True
             field = fields[idx]
             raw = text.strip()
+            suggest = dict(pending.get("suggest") or {})
+            if raw == "+" and field in suggest:
+                raw = main_source_svc._cell_str(suggest[field])
             if raw == "-":
                 raw = ""
             if field in {"id", "category_code", "product_name", "quantity"} and not raw:
@@ -2631,6 +2634,13 @@ class BotApp:
                 return True
             draft[field] = raw
             idx += 1
+            if field == "category_code":
+                # suggestion only: values shared by ALL rows of this code (editable, «+» accepts)
+                try:
+                    frame0 = main_source_svc.load_primary_frame(self.db, bale_user_id=uid)
+                    pending["suggest"] = main_source_svc.sibling_defaults(frame0, raw)[0]
+                except Exception:  # noqa: BLE001
+                    pending["suggest"] = {}
             if idx >= len(fields) and msa.needs_approval(user):
                 frame = main_source_svc.load_primary_frame(self.db, bale_user_id=uid)
                 exists = frame is not None and main_source_svc.find_row_by_id(frame, draft.get("id"))[0] is not None
@@ -2707,6 +2717,14 @@ class BotApp:
                 if nxt in {"id", "category_code", "product_name", "quantity"}
                 else " (اختیاری — با «-» رد کنید)"
             )
+            sug = (pending.get("suggest") or {}).get(nxt)
+            if sug is not None and str(sug).strip():
+                optional += (
+                    f"\nپیشنهاد (یکسان در همهٔ ردیف‌های این کد): {main_source_svc._cell_str(sug)} — "
+                    "برای پذیرش «+» بفرستید یا مقدار دیگری وارد کنید."
+                )
+            if nxt == "priority":
+                optional += "\n«اولویت» را حتماً تعیین کنید (خالی = ۱)."
             self._reply(
                 message,
                 f"مقدار «{label}»{main_source_svc.FIELD_HINTS_FA.get(nxt, '')}{optional} را بفرستید.",

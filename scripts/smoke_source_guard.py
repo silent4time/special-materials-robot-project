@@ -114,7 +114,7 @@ def main() -> int:
             got = live.at[iid, col]
             same = (float(got) == float(val)) if isinstance(val, (int, float)) else str(got) == str(val)
             assert same, (iid, col, got, val)
-    assert NEW_OK in live.index and pd.isna(live.at[NEW_OK, "slab_renovation"])
+    assert NEW_OK in live.index and float(live.at[NEW_OK, "slab_renovation"]) == 3  # uniform 1203 siblings → copied
     assert NEW_UNK not in live.index and NEW_1800 not in live.index
     assert "➕ 1 شناسهٔ جدید" in all_text and NEW_OK in all_text, all_text
     assert "⛔" in all_text or "کد ۴ رقمی در منبع اصلی نیست" in all_text, all_text
@@ -163,6 +163,48 @@ def main() -> int:
     n_req = len(msa.list_pending(db))
     assert msa.is_approver(db.get_user("901")) and len(msa.list_pending(db)) == n_req
     assert kb.BTN_INV_ADD_RECORD
+    # 6) sibling prefill for new ids (uniform code → copied; mixed code → empty + listed)
+    from excel.id_parse import apply_id_segment_rule
+
+    base = dict(work_order="", keyword="آجر", origin="داخلی", shared="خیر", critical_point=10, unit="No",
+                casting_floor=0, billet_renovation=1, billet_patching=2, bloom_renovation=3, bloom_patching=4,
+                slab_renovation=5, slab_patching=6, rate_group="", usage_location="اسلب")
+    old6 = pd.DataFrame([
+        dict(category_code="1603", id="378160310001A", product_name="u1", quantity=1, priority=2, **base),
+        dict(category_code="1603", id="378160310002B", product_name="u2", quantity=2, priority=3, **base),
+        dict(category_code="1203", id="378120310001C", product_name="m1", quantity=1, priority=1,
+             **dict(base, unit="Kg", slab_renovation=9, keyword="بتن")),
+        dict(category_code="1203", id="378120310002D", product_name="m2", quantity=1, priority=1,
+             **dict(base, unit="No", critical_point=None)),
+    ])
+    new6 = pd.DataFrame([
+        dict(category_code="1603", id="378700001603E", product_name="جدید یکسان", quantity=7),
+        dict(category_code="1203", id="378120319999F", product_name="جدید مختلط", quantity=8),
+    ])
+    m6, info6 = ms.merge_stock_update(old6, new6)
+    m6, _ = apply_id_segment_rule(m6)
+    m6 = m6.set_index("id")
+    u = m6.loc["378700001603E"]
+    for col, val in base.items():
+        if str(val) == "":
+            continue
+        got = u[col]
+        assert (float(got) == float(val)) if isinstance(val, (int, float)) else str(got) == str(val), (col, got)
+    assert float(u["quantity"]) == 7 and u["product_name"] == "جدید یکسان"
+    assert u["contractor_or_company"] == "پیمانکار", u["contractor_or_company"]  # 2nd group 0000
+    mx = m6.loc["378120319999F"]
+    assert mx["contractor_or_company"] == "شرکت"
+    for col in ("unit", "slab_renovation", "keyword", "critical_point"):
+        assert pd.isna(mx[col]) or str(mx[col]).strip() == "", (col, mx[col])
+    assert float(mx["bloom_patching"]) == 4 and mx["origin"] == "داخلی"  # shared values still copied
+    add_mx = [a for a in info6["added"] if a["id"] == "378120319999F"][0]
+    assert {"unit", "slab_renovation", "keyword", "critical_point"} <= set(add_mx["differing"]), add_mx
+    note = ms.stock_update_note_fa(info6)
+    assert "خالی (متفاوت بین هم‌کدها)" in note and "واحد" in note and "اولویت" in note, note
+    assert "priority" not in add_mx["prefilled"] and "product_name" not in add_mx["prefilled"]
+    pre, diff = ms.sibling_defaults(old6, "1603")
+    assert pre.get("unit") == "No" and not diff
+
     print("smoke_source_guard OK")
     return 0
 
