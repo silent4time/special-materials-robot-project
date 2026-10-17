@@ -311,3 +311,8 @@ def matrix_text_fa() -> str:
         extra = f" ({LOCKED_ADMIN_ONLY_NOTE_FA})" if f in LOCKED_ADMIN_ONLY else ""
         lines.append(f"• {FEATURE_LABEL_FA.get(f, f)}: {'، '.join(roles) or '—'}{extra}")
     return "\n".join(lines)
+
+
+def is_owner(user: dict | None) -> bool:
+    """Owner-only features (e.g. 🤖 دستیار هوشمند صوتی) — not editable per role."""
+    return bool(user and user.get("active", 1) and user.get("role") == OWNER)
