@@ -46,6 +46,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/silent4time/special-material
 | `bash install.sh --restore FILE.zip` | بازگردانی بک‌آپ روی سرور: توقف سرویس‌ها ← بک‌آپ «پیش از بازگردانی» ← بررسی manifest/sha256 ← بازگردانی ← migrate ← استارت ← تست سلامت |
 | `… --dry-run` | فقط چاپ دستورها، بدون تغییر |
 
+**سرور بدون دسترسی به GitHub/PyPI (مثلاً داخل ایران):** بستهٔ آفلاین با `bash scripts/build_offline_bundle.sh` بسازید و روی سرور `bash install_offline.sh` اجرا کنید؛ جزئیات در DEPLOY.md «نصب آفلاین».
+
 نصب‌کننده برای هر مرحله نوار پیشرفت (`[n/کل] ٪ ███░░`) نشان می‌دهد و خروجی کامل را در `data/logs/nasoz_install_<تاریخ>.log` نگه می‌دارد؛ در خطا مرحله و مسیر لاگ گفته می‌شود.
 
 ### 💾 بک‌آپ و بازگردانی

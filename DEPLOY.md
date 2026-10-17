@@ -54,6 +54,25 @@ bash install.sh
 ### نوار پیشرفت و لاگ نصب
 هر مرحله با سرخطی مثل `[۴/۱۱] ۳۶٪ ███░░░░░░░ محیط پایتون و وابستگی‌ها...` نمایش داده می‌شود. خروجی کامل apt/pip در `data/logs/nasoz_install_<تاریخ>.log` است (پیش از مشخص شدن پوشه، موقتاً در `/tmp`). در خطا، مرحلهٔ ناموفق، ۱۵ خط آخر لاگ و مسیر لاگ چاپ می‌شود و اجرای دوباره امن است. بدون ترمینال یا با `NO_COLOR=1` خروجی ساده و بی‌رنگ است.
 
+## نصب آفلاین (سرور بدون دسترسی به GitHub/PyPI)
+روی سیستمی که اینترنت آزاد دارد:
+```bash
+bash scripts/build_offline_bundle.sh          # → dist/nasoz_offline_<تاریخ>_<commit>.tar.gz
+```
+فایل را با WinSCP به `/root` سرور بفرستید. روی سرور (apt باید به یک mirror مثل ubuntu.parsvds.com برسد):
+```bash
+cd /root
+tar -xzf nasoz_offline_*.tar.gz
+cd nasoz_offline_*/
+bash install_offline.sh                        # نصب در /opt/nasoz (تغییر با INSTALL_DIR=/مسیر)
+```
+به‌روزرسانی با بستهٔ جدید (‎.env و data/ حفظ می‌شود، پیش از آن پشتیبان DB گرفته می‌شود):
+```bash
+tar -xzf nasoz_offline_<جدید>.tar.gz && cd nasoz_offline_<جدید>/ && bash install_offline.sh --update
+# یا: bash /opt/nasoz/scripts/install.sh --update --offline /root/nasoz_offline_<جدید>.tar.gz
+```
+در حالت آفلاین pip فقط از `wheels/` بسته نصب می‌کند (`--no-index`)، git pull انجام نمی‌شود و ارتقای سیستم‌عامل فقط با `--full-update` اجرا می‌شود. بازگردانی بک‌آپ (`--restore`) مثل قبل است. بستهٔ ساخته‌شده با `--with-debs` اگر apt به mirror نرسد tesseract و python3-venv را از ‎.deb های خودش نصب می‌کند.
+
 ## بعد از نصب
 
 1. در بله به ربات `/start` بزنید — اولین نفر **مالک** می‌شود (یا همان شناسهٔ سؤال ۳).

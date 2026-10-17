@@ -2,6 +2,11 @@
 
 ## ۱۴۰۵/۰۷/۲۵ (2026-10-17)
 
+### نصب آفلاین (بدون GitHub/PyPI)
+- `scripts/build_offline_bundle.sh` بستهٔ `dist/nasoz_offline_<تاریخ شمسی>_<commit>.tar.gz` می‌سازد: کد (git archive، بدون data/.env/uploads)، همهٔ wheel های Python برای Ubuntu 24.04 / Python 3.12 / x86_64، `install_offline.sh` و `SHA256SUMS`. گزینهٔ `--with-debs`: ‏.deb های tesseract و python3-venv/pip برای noble (فقط اگر apt به هیچ mirror نرسد).
+- `bash install_offline.sh` (نصب تازه با همان ویزارد، نوار پیشرفت، systemd و تست سلامت) و `bash install_offline.sh --update` / `bash install.sh --update --offline <بسته.tar.gz>` (پشتیبان DB، جایگزینی کد با حفظ ‎.env و data/، نصب wheel ها با `--no-index`، migrate، ری‌استارت).
+- در حالت آفلاین git pull و ارتقای سیستم‌عامل (مگر با پرچم) رد می‌شود؛ apt همچنان از mirror (مثلاً ایرانی) استفاده می‌شود و اگر نرسد و بسته .deb داشته باشد از آن نصب می‌کند.
+
 ### نوار پیشرفت نصب‌کننده
 - `scripts/install.sh` در همهٔ حالت‌ها (نصب، `--update`، `--full-update`، `--system-upgrade`، `--restore`، `--repair`، `--start`) سرخط مرحله نشان می‌دهد: `[۳/۱۰] ۳۰٪ ███░░░░░░░ نصب/بررسی بسته‌های سیستمی...`؛ تعداد مراحل برای هر حالت محاسبه می‌شود و پس از `git pull` شماره‌گذاری ادامه می‌یابد.
 - کارهای طولانی (apt، pip، venv، git pull، بازگردانی) با چرخندهٔ زمان‌دار اجرا و خروجی کامل در `data/logs/nasoz_install_<تاریخ>.log` ذخیره می‌شود؛ در خطا ۱۵ خط آخر لاگ، نام مرحلهٔ ناموفق و مسیر لاگ چاپ می‌شود.
