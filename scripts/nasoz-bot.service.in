@@ -1,16 +1,21 @@
 [Unit]
 Description=Bale tundish materials report bot (nasoz_bot)
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=__USER__
 WorkingDirectory=__WORKDIR__
-Environment=PATH=__WORKDIR__/.venv/bin
+Environment=PATH=__WORKDIR__/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-__WORKDIR__/.env
+# self-heal (as root): reinstall tesseract / rebuild venv if lost; never blocks start
+ExecStartPre=-+/bin/bash __WORKDIR__/scripts/preflight.sh
 ExecStart=__WORKDIR__/.venv/bin/python main.py
 Restart=always
 RestartSec=5
+TimeoutStartSec=900
 
 [Install]
 WantedBy=multi-user.target
