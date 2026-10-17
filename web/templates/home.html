@@ -22,6 +22,7 @@
     {% if can(user, "tundish_report_settings") %}<a href="/tundish-report/settings">🧾 اقلام فرم گزارش تاندیش</a>{% endif %}
     {% if can(user, "role_permissions") %}<a href="/settings/permissions">🔐 دسترسی نقش‌ها</a>{% endif %}
     {% if show_web_settings %}<a href="/settings/web-login">⚙️ تنظیم ورود وب</a>{% endif %}
+    {% if can(user, "backup") %}<a href="/settings/backups">💾 بک‌آپ</a>{% endif %}
     {% if can(user, "reminders") %}<a href="/settings/reminders">🔔 یادآورها</a>{% endif %}
     {% if can(user, "user_activity") %}<a href="/reports/user-activity">📋 فعالیت کاربران</a>{% endif %}
   </div>

@@ -64,6 +64,10 @@ BOT_TO_WEB = {
     "🖼 لوگوی ربات": "/settings/bot/asset/{which}",
     "📄 سربرگ PDF": "/settings/bot/asset/{which}",
     "🗑 حذف یک ماه از سابقه": "/reports/main-goal/months/delete",
+    "💾 بک‌آپ": "/settings/backups",
+    "💾 ساخت بک‌آپ کامل": "/settings/backups/create",
+    "📋 لیست بک‌آپ‌ها": "/settings/backups",
+    "♻️ بازگردانی از بک‌آپ": "/settings/backups/restore/upload",
 }
 BOT_ONLY: dict[str, str] = {}
 
@@ -96,6 +100,8 @@ WEB_ONLY = {
     "/reports/main-goal/download/{stem}.xlsx": "دانلود خروجی (ربات فایل را می‌فرستد)",
     "/settings/reminders/send-now": "ربات: «🔔 یادآورها» ← ارسال فوری",
     "/settings/permissions/reset": "ربات: «🔐 دسترسی نقش‌ها» ← بازنشانی",
+    "/settings/backups/file/{name}": "ربات: دکمهٔ ⬇️ هر ردیف در «📋 لیست بک‌آپ‌ها»",
+    "/settings/backups/restore/confirm": "ربات: دو تأیید inline پس از ارسال ZIP",
     "/tundish-report/settings/lines": "ربات: «🧾 اقلام فرم گزارش تاندیش»",
 }
 
@@ -148,12 +154,12 @@ def main() -> int:
     own, tech = TestClient(app), TestClient(app)
     assert own.post("/login", data={"username": "owner8801", "password": "secret88"}, follow_redirects=False).status_code in (302, 303)
     assert tech.post("/login", data={"username": "tech8802", "password": "secret88"}, follow_redirects=False).status_code in (302, 303)
-    for p in ("/files", "/settings/users", "/settings/bot", "/settings/main-source", "/reports"):
+    for p in ("/files", "/settings/users", "/settings/bot", "/settings/main-source", "/reports", "/settings/backups"):
         r = own.get(p)
         assert r.status_code == 200, (p, r.status_code, r.text[:300])
     assert "🤖 دستیار هوشمند صوتی" in own.get("/settings/bot").text
     assert "📈 مصرف روزانه مواد" in own.get("/reports").text
-    for p in ("/files", "/settings/users", "/settings/bot"):
+    for p in ("/files", "/settings/users", "/settings/bot", "/settings/backups"):
         r = tech.get(p, follow_redirects=False)
         assert r.status_code in (302, 303, 403), (p, r.status_code)
     j = own.get("/settings/main-source/sibling-defaults?code=1203&item_id=120300009002").json()
