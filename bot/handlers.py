@@ -47,6 +47,7 @@ from auth.rbac import (
 from bot import keyboards as kb
 from bot.activity import log_activity, resolve_display_name
 from services import main_source_approvals as msa
+from services import file_upload
 from bot.jalali import (
     TEHRAN,
     format_date,
@@ -1309,18 +1310,9 @@ class BotApp:
         return False
 
     def _can_deactivate_user(self, actor: dict, target_id: str) -> tuple[bool, str]:
-        tid = str(target_id).strip()
-        if tid == str(actor["bale_user_id"]):
-            return False, "نمی‌توانید خودتان را حذف کنید."
-        target = self.db.get_user(tid)
-        if not target or not target.get("active"):
-            return False, "کاربر فعال با این شناسه یافت نشد."
-        if target["role"] == "owner":
-            if not require_owner(actor):
-                return False, "فقط مالک می‌تواند مالک دیگر را حذف کند."
-            if self.db.count_active_owners() <= 1:
-                return False, "نمی‌توان آخرین مالک را حذف کرد."
-        return True, ""
+        from services import user_admin
+
+        return user_admin.can_deactivate(self.db, actor, target_id)
 
     def cmd_adduser(self, message: dict, args: list[str]) -> None:
         user = self._user_or_deny(message)
@@ -1539,288 +1531,23 @@ class BotApp:
             self._reply(message, user_errors.error_fa("دانلود فایل از بله ناموفق بود", exc))
             return
 
-        # If a «مصرف ماهیانه / مواد مصرفی» upload actually matches the
-        # منبع اصلی (product_inventory) cleaned format, treat it as a primary
-        # inventory refresh so warehouse master data stays current.
-        format_redirect_note = ""
-        if pending == "monthly_consumption":
-            try:
-                peek = load_excel(dest, strict_tundish=False)
-                if looks_like_product_inventory(peek):
-                    pending = "product_inventory"
-                    # Rename raw slot file to inventory name for clarity
-                    inv_dest = dest_dir / "product_inventory.xlsx"
-                    if dest.resolve() != inv_dest.resolve():
-                        dest.replace(inv_dest)
-                        dest = inv_dest
-                    format_redirect_note = (
-                        "\n(فایل با قالب منبع اصلی شناسایی شد — "
-                        "جدول اصلی موجودی به‌روز شد.)"
-                    )
-                    logger.info(
-                        "monthly/consumables upload redirected to product_inventory for user %s",
-                        user["bale_user_id"],
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("inventory-format peek failed: %s", exc)
-
-        allowlist = None
-        if pending == "product_inventory":
-            allowlist = self.db.active_category_code_set()
-            if not allowlist:
-                dest.unlink(missing_ok=True)
-                self._reply(
-                    message,
-                    "لیست کدهای دسته‌بندی خالی است.\n"
-                    f"ابتدا از «{kb.BTN_UPLOAD_MENU}» → «{kb.BTN_MAIN_SOURCE_FILE}» → «{kb.BTN_INV_ADD_CATEGORY}» "
-                    "حداقل یک کد ۴ رقمی ثبت کنید، سپس دوباره فایل را بفرستید.",
-                    self._keyboard_for_upload_return(user, default="main_source", consume=False),
-                )
-                return
-
-        # Snapshot previous clean DF before extract overwrites the same clean_path.
-        # For product_inventory also freeze the previous extract file so inbound
-        # delta can compare against a readable pre-upload baseline later.
-        slot_col = {
-            "tank_consumption": "tank_path",
-            "product_inventory": "inventory_path",
-            "monthly_consumption": "monthly_path",
-        }.get(pending)
-        previous_clean = Path(session[slot_col]) if slot_col and session.get(slot_col) else None
-        old_df = None
-        prev_kept = 0
-        if pending == "product_inventory":
-            latest_inv = self.db.get_latest_extracted_any("product_inventory")
-            if latest_inv and latest_inv.get("clean_path"):
-                latest_path = Path(latest_inv["clean_path"])
-                if latest_path.exists():
-                    try:
-                        snap_dir = latest_path.parent / "snapshots"
-                        snap_dir.mkdir(parents=True, exist_ok=True)
-                        snap_path = snap_dir / f"product_inventory_{latest_inv['id']}.xlsx"
-                        if not snap_path.exists():
-                            shutil.copy2(latest_path, snap_path)
-                        self.db.update_extracted_clean_path(
-                            int(latest_inv["id"]), str(snap_path)
-                        )
-                        previous_clean = snap_path
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(
-                            "could not preserve inventory snapshot: %s", exc
-                        )
-        if previous_clean is not None and previous_clean.exists():
-            try:
-                old_df = pd.read_excel(previous_clean, engine="openpyxl")
-                prev_kept = int(len(old_df))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("could not load previous clean for merge: %s", exc)
-                old_df = None
-                prev_kept = 0
-
-        try:
-            result = extract_and_save_clean(
-                dest, pending, category_allowlist=allowlist
-            )
-        except ExcelValidationError as exc:
-            dest.unlink(missing_ok=True)
-            if pending == "product_inventory":
-                menu = self._keyboard_for_upload_return(
-                    user, default="main_source", consume=False
-                )
+        out = file_upload.process_upload(
+            self.db, user, dest, pending, session=session, upload_origin=upload_origin,
+            actor_fa=self._format_actor(user),
+        )
+        if not out.ok:
+            if out.kind in {"no_codes"} or (out.kind == "extract" and out.pending == "product_inventory"):
+                menu = self._keyboard_for_upload_return(user, default="main_source", consume=False)
+            elif out.kind == "guard":
+                menu = self._keyboard_for_upload_return(user, default="upload")
             else:
                 menu = kb.cancel_pending_menu()
-            self._reply(message, str(exc), menu)
+            self._reply(message, out.text, menu)
             return
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("extract failed")
-            dest.unlink(missing_ok=True)
-            self._reply(message, user_errors.error_fa("استخراج داده از فایل ناموفق بود", exc), kb.cancel_pending_menu())
-            return
-
-        new_kept = int(result.kept_row_count)
-        merge_note = ""
-        stock_note = ""
-        source_guard_error = ""
-        skipped_note = ""
-        # t221u: «📥 موجودی انبار» (stock update) vs authorized full منبع اصلی upload.
-        # Only stock updates feed the inbound report / move its baseline.
-        full_source = (
-            pending == "product_inventory"
-            and upload_origin == "main_source"
-            and not format_redirect_note
-            and perm.can(user, perm.MAIN_SOURCE_EDIT)
-        )
-        is_stock_upload = pending == "product_inventory" and not full_source
-        uploaded_stock_df: pd.DataFrame | None = None
-        inbound_rejected: list[dict] = []
-        if is_stock_upload:
-            try:
-                uploaded_stock_df = pd.read_excel(result.clean_path, engine="openpyxl")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("could not read uploaded stock frame for inbound: %s", exc)
-        if old_df is not None and not old_df.empty:
-            try:
-                new_df = pd.read_excel(result.clean_path, engine="openpyxl")
-                if pending == "product_inventory":
-                    # منبع اصلی is the reference: a stock update never adds a new
-                    # 4-digit code nor a NEW 1800 row; an authorized full-source
-                    # upload may add both (shared rule in services.main_source).
-                    new_df, skipped = main_source_svc.filter_inventory_upload(
-                        old_df, new_df, allow_new_codes=full_source
-                    )
-                    skipped_note = main_source_svc.skipped_rows_note_fa(skipped)
-                    if is_stock_upload:
-                        inbound_rejected = list(skipped)
-                    if skipped:
-                        logger.info(
-                            "inventory upload: %d rows skipped (full_source=%s)",
-                            len(skipped), full_source,
-                        )
-                if is_stock_upload:
-                    merged, stock_info = main_source_svc.merge_stock_update(old_df, new_df)
-                    stock_note = main_source_svc.stock_update_note_fa(stock_info)
-                else:
-                    merged = merge_clean_frames(old_df, new_df, pending)
-                if pending == "product_inventory":
-                    from excel.id_parse import apply_id_segment_rule
-
-                    merged, _old_mism = apply_id_segment_rule(merged)
-                    if main_source_svc.rates_wiped(old_df, merged):
-                        source_guard_error = main_source_svc.RATES_WIPED_FA
-                        raise RuntimeError("rates would be wiped")
-                write_clean_excel(merged, result.clean_path, pending)
-                result.kept_row_count = int(len(merged))
-                merge_note = (
-                    f"\nهمسان‌سازی: قبلی {prev_kept} + جدید {new_kept} → نهایی {result.kept_row_count}."
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("merge clean frames failed: %s", exc)
-                if pending == "product_inventory":
-                    # never save an unmerged/damaging file over منبع اصلی
-                    if previous_clean is not None and latest_inv and latest_inv.get("clean_path"):
-                        orig = Path(str(latest_inv["clean_path"]))
-                        try:
-                            if Path(previous_clean).resolve() != orig.resolve():
-                                shutil.copy2(previous_clean, orig)
-                            self.db.update_extracted_clean_path(int(latest_inv["id"]), str(orig))
-                        except Exception:  # noqa: BLE001
-                            logger.exception("could not restore منبع اصلی after refused upload")
-                    self.db.set_pending_file_type(user["bale_user_id"], None)
-                    self._reply(
-                        message,
-                        source_guard_error
-                        or user_errors.error_fa("همسان‌سازی منبع اصلی ناموفق بود؛ چیزی ذخیره نشد", exc),
-                        self._keyboard_for_upload_return(user, default="upload"),
-                    )
-                    return
-                merge_note = "\n(" + user_errors.error_fa("همسان‌سازی انجام نشد", exc) + ")"
-
-        # Session slots point at CLEAN file so analytics/PDF use filtered data
-        session = self.db.store_file_slot(
-            user["bale_user_id"], pending, str(result.clean_path)
-        )
-        extract_id = self.db.save_extracted(
-            bale_user_id=user["bale_user_id"],
-            session_id=session["id"],
-            file_type=pending,
-            raw_path=str(result.raw_path),
-            clean_path=str(result.clean_path),
-            row_count=result.kept_row_count,
-            columns=result.columns,
-        )
-
-        catalog_note = ""
-        inbound_report = None
-        inbound_note = ""
-        if pending == "product_inventory":
-            # automatic catalog sync after every منبع اصلی change (names updated too)
-            from services.catalog_sync import note_fa as _cat_note, sync_after_change
-
-            catalog_note = _cat_note(sync_after_change(self.db, result.clean_path))
-            if is_stock_upload and uploaded_stock_df is not None:
-                try:
-                    live_after = pd.read_excel(result.clean_path, engine="openpyxl")
-                    inbound_report = inbound_svc.record_stock_upload(
-                        self.db,
-                        uploaded=uploaded_stock_df,
-                        live_before=old_df,
-                        live_after=live_after,
-                        rejected=inbound_rejected,
-                        bale_user_id=user["bale_user_id"],
-                        actor_display_name=resolve_display_name(user),
-                        extract_id=extract_id,
-                        raw_path=dest,
-                    )
-                    inbound_note = "\n\n" + inbound_svc.summary_text_fa(inbound_report)
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception("inbound report after stock upload failed")
-                    inbound_note = "\n(" + user_errors.error_fa("گزارش اقلام ورودی ساخته نشد", exc) + ")"
-            elif full_source:
-                inbound_note = (
-                    "\nآپلود کامل منبع اصلی — پایه «گزارش اقلام ورودی به انبار» تغییر نکرد."
-                )
-        elif pending == "monthly_consumption":
-            try:
-                monthly_clean = pd.read_excel(result.clean_path, engine="openpyxl")
-                usage_sync = main_source_svc.sync_usage_from_monthly(
-                    self.db,
-                    monthly_clean,
-                    bale_user_id=user["bale_user_id"],
-                )
-                if usage_sync.get("ok") and usage_sync.get("updated"):
-                    catalog_note += (
-                        f"\nمحل استفاده در منبع اصلی برای "
-                        f"{usage_sync.get('updated', 0)} قلم به‌روز شد "
-                        f"(از {usage_sync.get('mapped', 0)} نگاشت مصرف)."
-                    )
-                elif usage_sync.get("reason") == "no_inventory":
-                    catalog_note += (
-                        "\n(منبع اصلی برای پر کردن محل استفاده هنوز موجود نیست.)"
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("usage_location sync after monthly failed: %s", exc)
-
-        label = FILE_TYPES[pending]["label_fa"]
-        reasons = result.drop_reasons or {}
-        if pending == "product_inventory" and reasons:
-            dropped_note = (
-                f"\nحذف‌شده‌ها: دسته نامجاز={reasons.get('wrong_category', 0)}، "
-                f"شناسه نامعتبر={reasons.get('bad_id', 0)}، "
-                f"دسته خالی={reasons.get('bad_category', 0)}، "
-                f"موجودی نامعتبر={reasons.get('bad_quantity', 0)}"
-            )
-        elif result.dropped_row_count > 0:
-            dropped_note = f"\n({result.dropped_row_count} ردیف اضافی/نامعتبر حذف شد)"
-        else:
-            dropped_note = ""
-        if pending == "product_inventory":
-            from excel.id_parse import segment_mismatch_note_fa
-
-            dropped_note += segment_mismatch_note_fa(result.segment_mismatches)
-            dropped_note += skipped_note + stock_note
-        extra_cols_note = ""
-        if result.extra_columns_dropped:
-            extra_cols_note = "\nستون‌های اضافی کنار گذاشته شد."
         reply_menu = self._keyboard_for_upload_return(user, default="upload")
-        actor_line = f"ثبت‌کننده: {self._format_actor(user)}"
-        if pending == "product_inventory":
-            log_activity(self.db, user, "upload_product_inventory")
-        elif pending == "monthly_consumption":
-            log_activity(self.db, user, "upload_monthly_consumption")
-        self._reply(
-            message,
-            (
-                f"✅ فایل «{label}» دریافت شد.\n"
-                f"از {result.raw_row_count} ردیف خام، {new_kept} ردیف نگه داشته شد."
-                f"{merge_note}{dropped_note}{extra_cols_note}{catalog_note}{inbound_note}{format_redirect_note}\n"
-                f"نسخه تمیز ذخیره و در پایگاه‌داده ثبت شد.\n"
-                f"{actor_line}\n\n"
-            )
-            + self._status_text(session, user),
-            reply_menu,
-        )
-        if inbound_report and inbound_report.get("id"):
-            self._send_inbound_report_files(message, inbound_report)
+        self._reply(message, out.text + "\n\n" + self._status_text(out.session, user), reply_menu)
+        if out.inbound_report and out.inbound_report.get("id"):
+            self._send_inbound_report_files(message, out.inbound_report)
 
     # ---------- 📊 گزارش جامع (merged «گزارش کلی مواد» + «PDF کامل تحلیل») ----------
     def on_comprehensive_prompt(self, message: dict) -> None:
@@ -2432,6 +2159,24 @@ class BotApp:
             + ("" if sent else "\n⚠ مدیر/مالکی برای اطلاع‌رسانی یافت نشد."),
             kb.inventory_edit_menu(user),
         )
+
+    def on_main_source_pending_list(self, message: dict) -> None:
+        """Approval list (web parity: /settings/main-source pending card)."""
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if not msa.is_approver(user):
+            self._reply(message, "فقط مالک یا مدیر (با مجوز منبع اصلی) درخواست‌ها را بررسی می‌کند.",
+                        kb.main_source_file_menu(user))
+            return
+        pending = msa.list_pending(self.db)
+        if not pending:
+            self._reply(message, "درخواستی در انتظار تأیید نیست.", kb.main_source_file_menu(user))
+            return
+        for req in pending[:20]:
+            self.client.send_message(self._chat_id(message), msa.request_text_fa(req),
+                                     reply_markup=msa.inline_markup(req["id"]))
+        self._reply(message, f"{len(pending)} درخواست در انتظار تأیید.", kb.main_source_file_menu(user))
 
     def _on_main_source_request_callback(self, data: str, message: dict, user: dict, answer) -> None:
         try:
@@ -6665,6 +6410,7 @@ class BotApp:
             kb.BTN_INV_ADD_RECORD: self.on_inv_add_record_start,
             kb.BTN_INV_ADD_CATEGORY: self.on_add_category_prompt,
             kb.BTN_INV_LIST_CATEGORIES: self.on_list_categories,
+            kb.BTN_MS_PENDING: self.on_main_source_pending_list,
             kb.BTN_INV_DOWNLOAD: self.on_inv_download,
             kb.BTN_WAREHOUSE_STOCK: lambda m: self.on_pick_file_type(m, "product_inventory", return_menu="upload"),
             kb.BTN_MONTHLY: lambda m: self.on_pick_file_type(m, "monthly_consumption", return_menu="upload"),

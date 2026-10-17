@@ -551,6 +551,9 @@ def upload_files_menu(user: dict | None = None) -> dict:
 file_entry_menu = upload_files_menu
 
 
+BTN_MS_PENDING = "📝 درخواست‌های در انتظار تأیید"
+
+
 def main_source_file_menu(user: dict | None = None) -> dict:
     """«📦 منبع اصلی»: full replace / download / record + code edits.
 
@@ -562,6 +565,8 @@ def main_source_file_menu(user: dict | None = None) -> dict:
             [BTN_INV_ADD_RECORD, BTN_INV_EDIT_RECORD],
             [BTN_INV_ADD_CATEGORY, BTN_INV_LIST_CATEGORIES],
         ]
+        if user is not None and user.get("role") in perm.ADMINS:
+            rows.append([BTN_MS_PENDING])
     else:
         rows = [[BTN_INV_DOWNLOAD, BTN_INV_LIST_CATEGORIES]]
     return _kb(rows, "main_source")
@@ -1158,6 +1163,7 @@ def _button_features() -> dict[str, tuple[str, ...]]:
         BTN_INV_LIST_CATEGORIES: (P.FILE_INPUTS, P.MAIN_SOURCE_EDIT),
         BTN_FULL_REPLACE: (P.MAIN_SOURCE_EDIT,),
         BTN_INV_ADD_RECORD: (P.MAIN_SOURCE_EDIT,),
+        BTN_MS_PENDING: (P.MAIN_SOURCE_EDIT,),
         BTN_INV_EDIT_RECORD: (P.MAIN_SOURCE_EDIT,),
         BTN_INV_ADD_CATEGORY: (P.MAIN_SOURCE_EDIT,),
         BTN_USERS: (P.USERS,),
