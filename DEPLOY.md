@@ -1,23 +1,22 @@
 # استقرار بازو روی سرور
 
-ربات برای کار دائمی باید روی یک سرور لینوکس همیشه روشن (VPS، Ubuntu/Debian) با **Python 3.10+** اجرا شود.
+ربات + پنل وب روی یک سرور لینوکس همیشه روشن اجرا می‌شوند. تست‌شده برای **Ubuntu 22.04 / 24.04** و **Debian 12** (Python 3.10+). دسترسی **root یا sudo** لازم است (نصب بسته‌ها و سرویس systemd).
 
-## نصب سریع (پیشنهادی)
+## نصب یک‌خطی (پیشنهادی)
 
-یک دستور از ریشهٔ ریپو (بعد از کلون، یا از raw روی GitHub):
+در یک ترمینال SSH واقعی:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh)
+```
+
+شکل `curl … | bash` هم کار می‌کند (ورودی ویزارد از `/dev/tty` خوانده می‌شود):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash
 ```
 
-اگر نصب از طریق `curl | bash` باشد (بدون TTY)، بعداً در ترمینال واقعی ویزارد توکن و نام کاربری ربات را اجرا کنید:
-
-```bash
-cd special-materials-robot-project
-bash install.sh
-```
-
-یا به‌صورت دستی:
+یا دستی:
 
 ```bash
 git clone https://github.com/silent4time/special-materials-robot-project.git
@@ -25,88 +24,86 @@ cd special-materials-robot-project
 bash install.sh
 ```
 
-اسکریپت `install.sh` (و `scripts/install.sh`) روی سرور تازه‌کار:
+ریپو در `./special-materials-robot-project` (یا `INSTALL_DIR=/opt/nasoz`) کلون می‌شود.
 
-1. نسخهٔ Python را چک می‌کند (≥ 3.10)
-2. در صورت نیاز `python3-venv` و `git` را با apt نصب می‌کند
-3. در صورت نبود ریپو، کلون می‌کند (یا از `INSTALL_DIR` / cwd استفاده می‌کند)
-4. `.venv` می‌سازد و `requirements.txt` را نصب می‌کند
-5. اگر `.env` پیکربندی نشده باشد و stdin یک TTY باشد، **ویزارد فارسی** توکن، نام کاربری ربات و تنظیمات را می‌پرسد و `.env` می‌نویسد
-6. مالک را لازم نیست از قبل بدانید: **اولین `/start` در بله → نقش مالک**
+## نصب‌کننده چه می‌کند
 
-پرچم‌های مفید:
+1. بسته‌های سیستم: `python3 python3-venv python3-pip git curl tesseract-ocr tesseract-ocr-fas tesseract-ocr-eng sqlite3 fontconfig` (فونت Vazirmatn داخل `fonts/` است)
+2. **ویزارد فارسی** (قبل از نصب‌های طولانی) و نوشتن `.env` با `chmod 600`
+3. `.venv` + `pip install -r requirements.txt` + تست import ماژول‌ها + ساخت/مهاجرت دیتابیس و پوشه‌های `data/ uploads/ reports/`
+4. دو سرویس systemd: **`nasoz-bot`** (ربات) و **`nasoz-web`** (پنل وب) با `Restart=always`، فعال در بوت (در root/sudo پیش‌فرض بله). بدون systemd با `nohup` اجرا می‌شود.
+5. تست سلامت: `getMe`، زنده بودن ربات، پاسخ `200` از `/login` پنل وب؛ و خلاصهٔ فارسی (آدرس وب، دستورات سرویس)
 
-| پرچم | کار |
+### سؤال‌های ویزارد
+
+| # | سؤال | پیش‌فرض |
+|---|------|---------|
+| ۱ | توکن بازو از `@botfather` (مخفی تایپ می‌شود؛ با `getMe` روی `tapi.bale.ai` بررسی می‌شود) | — (الزامی) |
+| ۲ | نام کاربری ربات (بدون @) | از `getMe` |
+| ۳ | شناسه عددی مالک در بله | خالی = اولین `/start` مالک می‌شود |
+| ۴ | پورت پنل وب | `8000` |
+| ۵ | آدرس گوش‌دادن وب | `0.0.0.0` (پشت nginx: `127.0.0.1`) |
+| ۶ | نام کاربری ورود وب | `admin` |
+| ۷ | رمز ورود وب (مخفی) | ساخت خودکار |
+| ۸ | `CRITICAL_DAYS` | `3` |
+| ۹ | نصب سرویس systemd | بله (اگر root/sudo و systemd باشد) |
+| ۱۰ | دستیار هوشمند Ollama | خیر |
+
+`WEB_SECRET_KEY` خودکار ساخته می‌شود. اجرای دوباره، مقادیر فعلی را پیش‌فرض می‌گذارد و `.env` و `data/` را دست نمی‌زند.
+
+## بعد از نصب
+
+1. در بله به ربات `/start` بزنید — اولین نفر **مالک** می‌شود (یا همان شناسهٔ سؤال ۳).
+2. فعال‌کردن ورود پنل وب برای مالک (اگر شناسه مالک را در ویزارد نداده‌اید):
+   ```bash
+   cd special-materials-robot-project && bash install.sh --web-login
+   ```
+   نام کاربری/رمز: `grep WEB_ADMIN_ .env`
+3. پنل: `http://IP-سرور:8000/login` — اگر فایروال فعال است: `sudo ufw allow 8000/tcp` (و در پنل ابری، پورت را باز کنید).
+
+## دستورات
+
+| دستور | کار |
 |------|-----|
-| `--seed-admin` | اختیاری؛ مالک با اولین `/start` ساخته می‌شود (`scripts/seed_admin.py` اگر `ADMIN_BALE_USER_ID` ست باشد) |
-| `--systemd` | نصب unit از `scripts/nasoz-bot.service.in` |
-| `--start` | شروع سرویس systemd یا اجرای foreground |
-| `--update` | `git pull` + pip + restart systemd |
-| `--with-assistant` | نصب **دستیار هوشمند**: Ollama + `ollama pull` مدل + نوشتن `OLLAMA_*` در `.env` (بدون پرسش) |
-| `--no-assistant` | رد نصب دستیار هوشمند (بدون پرسش) |
+| `bash install.sh --update` | `git pull` + بسته‌ها/venv (خودترمیم) + migrate + restart؛ `.env` و `data/` حفظ می‌شود |
+| `bash install.sh --repair` | نصب دوبارهٔ بسته‌های گم‌شده (tesseract، venv …) + restart |
+| `bash install.sh --reconfigure` | ویزارد دوباره |
+| `bash install.sh --web-login` | ساخت/بازنشانی ورود وب مالک از روی `.env` |
+| `bash install.sh --start` | استارت دوباره (مثلاً بعد از ریبوت در حالت nohup) |
+| `bash install.sh --dry-run` | فقط نمایش بسته‌ها و فایل‌های systemd، بدون تغییر |
+| `bash install.sh --with-assistant` | نصب دستیار هوشمند (Ollama) |
+| `sudo systemctl status nasoz-bot nasoz-web` | وضعیت |
+| `sudo systemctl restart nasoz-bot nasoz-web` | ری‌استارت |
+| `journalctl -u nasoz-bot -f` / `journalctl -u nasoz-web -f` | لاگ زنده |
 
-در حالت تعاملی (TTY) اگر هیچ‌کدام از دو پرچم بالا نباشد، اسکریپت می‌پرسد: **«دستیار هوشمند را هم نصب کنم؟ (Y/n)»** (پیش‌فرض بله).
+هر دو سرویس قبل از استارت `scripts/preflight.sh` را (به‌عنوان root) اجرا می‌کنند: اگر tesseract یا venv پاک شده باشد خودکار دوباره نصب می‌شود.
 
-مثال استقرار کامل (بعد از ویزارد، یا با پاسخ y به سوال systemd):
-
-```bash
-bash install.sh --systemd --start
-```
-
-به‌روزرسانی بعدی:
+## نصب خودکار (بدون پرسش)
 
 ```bash
-bash install.sh --update
+BALE_BOT_TOKEN='123456789:ABC...' WEB_PORT=8000 INSTALL_SYSTEMD=y NONINTERACTIVE=1 \
+  bash <(curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh)
 ```
 
-## توکن و مالک
+متغیرها: `BALE_BOT_TOKEN BOT_USERNAME ADMIN_BALE_USER_ID WEB_PORT WEB_HOST WEB_ADMIN_USERNAME WEB_ADMIN_PASSWORD CRITICAL_DAYS INSTALL_SYSTEMD=y|n INSTALL_DIR SERVICE_USER SKIP_GETME=1 SKIP_APT=1`.
 
-در ویزارد تعاملی:
+## عیب‌یابی
 
-1. **توکن بازو** (`BALE_BOT_TOKEN`) — الزامی؛ از `@botfather`
-2. **نام کاربری ربات در بله** بدون `@` — الزامی (برای لینک دعوت؛ از `getMe` پیشنهاد می‌شود)
-3. نصب/استارت systemd؟ (`y/N`)
-4. `CRITICAL_DAYS` — پیش‌فرض `3`
-
-`ADMIN_BALE_USER_ID` دیگر الزامی نیست. اگر خالی باشد، اولین کسی که در بله `/start` بزند مالک می‌شود.
-
-در حالت غیرتعاملی می‌توانید قبل از نصب ست کنید:
-
-```bash
-export BALE_BOT_TOKEN='123456789:ABC...'
-bash install.sh
-```
-
-## اجرای آزمایشی (بدون systemd)
-
-```bash
-source .venv/bin/activate
-python main.py
-```
-
-در بله به بازو پیام `/start` بدهید (اولین نفر = مالک). با `Ctrl+C` متوقف کنید.
-
-## systemd دستی
-
-اگر `--systemd` را نمی‌خواهید، قالب اینجاست:
-
-`scripts/nasoz-bot.service.in` با جای‌نگهدار `__WORKDIR__` و `__USER__`.
-
-```bash
-# بعد از جایگزینی مسیر/کاربر:
-sudo cp /tmp/nasoz-bot.service /etc/systemd/system/nasoz-bot.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now nasoz-bot
-sudo systemctl status nasoz-bot
-journalctl -u nasoz-bot -f
-```
+- **نصب چیزی نپرسید / ربات بالا نیامد** (نسخه‌های قبل از ۱۴۰۵/۰۷/۲۵): در `curl | bash` ورودی پایپ بود و ویزارد بی‌صدا رد می‌شد. نسخهٔ جدید از `/dev/tty` می‌پرسد و اگر هیچ ترمینالی نباشد با پیام واضح متوقف می‌شود. روی سرور قبلی کافی است:
+  ```bash
+  cd special-materials-robot-project && git pull && bash install.sh
+  ```
+- «ترمینال تعاملی پیدا نشد»: در SSH واقعی اجرا کنید (نه از cron/پنل وب‌هاست)، یا از متغیرهای نصب خودکار استفاده کنید.
+- getMe ناموفق: توکن را از `@botfather` دوباره کپی کنید؛ دسترسی سرور به `https://tapi.bale.ai` را با `curl -I https://tapi.bale.ai` چک کنید.
+- پنل وب باز نمی‌شود: `journalctl -u nasoz-web -n 50`، `tail data/web.log`، پورت در ufw/فایروال ابری باز باشد، `WEB_HOST=0.0.0.0`.
+- OCR عکس تولید کار نمی‌کند: `tesseract --list-langs` باید `fas` داشته باشد؛ `bash install.sh --repair`.
+- ربات پاسخ نمی‌دهد: `journalctl -u nasoz-bot -n 50` و `tail data/bot.log`؛ **فقط یک نمونه** با یک توکن (نسخهٔ قدیمی روی ماشین دیگر را خاموش کنید).
 
 ## نکات مهم
 
-- **فقط یک نمونه** از بازو با همان توکن باید long-poll کند؛ دو سرور همزمان با یک توکن تداخل می‌سازند.
-- قبل از روشن کردن سرور تولید، اجرای موقت روی ماشین توسعه / باکس موقت را **خاموش** کنید.
-- `.env` و دیتابیس `data/bot.db` را بکاپ بگیرید؛ توکن را در چت عمومی نفرستید.
-- فایروال مخصوص پورت لازم نیست؛ بازو با HTTPS به `tapi.bale.ai` وصل می‌شود (خروجی اینترنت کافی است).
+- **فقط یک نمونه** از بازو با همان توکن باید long-poll کند.
+- `.env` و `data/bot.db` را بکاپ بگیرید؛ توکن را جایی منتشر نکنید.
+- ربات فقط اینترنت خروجی به `tapi.bale.ai` لازم دارد؛ برای پنل وب پورت ورودی (پیش‌فرض 8000) باید باز باشد.
 
 ## نصب دستی (بدون install.sh)
 
@@ -173,7 +170,7 @@ ollama list
 curl -s http://127.0.0.1:11434/api/tags
 ```
 
-سپس ربات را روشن کنید (`python main.py` یا `bash install.sh --systemd --start`).
+سپس ربات را روشن کنید (`python main.py` یا `bash install.sh --start`).
 
 ### استفاده در بله
 

@@ -27,25 +27,16 @@
 
 ## نصب روی سرور
 
-برای استقرار روی VPS / سرور لینوکس، از اسکریپت یک‌مرحله‌ای استفاده کنید:
+روی Ubuntu 22.04/24.04 یا Debian 12، در یک ترمینال SSH (با root یا sudo):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash
-# سپس در ترمینال واقعی (ویزارد توکن و نام کاربری ربات):
-cd special-materials-robot-project && bash install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh)
 ```
 
-یا:
+(`curl -fsSL …/install.sh | bash` هم کار می‌کند.) ویزارد فارسی توکن (با بررسی `getMe`)، نام کاربری ربات، شناسه مالک (اختیاری)، پورت/آدرس و ورود پنل وب را می‌پرسد؛ سپس بسته‌ها (tesseract فارسی و …)، venv، دیتابیس و دو سرویس systemd (`nasoz-bot`، `nasoz-web`) را نصب و تست سلامت می‌کند.
 
-```bash
-git clone https://github.com/silent4time/special-materials-robot-project.git
-cd special-materials-robot-project
-bash install.sh                 # ویزارد فارسی: توکن + نام کاربری ربات + اختیاری systemd
-bash install.sh --systemd --start
-```
-
-اولین کسی که در بله `/start` بزند **مالک** می‌شود؛ دانستن `ADMIN_BALE_USER_ID` از قبل لازم نیست.
-جزئیات، پرچم‌ها (`--update` و …) و هشدار «فقط یک نمونه polling»: **[DEPLOY.md](DEPLOY.md)**.
+اولین کسی که در بله `/start` بزند **مالک** می‌شود. به‌روزرسانی: `bash install.sh --update` — خودترمیم: `bash install.sh --repair`.
+جزئیات، نصب خودکار و عیب‌یابی: **[DEPLOY.md](DEPLOY.md)**.
 
 ## دستیار هوشمند (حذف‌شده)
 
