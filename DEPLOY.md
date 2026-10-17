@@ -114,6 +114,7 @@ bash scripts/install.sh --restore /root/nasoz_backup_1405-07-25_0200.zip    # ه
   7) مدیریت سرویس ها
   8) مشاهده لاگ ها
   9) تغییر تنظیمات (.env)
+ 10) نصب دستیار هوشمند (اختیاری)
   0) خروج
 ```
 
@@ -128,6 +129,7 @@ bash scripts/install.sh --restore /root/nasoz_backup_1405-07-25_0200.zip    # ه
 | 7 مدیریت سرویس ها | استارت، توقف، ری استارت یا وضعیت ربات، پنل وب یا هر دو (systemd یا nohup) |
 | 8 مشاهده لاگ ها | آخرین خط های لاگ ربات، پنل وب، آخرین لاگ نصب یا journalctl (توکن در خروجی پوشانده می شود) |
 | 9 تغییر تنظیمات | مثل `--reconfigure` |
+| 10 نصب دستیار هوشمند | مثل `--with-assistant`؛ مسیر بسته آفلاین دستیار را هم می پذیرد (خالی = دانلود آنلاین از GitHub و hf-mirror). بخش «دستیار هوشمند صوتی» پایین تر |
 
 بعد از هر کار با Enter به منو برمی گردید. اگر ربات هنوز نصب نشده باشد، گزینه های نیازمند نصب پیام «ابتدا گزینه 1» می دهند. **همه پرچم ها مثل قبل بدون منو کار می کنند** (`--update`، `--repair`، `--restore FILE`، ...)؛ نصب مستقیم بدون منو: `bash install.sh --install`؛ منو همراه با پرچم: `bash install.sh --menu --dry-run`. بدون ترمینال (cron، `NONINTERACTIVE=1`) منو نمایش داده نمی شود.
 
@@ -169,7 +171,7 @@ bash scripts/install.sh --restore /root/nasoz_backup_1405-07-25_0200.zip    # ه
 | ۷ | رمز ورود وب (مخفی) | ساخت خودکار |
 | ۸ | `CRITICAL_DAYS` | `3` |
 | ۹ | نصب سرویس systemd | بله (اگر root/sudo و systemd باشد) |
-| ۱۰ | دستیار هوشمند Ollama | خیر |
+| ۱۰ | دستیار هوشمند صوتی (Ollama + Whisper، حدود ۳ گیگ دانلود) | خیر |
 
 `WEB_SECRET_KEY` خودکار ساخته می‌شود. اجرای دوباره، مقادیر فعلی را پیش‌فرض می‌گذارد و `.env` و `data/` را دست نمی‌زند.
 
@@ -192,7 +194,9 @@ bash scripts/install.sh --restore /root/nasoz_backup_1405-07-25_0200.zip    # ه
 | `bash install.sh --web-login` | ساخت/بازنشانی ورود وب مالک از روی `.env` |
 | `bash install.sh --start` | استارت دوباره (مثلاً بعد از ریبوت در حالت nohup) |
 | `bash install.sh --dry-run` | فقط نمایش بسته‌ها، دستورهای apt/git/پشتیبان و فایل‌های systemd، بدون تغییر (با هر پرچم دیگر ترکیب می‌شود) |
-| `bash install.sh --with-assistant` | نصب دستیار هوشمند (Ollama) |
+| `sudo bash install.sh --with-assistant` | نصب دستیار هوشمند صوتی (روی سرور نصب شده فقط دستیار؛ در نصب تازه یک مرحله اختیاری) |
+| `sudo bash install.sh --assistant-offline FILE.tar` | نصب دستیار از بسته آفلاین `nasoz_assistant_*.tar` |
+| `bash scripts/install_assistant.sh --check` | فقط بررسی دسترسی منابع دستیار (کد HTTP هر منبع) |
 | `sudo systemctl status nasoz-bot nasoz-web` | وضعیت |
 | `sudo systemctl restart nasoz-bot nasoz-web` | ری‌استارت |
 | `journalctl -u nasoz-bot -f` / `journalctl -u nasoz-web -f` | لاگ زنده |
@@ -219,7 +223,7 @@ BALE_BOT_TOKEN='123456789:ABC...' WEB_PORT=8000 INSTALL_SYSTEMD=y NONINTERACTIVE
 - پنل وب باز نمی‌شود: `journalctl -u nasoz-web -n 50`، `tail data/web.log`، پورت در ufw/فایروال ابری باز باشد، `WEB_HOST=0.0.0.0`.
 - OCR عکس تولید کار نمی‌کند: `tesseract --list-langs` باید `fas` داشته باشد؛ `bash install.sh --repair`.
 - ربات پاسخ نمی‌دهد: `journalctl -u nasoz-bot -n 50` و `tail data/bot.log`؛ **فقط یک نمونه** با یک توکن (نسخهٔ قدیمی روی ماشین دیگر را خاموش کنید).
-- **دستیار هوشمند از سرور داخل ایران نصب نمی شود** (`curl: (22) ... 403`): سایت Ollama و مخزن مدل های آن آی پی ایران را مسدود می کنند. از این نسخه این مرحله اختیاری هرگز نصب را متوقف نمی کند: اول یک بررسی سریع دسترسی (حداکثر چند ثانیه) انجام می شود و در صورت خطا پیام «دستیار هوشمند نصب نشد (...). ربات بدون دستیار کار می کند.» چاپ، در لاگ نصب ثبت و `ASSISTANT_ENABLED=0` در `.env` نوشته می شود و نصب با مراحل بعدی ادامه می یابد. برای نصب دستیار از ایران پروکسی لازم است، مثلا: `HTTPS_PROXY=http://IP-پروکسی:پورت bash install.sh --with-assistant` (یا نصب دستی Ollama و مدل؛ پایین تر). بسته آفلاین هم Ollama/مدل را ندارد و همین رفتار را دارد.
+- **دستیار هوشمند نصب نشد:** هر خطای این مرحله فقط هشدار است؛ ربات بدون دستیار کار می کند و `ASSISTANT_ENABLED=0` می ماند. `bash scripts/install_assistant.sh --check` نشان می دهد کدام منبع باز است (کد ۰۰۰ = مسدود یا timeout). سایت ollama.com آی پی ایران را با 403 رد می کند، پس نصب کننده دیگر به آن وابسته نیست (بخش «دستیار هوشمند صوتی» پایین تر). اجرای دوباره امن است و دانلودها از همان جا ادامه پیدا می کنند. اگر هیچ منبعی باز نبود: بسته آفلاین دستیار یا پروکسی (`HTTPS_PROXY=http://IP:PORT sudo -E bash install.sh --with-assistant`).
 
 ## نکات مهم
 
@@ -241,72 +245,86 @@ cp .env.example .env && nano .env   # فقط BALE_BOT_TOKEN الزامی است
 python main.py                      # اولین /start → مالک
 ```
 
-## دستیار هوشمند (Ollama محلی)
+## دستیار هوشمند صوتی (اختیاری)
 
-دستیار فقط از **Ollama (یا سازگار) روی همین سرور** استفاده می‌کند؛ هیچ LLM ابری فراخوانی نمی‌شود. اگر Ollama خاموش باشد، ربات کرش نمی‌کند و پیام فارسی «دستیار محلی در دسترس نیست…» نشان می‌دهد.
+مالک در بله پیام صوتی می فرستد؛ **Whisper** (faster-whisper) آن را به متن تبدیل می کند و **Ollama** با یک مدل زبانی محلی جواب کوتاه فارسی می دهد. **Piper** (متن به گفتار) اختیاری است. هیچ سرویس ابری صدا زده نمی شود و همه چیز روی همین سرور اجرا می شود.
 
-**پیش‌نیاز پیشنهادی:** حدود ۴ گیگابایت RAM برای `qwen2.5:3b` (با ۸ گیگابایت راحت‌تر)؛ CPU چند‌هسته‌ای کافی است؛ GPU اختیاری.
+**نیازمندی ها:** حدود ۴ گیگ RAM برای `qwen2.5:3b` (با ۸ گیگ راحت تر؛ با RAM کمتر `--model qwen2.5:1.5b`)، حدود ۶ گیگ فضای آزاد دیسک، CPU چند هسته ای (GPU لازم نیست)، Ubuntu 24.04 با root.
 
-راهنمای کامل PDF (فارسی RTL): [`docs/راهنمای_نصب_دستیار_هوشمند.pdf`](docs/راهنمای_نصب_دستیار_هوشمند.pdf) — منبع Markdown: [`docs/دستیار-هوشمند.md`](docs/دستیار-هوشمند.md).
+| بخش | چه چیزی | منبع (به ترتیب امتحان) | حجم |
+|-----|---------|------------------------|-----|
+| Ollama | باینری رسمی `ollama-linux-amd64.tar.zst` آخرین نسخه؛ فقط کتابخانه های CPU در `/usr/local` نصب می شود، کاربر `ollama` و سرویس systemd `ollama` (فقط `127.0.0.1:11434`) | GitHub releases ← نصب کننده ollama.com | ۱٫۳ گیگ دانلود، ۶۰ مگ نصب |
+| مدل زبانی | `qwen2.5:3b` (Qwen2.5-3B-Instruct، GGUF q4_k_m)؛ با `ollama create` و Modelfile (قالب ChatML) ساخته می شود | hf-mirror.com ← huggingface.co ← registry.ollama.ai | ۲ گیگ |
+| Whisper | `faster-whisper` + `av<19` + `requests` در `.venv` و مدل `Systran/faster-whisper-small` در کش Hugging Face کاربر ربات؛ `HF_HUB_OFFLINE=1` در `.env` | PyPI + hf-mirror.com ← huggingface.co | ۱۵۵ مگ + ۴۶۰ مگ |
+| Piper (اختیاری) | `piper-tts` و صدای فارسی `fa_IR-amir-medium` در `/opt/piper/models` (با نام `fa_IR-donya-medium` که ربات انتظار دارد هم لینک می شود) | PyPI + hf-mirror.com ← huggingface.co | ۶۰ مگ |
 
-### نصب همراه `install.sh`
+دسترسی اندازه گیری شده از سرور ایران: github.com و release-assets.githubusercontent.com باز، huggingface.co و hf-mirror.com باز، ollama.com با 403 بسته. فایل های بزرگ Hugging Face از CDN (مثلا `us.aws.cdn.hf.co` یا `cas-bridge.xethub.hf.co`) دانلود می شوند؛ برای همین hf-mirror.com اول امتحان می شود و اگر یک منبع جواب نداد منبع بعدی امتحان می شود. با `--check` می بینید هر منبع به کجا ریدایرکت می شود.
+
+### نصب آنلاین (پیشنهادی)
 
 ```bash
-# تعاملی: پرسش «دستیار هوشمند را هم نصب کنم؟ (Y/n)» — پیش‌فرض بله
-bash install.sh
-
-# غیرتعاملی
-bash install.sh --with-assistant
-bash install.sh --no-assistant
+cd /opt/nasoz                          # یا پوشه نصب شما
+sudo bash install.sh --update          # فقط اگر نسخه برنامه قدیمی است (این قابلیت را ندارد)
+bash scripts/install_assistant.sh --check     # اختیاری: کد HTTP همه منبع ها
+sudo bash install.sh --with-assistant  # یا منوی نصب کننده: گزینه 10
 ```
 
-با `--with-assistant` (یا پاسخ Y): نصب Ollama در صورت نبود، `ollama pull` مدل، و نوشتن `OLLAMA_*` در `.env`. هر خطا در این مرحله (سایت در دسترس نیست، 403، دانلود ناموفق، مدل) فقط هشدار می دهد و نصب ربات ادامه پیدا می کند؛ دستیار غیرفعال می ماند (`ASSISTANT_ENABLED=0`). از ایران بدون پروکسی ممکن نیست.
+روی سرور نصب شده `--with-assistant` فقط دستیار را نصب می کند و بعد ربات را ری استارت می کند؛ در نصب تازه یک مرحله اختیاری است (ویزارد سوال ۱۰). نوار پیشرفت `[دستیار ۴/۷] ۵۷٪ █████░░░░░` و برای هر دانلود درصد، حجم و سرعت نشان داده می شود؛ دانلودها قابل ادامه اند (`curl -C -`) و در `/var/cache/nasoz-assistant` می مانند تا کامل شوند. لاگ کامل در `data/logs/`. هر بخش جدا است: اگر مثلا Piper نصب نشد، بقیه نصب می شود و در آخر خلاصه ✓/✗ چاپ می شود.
 
-### نصب دستی Ollama و مدل پیش‌فرض
+**فعال سازی:** نصب کننده دستیار را روشن نمی کند. بعد از نصب، مالک در بله: ⚙️ تنظیمات ← 🤖 دستیار هوشمند صوتی ← فعال سازی.
+
+### نصب آفلاین (بسته دستیار)
+
+اگر سرور به GitHub یا Hugging Face نمی رسد، روی یک سیستم دیگر (با اینترنت آزاد و `zstd`) بسته را بسازید:
 
 ```bash
-# نصب (Linux)
-curl -fsSL https://ollama.com/install.sh | sh
-
-# سرویس معمولاً روی http://127.0.0.1:11434 گوش می‌دهد
-ollama serve   # اگر به‌صورت سرویس بالا نباشد
-
-# مدل کوچک مناسب CPU (پیش‌فرض ربات):
-ollama pull qwen2.5:3b
+bash scripts/build_assistant_bundle.sh                 # خروجی: dist/nasoz_assistant_<تاریخ>_qwen2.5-3b.tar (حدود ۲٫۷ گیگ)
+bash scripts/build_assistant_bundle.sh --model qwen2.5:1.5b --no-piper   # بسته کوچک تر
 ```
 
-### متغیرهای `.env`
+بسته شامل باینری Ollama (فقط CPU)، GGUF و Modelfile، کش مدل Whisper، صدای Piper، wheel های پایتون (cp312) و `SHA256SUMS` است. فایل tar را تکه نکنید؛ با WinSCP در `/root` بگذارید و:
 
 ```bash
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=qwen2.5:3b
-OLLAMA_TIMEOUT=60
+sha256sum /root/nasoz_assistant_*.tar                  # با sha256 اعلام شده مقایسه کنید
+cd /opt/nasoz && sudo bash install.sh --assistant-offline /root/nasoz_assistant_….tar
+# یا از بسته آفلاین برنامه: bash install_offline.sh --assistant-offline /root/nasoz_assistant_….tar
 ```
 
-مدل پیش‌فرض در کد: `qwen2.5:3b`. اگر RAM کم است، `qwen2.5:1.5b` را بکشید و `OLLAMA_MODEL=qwen2.5:1.5b` بگذارید. سایر گزینه‌ها: `llama3.2:3b`, `phi3:mini`.
+### تنظیم منبع ها و مسیرها (متغیر محیطی، اختیاری)
 
-### تأیید و تست
+| متغیر | پیش فرض |
+|-------|---------|
+| `ASSISTANT_OLLAMA_SOURCES` | `github official` (یا `url:https://.../ollama-linux-amd64.tar.zst`) |
+| `ASSISTANT_MODEL_SOURCES` | `hf-mirror huggingface registry` |
+| `ASSISTANT_HF_SOURCES` | `hf-mirror huggingface` (Whisper و Piper؛ `url:https://mirror` هم مجاز) |
+| `ASSISTANT_PIP_INDEXES` | `https://pypi.org/simple` (چند آدرس با فاصله) |
+| `ASSISTANT_GGUF_REPO` / `ASSISTANT_GGUF_FILE` | برای مدل دلخواه غیر از qwen2.5 (3b، 1.5b، 0.5b) |
+| `ASSISTANT_PREFIX` / `ASSISTANT_CACHE` / `ASSISTANT_PIPER_DIR` | `/usr/local` / `/var/cache/nasoz-assistant` / `/opt/piper/models` |
+| `ASSISTANT_KEEP_GPU=1`، `ASSISTANT_KEEP_CACHE=1`، `ASSISTANT_VERIFY=0` | کتابخانه های CUDA هم نصب شوند، فایل های دانلود نگه داشته شوند، تست ها رد شوند |
+| `HTTPS_PROXY` | پروکسی اختیاری برای curl و pip |
+
+مثال: `sudo ASSISTANT_MODEL_SOURCES="huggingface hf-mirror" bash install.sh --with-assistant` (این متغیرها از sudo رد می شوند).
+
+### `.env` و تست
+
+نصب کننده می نویسد: `OLLAMA_BASE_URL=http://127.0.0.1:11434`، `OLLAMA_MODEL=qwen2.5:3b`، `OLLAMA_TIMEOUT=120`، `HF_HUB_OFFLINE=1` و مدل را در تنظیمات دستیار ربات ثبت می کند (`ASSISTANT_ENABLED` دست نمی خورد).
 
 ```bash
+systemctl status ollama
 ollama list
-curl -s http://127.0.0.1:11434/api/tags
+curl -s http://127.0.0.1:11434/api/generate -d '{"model":"qwen2.5:3b","prompt":"سلام","stream":false}'
 ```
 
-سپس ربات را روشن کنید (`python main.py` یا `bash install.sh --start`).
+منوی نصب کننده، گزینه 3 (وضعیت)، بخش «دستیار هوشمند» هم Ollama، مدل، Whisper و Piper را نشان می دهد.
 
-### استفاده در بله
-
-منوی «گزارش‌ها / تحلیل تاندیش» → «🤖 دستیار هوشمند» (نقش **تکنسین** دسترسی ندارد). دامنه فقط گزارش‌ها است.
-
-### رفع اشکال و به‌روزرسانی مدل
+### رفع اشکال
 
 | مشکل | کار |
 |------|-----|
-| پیام «دستیار محلی در دسترس نیست…» | `ollama serve` / سرویس ollama؛ پورت `11434`؛ `OLLAMA_BASE_URL` |
-| مدل نیست | `ollama pull` مطابق `OLLAMA_MODEL` |
-| کندی | مدل کوچک‌تر یا افزایش `OLLAMA_TIMEOUT` |
-
-به‌روزرسانی مدل: `ollama pull …` سپس در صورت نیاز تغییر `OLLAMA_MODEL` و restart ربات (`bash install.sh --update` یا `systemctl restart nasoz-bot`).
+| در بله «دستیار صوتی روی سرور نصب نیست» | `systemctl status ollama`؛ `bash scripts/install_assistant.sh --check`؛ دوباره `sudo bash install.sh --with-assistant` |
+| دانلود نیمه کاره ماند | همان دستور را دوباره اجرا کنید؛ از همان جا ادامه می دهد |
+| کندی یا کمبود حافظه | `sudo bash install.sh --with-assistant` با `ASSISTANT_MODEL=qwen2.5:1.5b`، یا `bash scripts/install_assistant.sh --model qwen2.5:1.5b` با sudo |
+| حذف | `systemctl disable --now ollama; rm -rf /usr/local/bin/ollama /usr/local/lib/ollama /usr/share/ollama /etc/systemd/system/ollama.service` |
 
 ## داشبورد وب (فرآیند جدا)
 
