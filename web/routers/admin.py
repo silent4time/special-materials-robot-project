@@ -170,18 +170,20 @@ async def stock_group_clear(request: Request, user=Depends(require_feature(perm.
 
 @router.post("/bot/assistant")
 async def assistant_toggle(request: Request, user=Depends(current_user), db: Database = Depends(get_db)):
-    """Owner-only, same rule as bot: cannot enable while Whisper/Ollama are missing."""
+    """Owner-only, same rule as bot: text questions work via rules even without Whisper/Ollama."""
     from services import voice_assistant as va
 
     if not require_owner(user):
         raise ForbiddenFa("فقط مالک.")
     enable = str((await request.form()).get("enable") or "") == "1"
-    if enable and not va.is_installed():
-        db.set_setting(va.SETTING_ENABLED, "0", updated_by=str(user["bale_user_id"]))
-        return render(request, "settings_bot.html", _bot_ctx(db, user, error=va.NOT_INSTALLED_FA), status_code=400)
     db.set_setting(va.SETTING_ENABLED, "1" if enable else "0", updated_by=str(user["bale_user_id"]))
     log_activity(db, user, "assistant_enabled" if enable else "assistant_disabled")
-    return render(request, "settings_bot.html", _bot_ctx(db, user, message="✅ ذخیره شد."))
+    msg = "✅ ذخیره شد."
+    if enable:
+        a = va.availability()
+        if not a["whisper"] or not a["ollama"]:
+            msg += " ⚠ " + va.PARTIAL_FA(a)
+    return render(request, "settings_bot.html", _bot_ctx(db, user, message=msg))
 
 
 # ------------------------------------------------------------------ 💾 بک‌آپ (same services.backup as bot)

@@ -81,6 +81,8 @@ WEB_ONLY = {
     "/files/inbound/{report_id}.{ext}": "ربات فایل گزارش ورودی را بلافاصله پس از آپلود موجودی می‌فرستد",
     "/settings/main-source/sibling-defaults": "پیشنهاد پیش‌پر فرم (ربات: پیشنهاد «+» در گفتگو)",
     "/settings/bot/stock-group/clear": "ربات: «📣 گروه گزارش موجودی» ← حذف",
+    "/assistant": "ربات: «🤖 از دستیار بپرس» / متن آزاد / پیام صوتی (فقط وقتی مالک دستیار را فعال کرده؛ خارج از BUTTON_FEATURE، مجوز هر پرسش جدا)",
+    "/assistant/ask": "ارسال پرسش همان صفحهٔ دستیار",
     "/settings/bot/assistant": "ربات: ⚙️ ← 🤖 دستیار هوشمند صوتی (فقط مالک، خارج از BUTTON_FEATURE)",
     "/tundish-report/parse": "مرحلهٔ پیش‌نمایش فرم (ربات: گفتگو مرحله‌ای)",
     "/tundish-report/submit": "ثبت فرم گزارش تاندیش",
