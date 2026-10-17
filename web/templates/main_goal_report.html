@@ -89,19 +89,13 @@
     <label>ذوب<input name="melt"></label>
     <div class="report-actions"><button type="submit" class="btn">ذخیره دستی</button></div>
   </form>
-  <h3>📤 اکسل سکوئنس / مصرف تاندیش</h3>
-  <form method="post" action="/reports/main-goal/inputs/consumption" enctype="multipart/form-data" class="form-grid">
-    <label>بخش
-      <select name="section" required>
-        <option value="slab">اسلب</option>
-        <option value="bloom">بلوم</option>
-        <option value="billet">بیلت</option>
-      </select>
-    </label>
+  <h3>📤 گزارش جامع تاندیش در سکوئنس</h3>
+  <p class="muted">یک فایل Excel (خروجی صفحهٔ otsteel.ksc.ir/ccssequence) برای هر سه بخش؛ بخش از ستون «ماشین» و ماه از تاریخ شروع ریخته‌گری تشخیص داده می‌شود و هر ماه/بخش جداگانه جایگزین می‌شود.</p>
+  <form method="post" action="/reports/main-goal/inputs/sequence" enctype="multipart/form-data" class="form-grid">
     <label>فایل اکسل<input type="file" name="file" accept=".xlsx" required></label>
     <div class="report-actions"><button type="submit" class="btn">استخراج و ذخیره</button></div>
   </form>
-  {{ file_guide("mg_consumption")|safe }}
+  {{ file_guide("mg_sequence")|safe }}
 </div>
 
 <div class="card">

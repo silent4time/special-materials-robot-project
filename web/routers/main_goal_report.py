@@ -306,6 +306,29 @@ async def upload_consumption(
     return _page(request, db, user, message="مصرف تاندیش ذخیره شد.", summary=out.summary + extra)
 
 
+@router.post("/inputs/sequence")
+async def upload_sequence(
+    request: Request,
+    file: UploadFile = File(...),
+    user=Depends(require_main_goal),
+    db: Database = Depends(get_db),
+):
+    """«گزارش جامع تاندیش در سکوئنس»: one Excel for billet/bloom/slab (split by ماشین × month)."""
+    batch = tehran_now().strftime("%Y%m%d_%H%M%S")
+    dest = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / f"web_seq_{batch}" / "tundish_sequence.xlsx"
+    try:
+        fname = await _save_upload(file, dest)
+    except ValueError as exc:
+        return _page(request, db, user, error=str(exc), status_code=400)
+    out = mgp.store_sequences_from_excel(db, dest, user=user, source="web", filename=fname, section=None)
+    if not out.ok:
+        return _page(request, db, user, error=out.error_fa, status_code=400)
+    log_activity(db, user, "web_main_goal_store_sequences")
+    miss = out.missing_parts
+    extra = ("\n⚠ هنوز ناقص: " + "، ".join(miss)) if miss else ""
+    return _page(request, db, user, message="گزارش جامع تاندیش در سکوئنس ذخیره شد.", summary=out.summary + extra)
+
+
 # ---------------------------------------------------------------- range report from DB
 @router.post("/report/range")
 async def report_range(
