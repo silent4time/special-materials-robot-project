@@ -164,7 +164,7 @@ def build_critical_items_segments(
 # Columns of the user's sample «140506» ONLY (1405/07/25 follow-up): the 4 helper
 # columns (مبدأ، افق، میانگین مصرف ماهانه، مصرف پیش‌بینی‌شده) stay internal — the need
 # is still computed from them in analytics.critical_items, they are just not printed.
-TEMPLATE_COLUMNS = ["کد چهاررقمی", "ردیف", "کد و شرح کالا", "موجودی", "واحد", COL_NEED, COL_DAYS]
+TEMPLATE_COLUMNS = ["ردیف", "کد چهاررقمی", "کد و شرح کالا", "موجودی", "واحد", COL_NEED, COL_DAYS]
 # «توضیحات» block: the essential notes + the user's own notes, padded with empty
 # bordered lines (sample style) up to this many rows.
 MIN_NOTE_ROWS = 5

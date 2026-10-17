@@ -873,6 +873,8 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
 
     for ws in (co_ws, ct_ws):
         assert [ws.cell(2, i).value for i in range(1, 8)] == TEMPLATE_COLUMNS, ws.title
+        assert (ws["A2"].value, ws["B2"].value) == ("ردیف", "کد چهاررقمی"), ws.title  # T12 order
+        assert str(ws["A3"].value) == "1", (ws.title, ws["A3"].value)  # row number in column A
         assert ws.cell(2, 8).value is None, ws.title
     for gone in (COL_MONTHLY, "مصرف پیش‌بینی‌شده در افق", "افق (ماه)", "مبدأ", "۳ ماه آینده"):
         assert gone not in co_text, gone
@@ -1135,6 +1137,8 @@ def test_web(tmp: Path) -> dict:
     assert cra.get_report(db, rid)["status"] == cra.STATUS_DRAFT and cra.get_report(db, rid)["source"] == "web"
     r = c.get(f"/reports/critical-items/report/{rid}")
     assert r.status_code == 200 and "پیش‌نویس" in r.text and "اجناس داخلی ۳ ماه" in r.text, r.text[-1500:]
+    th = r.text.index("<th>ردیف</th>"), r.text.index("<th>کد چهاررقمی</th>")
+    assert th[0] < th[1], "web preview: ردیف first (rightmost), then کد چهاررقمی"
     assert 'value="approve"' in r.text and "<textarea" in r.text
     r = c.get(f"/reports/critical-items/report/{rid}/file/xlsx")
     assert r.status_code == 200 and r.content[:2] == b"PK"

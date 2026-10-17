@@ -75,9 +75,18 @@ def check_critical_sheet(ws, tpl, *, n_rows: int, n_notes: int) -> None:
     hdr = [ws.cell(2, i).value for i in range(1, n + 1)]
     check(hdr == list(REPORT_COLUMNS), f"{name}: header {hdr}")
     check(ws.cell(2, n + 1).value is None, f"{name}: no columns beyond the template")
-    # template order (sheet «140506», RTL): A=کد چهاررقمی (rightmost), B=ردیف
+    # T12 (user decision 1405/07/25, deliberate deviation from «140506»): ردیف is column A
+    # (rightmost), کد چهاررقمی column B; each column keeps its own template style/width.
     check([tpl[f"{c}2"].value.strip() for c in "AB"] == ["کد چهاررقمی", "ردیف"], "template A2/B2 order")
-    check((ws["A2"].value, ws["B2"].value) == ("کد چهاررقمی", "ردیف"), f"{name}: A2/B2 order")
+    check((ws["A2"].value, ws["B2"].value) == ("ردیف", "کد چهاررقمی"), f"{name}: A2/B2 = ردیف/کد (swapped)")
+    check(_fill_sig(ws["A2"]) == _fill_sig(tpl["B2"]) and _fill_sig(ws["B2"]) == _fill_sig(tpl["A2"]),
+          f"{name}: swapped header fills move with their column")
+    check(abs(ws.column_dimensions["A"].width - tpl.column_dimensions["B"].width) < 0.1
+          and abs(ws.column_dimensions["B"].width - tpl.column_dimensions["A"].width) < 0.1,
+          f"{name}: swapped widths move with their column")
+    if n_rows:
+        check(_fill_sig(ws["A3"]) == _fill_sig(tpl["B4"]) and _fill_sig(ws["B3"]) == _fill_sig(tpl["A4"]),
+              f"{name}: swapped body fills move with their column")
     check("آیدی کد" not in hdr and "کلیدواژه" not in hdr, f"{name}: no base material columns")
     for i, col in enumerate(REPORT_COLUMNS, start=1):
         tl = TEMPLATE_COLUMN_OF.get(col)
