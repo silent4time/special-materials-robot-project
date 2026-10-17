@@ -100,7 +100,9 @@ def _assert_portrait(pdf: Path) -> int:
         rot = int(page.get("/Rotate") or 0) % 180
         if rot:
             w, h = h, w
-        assert w < h, f"{pdf.name} page {i + 1} is landscape ({w:.0f}x{h:.0f})"
+        # 1405/07/25 standing rule: material tables lead with the 7 main-source base columns, so the
+        # wide critical-items table is laid out on A4 *landscape*; any other size is still an error.
+        w, h = min(w, h), max(w, h)
         assert abs(w - 595.3) < 2 and abs(h - 841.9) < 2, f"{pdf.name} not A4: {w}x{h}"
     return len(reader.pages)
 

@@ -115,12 +115,12 @@
     <a class="btn" href="/reports/inbound/{{ r.id }}.pdf">آخرین گزارش (PDF)</a>
     <a class="btn" href="/reports/inbound/{{ r.id }}.xlsx">آخرین گزارش (اکسل)</a>
   </div>
-  {% if r.lines %}
+  {% if inbound_table %}
   <div style="overflow-x:auto"><table>
-    <thead><tr><th>ردیف</th><th>کد دسته</th><th>شناسه مواد</th><th>کلید واژه</th><th>واحد</th><th>موجودی قبلی</th><th>موجودی جدید</th><th>مقدار ورودی</th><th>نوع</th><th>تأمین‌کننده</th><th>محل استفاده</th></tr></thead>
+    <thead><tr>{% for h in inbound_table.header %}<th>{{ h }}</th>{% endfor %}</tr></thead>
     <tbody>
-    {% for l in r.lines[:50] %}
-      <tr><td>{{ l["ردیف"] }}</td><td>{{ l["کد دسته"] }}</td><td>{{ l["شناسه مواد"] }}</td><td>{{ l["کلید واژه"] }}</td><td>{{ l["واحد"]|unit_fa }}</td><td>{{ l["موجودی قبلی"] }}</td><td>{{ l["موجودی جدید"] }}</td><td>{{ l["مقدار ورودی"] }}</td><td>{{ l["نوع"] }}</td><td>{{ l["تأمین‌کننده"] }}</td><td>{{ l["محل استفاده"] }}</td></tr>
+    {% for row in inbound_table.rows %}
+      <tr>{% for c in row %}<td>{{ c }}</td>{% endfor %}</tr>
     {% endfor %}
     </tbody>
   </table></div>

@@ -138,7 +138,9 @@ def _table_ctx(request: Request, ans) -> dict:
     out["answer_text"] = "\n".join(ln for ln in text.splitlines() if at.SEP not in ln and not ln.strip().startswith("─"))
     from pdf.generator import SIMPLE_HEADER_FA, _format_simple_cell
 
-    for sec in ans.table["sections"]:
+    from services.material_columns import apply_sections
+
+    for sec in apply_sections(ans.table["sections"]):
         cols = list(sec.get("columns") or [])
         if not cols:
             continue
