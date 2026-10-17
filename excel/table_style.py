@@ -227,7 +227,9 @@ def style_workbook_path(
 # ---------------------------------------------------------------------------
 # Phase 3 item 20: one finalizer for EVERY Excel output (standing rule)
 # ---------------------------------------------------------------------------
-EXCEL_FONT = "Vazirmatn"
+# Tahoma ships with every Windows/Office install; Vazirmatn may be missing on users' PCs
+# (PDFs keep the embedded Vazirmatn). Standing rule: every xlsx goes through finalize_*.
+EXCEL_FONT = "Tahoma"
 HEADER_FILL_HEX = "1F4E79"
 _THIN = None
 
@@ -252,8 +254,10 @@ def _first_table_row(ws: Worksheet) -> int | None:
 
 
 def finalize_worksheet(ws: Worksheet) -> None:
-    """RTL, Vazirmatn everywhere, centered cells, thin borders on the table,
-    header fill when the writer set none. Existing fills/bold/colors are kept."""
+    """RTL, Tahoma everywhere, centered cells (horizontal + vertical), thin borders on the table,
+    header fill when the writer set none, frozen header row, auto-fit widths for columns the
+    writer left unsized. Existing fills/bold/colors/explicit widths are kept. Styling only:
+    cell values are never changed."""
     from copy import copy
 
     from openpyxl.styles import Alignment as _Al, Font as _Font
@@ -324,8 +328,30 @@ def finalize_worksheet(ws: Worksheet) -> None:
                     cell.font = nf
 
 
+def _autofit_and_freeze(ws: Worksheet, header: int | None) -> None:
+    if header is None:
+        return
+    max_col = ws.max_column or 0
+    for col in range(1, max_col + 1):
+        letter = get_column_letter(col)
+        dim = ws.column_dimensions.get(letter) if hasattr(ws.column_dimensions, "get") else None
+        if dim is not None and dim.customWidth and dim.width:
+            continue  # writer chose a width (e.g. wrapped product description)
+        longest = 0
+        for r in range(header, min(ws.max_row, header + 2000) + 1):
+            v = ws.cell(r, col).value
+            if v in (None, ""):
+                continue
+            longest = max(longest, max(_display_len(x) for x in str(v).split("\n")))
+        width = max(_MIN_COL_WIDTH, min(_MAX_COL_WIDTH, longest * 1.15 + 2))
+        ws.column_dimensions[letter].width = width
+    if ws.freeze_panes is None and ws.max_row > header:
+        ws.freeze_panes = ws.cell(header + 1, 1)
+
+
 def finalize_workbook(wb) -> None:
     for ws in wb.worksheets:
+        _autofit_and_freeze(ws, _first_table_row(ws))
         finalize_worksheet(ws)
 
 

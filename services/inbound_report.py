@@ -339,6 +339,12 @@ def freeze_stock_snapshot(
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     snap = snapshot_dir() / f"stock_upload_{stamp}.xlsx"
     frame.to_excel(snap, index=False, engine="openpyxl", sheet_name="stock")
+    try:
+        from excel.table_style import finalize_path
+
+        finalize_path(snap)  # styling only
+    except Exception:  # noqa: BLE001
+        pass
     raw_copy = None
     if raw_path and Path(raw_path).is_file():
         raw_copy = snap.with_name(snap.stem + "_raw" + Path(raw_path).suffix)

@@ -979,13 +979,18 @@ def write_clean_excel(df: pd.DataFrame, path: Path | str, file_type: str) -> Non
         sheet_name=sheet,
     )
     cols = {str(c) for c in (df.columns if df is not None else [])}
-    if cols & {"product_name", "usage_location", "material_name"}:
-        try:
+    try:
+        # styling only (Tahoma, RTL, centered, header, widths) — values are untouched
+        if cols & {"product_name", "usage_location", "material_name"}:
             from excel.table_style import style_workbook_path
 
             style_workbook_path(path, sheet_name=sheet)
-        except Exception:  # noqa: BLE001
-            pass
+        else:
+            from excel.table_style import finalize_path
+
+            finalize_path(path)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def extract_and_save_clean(
