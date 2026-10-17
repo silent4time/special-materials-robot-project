@@ -169,8 +169,12 @@ def generate_simple_report_xlsx(
     output_path: Path | str | None = None,
     header_map: dict[str, str] | None = None,
     filename_stem: str = "simple_report",
+    material: dict[str, Any] | None = None,
 ) -> Path:
     """Build an .xlsx with the same title/columns/rows (or sections) as the PDF helper.
+
+    A section with ``"material": spec`` (or ``material=`` for the columns/rows form) is a
+    materials table: the shared base columns of ``services.material_columns`` are prepended.
 
     One sheet per section (titled safely), or a single sheet named from ``title``.
     Empty sections still get a sheet with ``empty_message`` when columns exist but
@@ -196,6 +200,7 @@ def generate_simple_report_xlsx(
                 "columns": list(columns),
                 "rows": list(rows or []),
                 "empty_message": empty_message,
+                **({"material": material} if material else {}),
             }
         ]
     else:
@@ -207,6 +212,9 @@ def generate_simple_report_xlsx(
                 "empty_message": empty_message,
             }
         ]
+    from services.material_columns import apply_sections
+
+    built = apply_sections(built)
 
     wb = Workbook()
     # Remove default sheet; recreate per section
@@ -335,6 +343,7 @@ def generate_analytics_report_xlsx(
     if analytics:
         for sheet_title, key, cols in _ANALYTICS_SHEETS:
             frame = analytics.get(key)
+            cols = list(getattr(frame, "attrs", {}).get("material_cols") or cols)
             row_dicts = _df_to_row_dicts(frame, cols)
             if row_dicts:
                 sections.append({
@@ -349,7 +358,7 @@ def generate_analytics_report_xlsx(
         from config import FILE_TYPES
 
         label = FILE_TYPES.get(key, {}).get("label_fa", key)
-        cols = list(DISPLAY_COLUMNS.get(key) or [])
+        cols = list(getattr(frames.get(key), "attrs", {}).get("material_cols") or DISPLAY_COLUMNS.get(key) or [])
         row_dicts = _df_to_row_dicts(frames.get(key), cols)
         if row_dicts and cols:
             sections.append({

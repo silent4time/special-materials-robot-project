@@ -412,12 +412,17 @@ def _new_doc(
     title: str,
     letterhead_path: Path | str | None,
     margin: float = PAGE_MARGIN,
+    landscape: bool = False,
 ) -> SimpleDocTemplate:
-    """A4 portrait doc template with letterhead-aware top/bottom margins."""
-    top, bottom = _letterhead_margins(letterhead_path, PAGE_SIZE, margin, margin)
+    """A4 doc template (portrait; ``landscape=True`` for wide material tables) with
+    letterhead-aware top/bottom margins."""
+    from reportlab.lib.pagesizes import landscape as _landscape
+
+    size = _landscape(PAGE_SIZE) if landscape else PAGE_SIZE
+    top, bottom = _letterhead_margins(letterhead_path, size, margin, margin)
     return SimpleDocTemplate(
         str(output_path),
-        pagesize=PAGE_SIZE,
+        pagesize=size,
         rightMargin=margin,
         leftMargin=margin,
         topMargin=top,
@@ -692,6 +697,7 @@ def _df_to_table(
 ) -> Table | Paragraph:
     if df is None or df.empty:
         return _p("هیچ ردیفی یافت نشد.", styles["body"], avail)
+    cols = list(df.attrs.get("material_cols") or cols or [])  # base material columns first
     use_cols = [c for c in (cols or list(df.columns)) if c in df.columns]
     if not use_cols:
         use_cols = list(df.columns)[:8]
@@ -849,7 +855,7 @@ def generate_report(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    doc = _new_doc(output_path, title="گزارش تاندیش", letterhead_path=letterhead_path)
+    doc = _new_doc(output_path, title="گزارش تاندیش", letterhead_path=letterhead_path, landscape=True)
     avail = float(doc.width)
 
     story: list = []
@@ -1178,8 +1184,14 @@ def generate_simple_report_pdf(
     header_map: dict[str, str] | None = None,
     filename_stem: str = "simple_report",
     letterhead_path: Path | str | None = None,
+    material: dict[str, Any] | None = None,
+    landscape: bool | None = None,
 ) -> Path:
-    """Reusable A4 portrait RTL PDF for analytics menu reports.
+    """Reusable A4 RTL PDF for analytics menu reports.
+
+    Sections with ``"material": spec`` (or ``material=``) get the shared base material
+    columns (``services.material_columns``) first. ``landscape=None`` → automatic: wide
+    tables (≥ 9 columns) are laid out on A4 landscape.
 
     Pass either ``sections`` (list of dicts with title/columns/rows) or a single
     ``columns`` + ``rows`` table. Empty data still produces a one-page PDF with
@@ -1195,14 +1207,6 @@ def generate_simple_report_pdf(
         output_path = unique_dir(REPORT_DIR, filename_stem) / f"{fa_stem(title)}.pdf"
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    doc = _new_doc(output_path, title=title, letterhead_path=letterhead_path)
-    avail = float(doc.width)
-    story: list = []
-    story.append(_p(title, styles["title"], avail))
-    if subtitle:
-        story.append(_p(subtitle, styles["body"], avail))
-        story.append(Spacer(1, 0.25 * cm))
 
     built_sections: list[dict[str, Any]] = []
     if sections:
@@ -1225,6 +1229,21 @@ def generate_simple_report_pdf(
                 "empty_message": empty_message,
             }
         ]
+    if material and columns is not None and built_sections:
+        built_sections[0]["material"] = material
+    from services.material_columns import apply_sections, needs_landscape
+
+    built_sections = apply_sections(built_sections)
+    if landscape is None:
+        landscape = needs_landscape(built_sections)
+
+    doc = _new_doc(output_path, title=title, letterhead_path=letterhead_path, landscape=bool(landscape))
+    avail = float(doc.width)
+    story: list = []
+    story.append(_p(title, styles["title"], avail))
+    if subtitle:
+        story.append(_p(subtitle, styles["body"], avail))
+        story.append(Spacer(1, 0.25 * cm))
 
     any_table = False
     for section in built_sections:

@@ -95,6 +95,7 @@ from excel.monthly_summary import (
     summary_sections_for_pdf,
 )
 from pdf.generator import generate_monthly_summary_pdf, generate_report, generate_simple_report_pdf
+from services import material_columns as mcols
 from excel.simple_report import (
     export_dataframe_xlsx,
     generate_analytics_report_xlsx,
@@ -1990,6 +1991,10 @@ class BotApp:
                 "را آپلود کنید."
             )
         rows = inventory_table_rows(table)
+        # base material columns need the item id (rows align 1:1 with ``table``)
+        if "id" in table.columns:
+            for r, iid in zip(rows, table["id"].tolist()):
+                r["شناسه"] = "" if iid is None or (isinstance(iid, float) and pd.isna(iid)) else str(iid)
         # active codes with no item in منبع اصلی get one «—» placeholder row each, so the
         # PDF row count = items + empty codes (bug 7: 150 = 149 items + code 0922)
         empty_codes = (
@@ -2016,6 +2021,9 @@ class BotApp:
             subtitle=notice,
             columns=cols,
             rows=rows,
+            # one row per ID (the list is the main source itself); placeholder codes keep «—»
+            material={"id": "شناسه", "name": "شرح کالا", "mode": "per_id",
+                      **({} if has_extract else {"qty_fallback": "موجودی"})},
             filename_stem="category_inventory",
             output_name="لیست_کد_دسته‌بندی_و_موجودی.pdf",
             caption=(
@@ -3405,8 +3413,12 @@ class BotApp:
         log_user: dict | None = None,
         log_action: str | None = None,
         also_excel: bool = True,
+        material: dict[str, Any] | None = None,
     ) -> Path | None:
         """Build a simple RTL PDF under REPORT_DIR and sendDocument to the user.
+
+        ``material`` (or a section's ``"material"`` key) = materials table → the shared
+        base columns of ``services.material_columns`` lead the PDF/Excel header.
 
         After a successful PDF send, also builds and sends a sibling .xlsx with the
         same title/columns/rows (shared ``excel.simple_report``). Empty data →
@@ -3437,6 +3449,7 @@ class BotApp:
                 output_path=out,
                 filename_stem=filename_stem,
                 letterhead_path=self._letterhead_path(),
+                material=material,
             )
             self.client.send_document(
                 self._chat_id(message),
@@ -3461,6 +3474,7 @@ class BotApp:
                     empty_message=empty_message,
                     output_path=xlsx_path,
                     filename_stem=filename_stem,
+                    material=material,
                 )
                 self.client.send_document(
                     self._chat_id(message),
@@ -3601,6 +3615,7 @@ class BotApp:
             ),
             columns=cols,
             rows=self._df_to_row_dicts(rates, cols),
+            material=mcols.SPEC_RATES,
             empty_message="در این بازه داده‌ای برای این گزارش نیست.",
             filename_stem="daily_rates",
             output_name="مصرف_روزانه_مواد.pdf",
@@ -3649,6 +3664,7 @@ class BotApp:
                     "title": f"موجودی باقیمانده ({rem_source})",
                     "columns": rem_cols,
                     "rows": rem_rows,
+                    "material": mcols.remaining_spec(rem_source),
                     "empty_message": "موجودی خالی است.",
                     "header_bg": "#2e7d32",
                 },
@@ -3656,6 +3672,7 @@ class BotApp:
                     "title": f"مواد بحرانی (پوشش < {CRITICAL_DAYS} روز)",
                     "columns": crit_cols,
                     "rows": crit_rows,
+                    "material": mcols.remaining_spec(rem_source),
                     "empty_message": "ماده بحرانی‌ای شناسایی نشد.",
                     "header_bg": "#c62828",
                 },
@@ -3713,6 +3730,7 @@ class BotApp:
             ),
             columns=cols,
             rows=self._df_to_row_dicts(surplus, cols),
+            material=mcols.SPEC_WAREHOUSE,
             empty_message="در این بازه داده‌ای برای این گزارش نیست.",
             filename_stem="surplus",
             output_name="گزارش_مواد_مازاد.pdf",
@@ -4386,6 +4404,8 @@ class BotApp:
                 subtitle=f"تاریخ {format_date(day)} — {saved} از {len(items)} قلم",
                 columns=["شناسه", "شرح", "مقدار"],
                 rows=pdf_rows,
+                material={"id": "شناسه", "name": "شرح", "mode": "per_id",
+                          "rename": {"مقدار": "موجودی سایت (ثبت‌شده)"}},
                 filename_stem="site_stock_confirm",
                 output_name=f"ثبت_موجودی_سایت_{group}.pdf",
                 caption=f"✅ ثبت موجودی «{label}» — {saved} قلم",
@@ -5630,6 +5650,7 @@ class BotApp:
             subtitle=f"{len(lines)} قلم — پیش‌نویس (ثبت نشده) | {basis}",
             columns=cols,
             rows=self._mr_lines_to_pdf_rows(lines),
+            material={"id": "شناسه", "name": "شرح", "mode": "per_id"},
             empty_message="لیست خالی است.",
             filename_stem="material_request_draft",
             output_name="پیش‌نویس_درخواست_مواد.pdf",
@@ -6149,6 +6170,7 @@ class BotApp:
             subtitle=f"{len(lines)} قلم",
             columns=cols,
             rows=self._wr_lines_to_pdf_rows(lines),
+            material={"id": "شناسه", "name": "شرح", "mode": "per_id"},
             filename_stem="warehouse_return_review",
             output_name="پیشنهاد_برگشت_به_انبار.pdf",
             caption=f"پیشنهاد برگشت به انبار — {len(lines)} قلم",
