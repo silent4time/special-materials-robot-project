@@ -69,6 +69,7 @@ bash install.sh
 | `bash install.sh --update` | به‌روزرسانی برنامه: پشتیبان `data/backups/bot_pre_update_*.db` + `git pull --ff-only` + `pip install -r requirements.txt` + migrate + restart + تست سلامت؛ `.env` و `data/` حفظ می‌شود |
 | `bash install.sh --system-upgrade` | ارتقای سیستم‌عامل: `DEBIAN_FRONTEND=noninteractive apt-get update -y && apt-get upgrade -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold` (پیکربندی‌های موجود حفظ) + restart سرویس‌ها؛ اگر `/var/run/reboot-required` باشد هشدار ریبوت |
 | `bash install.sh --full-update` | `--system-upgrade` و سپس `--update` |
+| `bash install.sh --restore FILE.zip` | بازگردانی بک‌آپ: بررسی (رد فایل نامعتبر بدون هیچ تغییر) ← توقف سرویس‌ها ← بک‌آپ «پیش از بازگردانی» در `data/backups/` ← بازگردانی DB + `uploads/` + `data/bot_assets/` ← migrate ← استارت ← تست سلامت (`--dry-run` فقط مراحل را چاپ می‌کند) |
 | `bash install.sh --no-system-upgrade` | در نصب تازه ارتقای سیستم انجام نشود (در حالت غیرتعاملی پیش‌فرض: انجام می‌شود) |
 | `bash install.sh --repair` | نصب دوبارهٔ بسته‌های گم‌شده (tesseract، venv …) + restart |
 | `bash install.sh --reconfigure` | ویزارد دوباره |
@@ -222,3 +223,10 @@ via shared `analytics/frames.py`. Site daily stock is separate (on-site remainin
 critical only). Do not point plant reports at stale session slots when a newer
 extract exists. Restart Bale + web only after smoke tests pass.
 
+
+## 💾 بک‌آپ
+
+- فایل‌ها در `data/backups/nasoz_backup_<تاریخ شمسی>_<ساعت>[_manual|_pre-restore].zip` (کنار پشتیبان‌های قدیمی `*.db`).
+- خودکار هر شب ۰۲:۰۰ تهران (داخل ربات) + ارسال برای مالک در بله؛ نگهداری ۷ روزانه + ۴ هفتگی؛ دستی/پیش از بازگردانی تا ۳۰ روز محفوظ.
+- `.env` کامل هرگز داخل بک‌آپ نیست (فقط کلیدهای غیرمحرمانه در `config/env_public.txt`)؛ پس از بازگردانی روی سرور جدید، `.env` را با `bash install.sh --reconfigure` بسازید.
+- برای نگهداری بیرون از سرور، فایل‌ها را از `/settings/backups` دانلود کنید.

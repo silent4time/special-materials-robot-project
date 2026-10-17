@@ -16,6 +16,7 @@ DO_ASSISTANT=0                          # 0=ask, 1=install, 2=skip
 RECONFIGURE=0
 DO_SYSUP=0                              # 0=ask (fresh install, default yes), 1=yes, 2=no
 DO_SYSUP_ONLY=0
+RESTORE_FILE=""
 
 usage() {
   cat <<'HELP'
@@ -28,6 +29,8 @@ Usage: bash install.sh [options]
                      پیکربندی موجود حفظ می‌شوند) + restart سرویس‌ها
   --full-update      هر دو: --system-upgrade و سپس --update
   --no-system-upgrade  در نصب تازه ارتقای سیستم را نپرس/انجام نده
+  --restore FILE.zip بازگردانی بک‌آپ (فقط سرور): توقف سرویس‌ها ← بک‌آپ خودکار «پیش از بازگردانی» ←
+                     بررسی manifest/sha256 ← بازگردانی DB + uploads + bot_assets ← migrate ← استارت ← تست سلامت
   --repair           فقط خودترمیم: بسته‌های apt (tesseract و ...) + venv + restart
   --reconfigure      ویزارد .env را دوباره اجرا کن (مقادیر فعلی پیش‌فرض‌اند)
   --web-login        ساخت/بازنشانی ورود پنل وب برای مالک (بعد از اولین /start)
@@ -48,8 +51,12 @@ Usage: bash install.sh [options]
 HELP
 }
 
+_want_restore=0
 for arg in "$@"; do
+  if (( _want_restore )); then RESTORE_FILE="$arg"; _want_restore=0; continue; fi
   case "$arg" in
+    --restore) _want_restore=1 ;;
+    --restore=*) RESTORE_FILE="${arg#--restore=}" ;;
     --seed-admin) DO_SEED=1 ;;
     --systemd) SYSTEMD_CHOICE=y ;;
     --no-systemd) SYSTEMD_CHOICE=n ;;
@@ -723,7 +730,7 @@ log "مسیر نصب: $WORKDIR"
 VENV_PY="$WORKDIR/.venv/bin/python"
 
 # fail fast (before minutes of apt/pip) when a fresh install cannot get a token
-if (( ! DRY_RUN && ! DO_UPDATE && ! DO_REPAIR && ! DO_WEB_LOGIN && ! DO_START_ONLY )) \
+if (( ! DRY_RUN && ! DO_UPDATE && ! DO_REPAIR && ! DO_WEB_LOGIN && ! DO_START_ONLY && ! _want_restore && ! DO_SYSUP_ONLY )) && [[ -z "$RESTORE_FILE" ]] \
    && ! env_configured && [[ -z "${BALE_BOT_TOKEN:-}" ]] && ! interactive; then
   no_tty_die
 fi
@@ -732,6 +739,27 @@ if (( DO_WEB_LOGIN )); then
   seed_web_login 0
   if (( WEB_LOGIN_READY )); then log "نام کاربری: $(env_get WEB_ADMIN_USERNAME) — رمز: grep WEB_ADMIN_PASSWORD $WORKDIR/.env"; fi
   trap - EXIT; exit 0
+fi
+if (( _want_restore )); then die "مسیر فایل بک‌آپ را بدهید: bash install.sh --restore nasoz_backup_….zip"; fi
+if [[ -n "$RESTORE_FILE" ]]; then
+  [[ -f "$RESTORE_FILE" ]] || die "فایل بک‌آپ پیدا نشد: $RESTORE_FILE"
+  RESTORE_FILE="$(cd "$(dirname "$RESTORE_FILE")" && pwd)/$(basename "$RESTORE_FILE")"
+  PY="$VENV_PY"; [[ -x "$PY" ]] || PY="python3"
+  (cd "$WORKDIR" && "$PY" scripts/restore_backup.py --check "$RESTORE_FILE") || die "فایل بک‌آپ نامعتبر است؛ هیچ تغییری داده نشد."
+  if (( DRY_RUN )); then
+    log "[dry-run] توقف سرویس‌ها ($BOT_SERVICE، $WEB_SERVICE یا pid های data/)"
+    log "[dry-run] $PY scripts/restore_backup.py $RESTORE_FILE   (بک‌آپ پیش از بازگردانی + بازگردانی + migrate)"
+    log "[dry-run] استارت سرویس‌ها + تست سلامت"
+    trap - EXIT; exit 0
+  fi
+  if interactive && ! yes_no N "همهٔ داده‌های فعلی با این بک‌آپ جایگزین می‌شود. ادامه؟"; then die "لغو شد."; fi
+  if systemd_installed && have_systemd; then maybe_sudo systemctl stop "$BOT_SERVICE" "$WEB_SERVICE" || true
+  else for n in bot web; do pid_alive "$WORKDIR/data/$n.pid" && kill "$(cat "$WORKDIR/data/$n.pid")" 2>/dev/null || true; done; sleep 2; fi
+  ok "سرویس‌ها متوقف شدند"
+  (cd "$WORKDIR" && "$PY" scripts/restore_backup.py "$RESTORE_FILE") || warn "بازگردانی ناموفق بود — بک‌آپ «پیش از بازگردانی» در data/backups است."
+  [[ -x "$VENV_PY" ]] || VENV_PY="$PY"
+  init_db "$WORKDIR"
+  start_services; health_check; print_summary; trap - EXIT; exit 0
 fi
 if (( DO_SYSUP_ONLY && ! DO_UPDATE )); then
   system_upgrade
