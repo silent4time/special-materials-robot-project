@@ -254,7 +254,7 @@ def main() -> int:
         page = c.get("/reports")
         assert page.status_code == 200 and "گزارش اقلام ورودی به انبار" in page.text, page.status_code
         assert f"/reports/inbound/{rep['id']}.pdf" in page.text and f"/reports/inbound/{r1['id']}.xlsx" in page.text
-        assert N1 in page.text and A in page.text
+        assert N1 in page.text and A in page.text, page.text[page.text.find("id=\"inbound\""):][:3000]
         rp = c.get(f"/reports/inbound/{rep['id']}.pdf")
         assert rp.status_code == 200 and rp.content[:4] == b"%PDF", rp.status_code
         rx = c.get(f"/reports/inbound/{rep['id']}.xlsx")
