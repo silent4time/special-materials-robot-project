@@ -27,28 +27,75 @@
 
 ## نصب روی سرور
 
-روی Ubuntu 22.04/24.04 یا Debian 12، در یک ترمینال SSH (با root یا sudo):
+روی Ubuntu 22.04/24.04 یا Debian 12، در یک ترمینال SSH (PuTTY یا CMD/PowerShell با `ssh`) با root یا sudo. دو روش وجود دارد؛ جزئیات کامل در **[DEPLOY.md](DEPLOY.md)**.
 
+### روش الف — نصب آنلاین با یک دستور (سرور به GitHub و PyPI دسترسی دارد)
+
+1. با PuTTY یا `ssh root@IP-سرور` وارد سرور شوید.
+2. اجرا کنید:
+   ```bash
+   cd /root
+   bash <(curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh)
+   ```
+   (`curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash` هم کار می کند.)
+3. به ویزارد فارسی پاسخ دهید: توکن (با بررسی `getMe`)، نام کاربری ربات، شناسه مالک (اختیاری)، پورت/آدرس و ورود پنل وب. سپس بسته ها (tesseract فارسی و ...)، venv، دیتابیس و دو سرویس systemd (`nasoz-bot`، `nasoz-web`) نصب و تست سلامت می شود. ریپو در `/root/special-materials-robot-project` قرار می گیرد.
+4. به روزرسانی بعدی:
+   ```bash
+   cd /root/special-materials-robot-project
+   bash install.sh --update        # فقط برنامه (پشتیبان DB + git pull + pip + migrate + ری استارت)
+   bash install.sh --full-update   # اول ارتقای سیستم عامل، بعد برنامه
+   ```
+
+### روش ب — نصب آفلاین با بسته (سرور به GitHub/PyPI نمی رسد، مثلا داخل ایران)
+
+1. فایل بسته `nasoz_offline_<تاریخ>_<commit>.tar.gz` را دانلود کنید (ساخت روی سیستمی با اینترنت آزاد: `bash scripts/build_offline_bundle.sh`). اگر بیشتر از 25 مگابایت باشد ممکن است تکه تکه برسد: `.part0`، `.part1`، `.part2` — همه را دانلود کنید.
+2. با **WinSCP** (SFTP، کاربر root) فایل (یا همه تکه ها) را به پوشه `/root` سرور بفرستید.
+3. در SSH، اگر تکه تکه بود، یکی کنید:
+   ```bash
+   cd /root
+   cat nasoz_offline_X.tar.gz.part0 nasoz_offline_X.tar.gz.part1 nasoz_offline_X.tar.gz.part2 > nasoz_offline_X.tar.gz
+   ```
+4. سالم بودن فایل را بررسی کنید؛ عدد باید با sha256 اعلام شده یکی باشد:
+   ```bash
+   sha256sum nasoz_offline_X.tar.gz
+   ```
+5. باز کنید و نصب کنید (نصب در `/opt/nasoz`):
+   ```bash
+   tar -xzf nasoz_offline_X.tar.gz
+   cd nasoz_offline_X
+   bash install_offline.sh
+   ```
+6. به روزرسانی با بسته جدید (`.env` و `data/` حفظ می شود):
+   ```bash
+   cd /root && tar -xzf nasoz_offline_<جدید>.tar.gz && cd nasoz_offline_<جدید>
+   bash install_offline.sh --update
+   # یا: bash /opt/nasoz/scripts/install.sh --update --offline /root/nasoz_offline_<جدید>.tar.gz
+   ```
+
+### بازگردانی بک آپ روی سرور
+فایل ZIP بک آپ را با WinSCP به `/root` بفرستید و در پوشه نصب اجرا کنید:
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh)
+cd /opt/nasoz          # روش آنلاین: cd /root/special-materials-robot-project
+bash scripts/install.sh --restore /root/nasoz_backup_1405-07-25_0200.zip
 ```
 
-(`curl -fsSL …/install.sh | bash` هم کار می‌کند.) ویزارد فارسی توکن (با بررسی `getMe`)، نام کاربری ربات، شناسه مالک (اختیاری)، پورت/آدرس و ورود پنل وب را می‌پرسد؛ سپس بسته‌ها (tesseract فارسی و …)، venv، دیتابیس و دو سرویس systemd (`nasoz-bot`، `nasoz-web`) را نصب و تست سلامت می‌کند.
+### بعد از نصب (هر دو روش)
+1. پورت پنل وب را باز کنید: `sudo ufw allow 8000/tcp` و در فایروال/پنل ابری ارائه دهنده سرور هم پورت 8000/TCP را باز کنید.
+2. در بله به ربات `/start` بفرستید — **اولین کسی که /start بزند مالک می شود**.
+3. پنل وب: `http://IP-سرور:8000/login` (اگر ورود وب هنوز فعال نیست: `bash install.sh --web-login` در پوشه نصب).
+4. **فقط یک نمونه از ربات با هر توکن** روشن باشد؛ نسخه های دیگر را خاموش کنید.
 
-اولین کسی که در بله `/start` بزند **مالک** می‌شود. همین یک دستور نصب کامل را انجام می‌دهد (در نصب تازه ارتقای سیستم‌عامل هم پرسیده می‌شود؛ پیش‌فرض بله).
-
-| دستور | کار |
+| دستور (در پوشه نصب) | کار |
 |------|-----|
-| `bash install.sh --update` | به‌روزرسانی برنامه: پشتیبان DB ← `git pull` ← `pip install -r requirements.txt` ← migrate ← restart ← تست سلامت (`.env` و `data/` حفظ می‌شود) |
-| `bash install.sh --system-upgrade` | `apt-get update && apt-get upgrade -y` غیرتعاملی (`DEBIAN_FRONTEND=noninteractive`، فایل‌های پیکربندی موجود حفظ می‌شود) + restart |
+| `bash install.sh --update` | به روزرسانی برنامه: پشتیبان DB ← `git pull` ← `pip install -r requirements.txt` ← migrate ← restart ← تست سلامت (`.env` و `data/` حفظ می شود) |
+| `bash install.sh --system-upgrade` | `apt-get update && apt-get upgrade -y` غیرتعاملی (`DEBIAN_FRONTEND=noninteractive`، فایل های پیکربندی موجود حفظ می شود) + restart |
 | `bash install.sh --full-update` | هر دو (اول سیستم، بعد برنامه) |
-| `bash install.sh --repair` | خودترمیم بسته‌ها/venv |
-| `bash install.sh --restore FILE.zip` | بازگردانی بک‌آپ روی سرور: توقف سرویس‌ها ← بک‌آپ «پیش از بازگردانی» ← بررسی manifest/sha256 ← بازگردانی ← migrate ← استارت ← تست سلامت |
-| `… --dry-run` | فقط چاپ دستورها، بدون تغییر |
+| `bash install.sh --update --offline BUNDLE.tar.gz` | به روزرسانی از بسته آفلاین (بدون GitHub/PyPI) |
+| `bash install.sh --repair` | خودترمیم بسته ها/venv |
+| `bash install.sh --restore FILE.zip` | بازگردانی بک آپ روی سرور: بررسی manifest/sha256 ← توقف سرویس ها ← بک آپ «پیش از بازگردانی» ← بازگردانی ← migrate ← استارت ← تست سلامت |
+| `... --dry-run` | فقط چاپ دستورها، بدون تغییر |
 
-**سرور بدون دسترسی به GitHub/PyPI (مثلاً داخل ایران):** بستهٔ آفلاین با `bash scripts/build_offline_bundle.sh` بسازید و روی سرور `bash install_offline.sh` اجرا کنید؛ جزئیات در DEPLOY.md «نصب آفلاین».
-
-نصب‌کننده برای هر مرحله نوار پیشرفت (`[n/کل] ٪ ███░░`) نشان می‌دهد و خروجی کامل را در `data/logs/nasoz_install_<تاریخ>.log` نگه می‌دارد؛ در خطا مرحله و مسیر لاگ گفته می‌شود.
+نصب کننده برای هر مرحله نوار پیشرفت (`[n/کل] ٪ ███░░`) نشان می دهد و خروجی کامل را در `data/logs/nasoz_install_<تاریخ>.log` نگه می دارد؛ در خطا مرحله و مسیر لاگ گفته می شود. پیام های فارسی ترمینال بدون نیم فاصله چاپ می شوند تا در PuTTY/CMD کلمه ها به هم نچسبند.
 
 ### 💾 بک‌آپ و بازگردانی
 - **بک‌آپ کامل** = ZIP با نام تاریخ شمسی (مثل `nasoz_backup_1405-07-25_0200.zip`؛ دستی `…_manual.zip`، پیش از بازگردانی `…_pre-restore.zip`) شامل کپی سازگار پایگاه داده (sqlite backup API)، `uploads/` (فایل‌های منبع اصلی و …)، `data/bot_assets/`، تنظیمات `.env` **بدون** توکن/رمز/کلیدها، و `manifest.json` (commit، تاریخ، شمارش‌ها، sha256 هر فایل). محل: `data/backups/` روی سرور.

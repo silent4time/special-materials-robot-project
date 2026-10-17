@@ -2,6 +2,11 @@
 
 ## ۱۴۰۵/۰۷/۲۵ (2026-10-17)
 
+### خروجی فارسی نصب کننده در PuTTY/CMD و راهنمای دو روش نصب
+- پیام های فارسی ترمینال در `install.sh`، `scripts/install.sh`، `scripts/build_offline_bundle.sh` و `install_offline.sh` تولیدی آن دیگر نیم فاصله (ZWNJ، U+200C) و نویسه های صفرعرض/جهت (U+200F و ...) یا اعراب ترکیبی (ـٔ، تنوین، کسره) ندارند؛ ترمینال های SSH ویندوز این ها را نشان نمی دادند و کلمه ها به هم می چسبید (مثلا «سیستم عامل» به شکل «سیستمعامل» و «بسته های» به شکل «بستههای»). خروجی `scripts/restore_backup.py` (بازگردانی از سرور) هم هنگام چاپ پاکسازی می شود؛ متن های ربات بله دست نخورده است.
+- `install_offline.sh --dry-run` دیگر چیزی در `/opt/nasoz` کپی نمی کند؛ مراحل فقط روی پوشه app بسته نمایش داده می شود.
+- README.md و DEPLOY.md (و README_OFFLINE.md داخل بسته): راهنمای گام به گام فارسی برای هر دو روش — **آنلاین** با یک دستور از GitHub (+ `--update` / `--full-update`) و **آفلاین** با بسته (دانلود، یکی کردن تکه های `.part0/.part1/.part2` با `cat`، ارسال با WinSCP به `/root`، `sha256sum`، `tar -xzf`، `bash install_offline.sh`)، به روزرسانی آفلاین (`install_offline.sh --update` یا `scripts/install.sh --update --offline`)، بازگردانی (`scripts/install.sh --restore`) و کارهای بعد از نصب (`ufw allow 8000/tcp` و فایروال ارائه دهنده، `/start` در بله = مالک، فقط یک نمونه با هر توکن).
+
 ### نصب آفلاین (بدون GitHub/PyPI)
 - `scripts/build_offline_bundle.sh` بستهٔ `dist/nasoz_offline_<تاریخ شمسی>_<commit>.tar.gz` می‌سازد: کد (git archive، بدون data/.env/uploads)، همهٔ wheel های Python برای Ubuntu 24.04 / Python 3.12 / x86_64، `install_offline.sh` و `SHA256SUMS`. گزینهٔ `--with-debs`: ‏.deb های tesseract و python3-venv/pip برای noble (فقط اگر apt به هیچ mirror نرسد).
 - `bash install_offline.sh` (نصب تازه با همان ویزارد، نوار پیشرفت، systemd و تست سلامت) و `bash install_offline.sh --update` / `bash install.sh --update --offline <بسته.tar.gz>` (پشتیبان DB، جایگزینی کد با حفظ ‎.env و data/، نصب wheel ها با `--no-index`، migrate، ری‌استارت).

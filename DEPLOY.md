@@ -2,37 +2,127 @@
 
 ربات + پنل وب روی یک سرور لینوکس همیشه روشن اجرا می‌شوند. تست‌شده برای **Ubuntu 22.04 / 24.04** و **Debian 12** (Python 3.10+). دسترسی **root یا sudo** لازم است (نصب بسته‌ها و سرویس systemd).
 
-## نصب یک‌خطی (پیشنهادی)
+## دو روش نصب
 
-در یک ترمینال SSH واقعی:
+| روش | چه وقت | دستور اصلی |
+|-----|--------|------------|
+| **الف) آنلاین (یک دستور از GitHub)** | سرور به GitHub و PyPI دسترسی دارد | `bash <(curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh)` |
+| **ب) آفلاین (بسته tar.gz)** | سرور به GitHub یا PyPI نمی رسد (مثلا داخل ایران) | `bash install_offline.sh` |
 
+هر دو روش همان ویزارد فارسی، نوار پیشرفت، سرویس های systemd و تست سلامت را اجرا می کنند. دسترسی **root یا sudo** لازم است. همه دستورها را در یک ترمینال SSH واقعی (PuTTY، CMD/PowerShell با `ssh`، ...) اجرا کنید.
+
+> **فقط یک نمونه از ربات با یک توکن:** اگر ربات روی سرور یا کامپیوتر دیگری با همین توکن روشن است، اول آن را خاموش کنید؛ دو نمونه هم زمان باعث از دست رفتن پیام ها می شود.
+
+### الف) نصب آنلاین از GitHub (یک دستور)
+
+**گام ۱ — ورود به سرور:** با PuTTY یا `ssh root@IP-سرور` وارد شوید (کاربر root یا کاربری با sudo).
+
+**گام ۲ — اجرای نصب:**
 ```bash
+cd /root
 bash <(curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh)
 ```
-
-شکل `curl … | bash` هم کار می‌کند (ورودی ویزارد از `/dev/tty` خوانده می‌شود):
-
+شکل `curl ... | bash` هم کار می کند (ورودی ویزارد از `/dev/tty` خوانده می شود):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/silent4time/special-materials-robot-project/main/install.sh | bash
 ```
+ریپو در پوشه جاری کلون می شود (`/root/special-materials-robot-project`؛ برای مسیر دیگر: `INSTALL_DIR=/opt/nasoz` جلوی دستور).
 
-یا دستی:
+**گام ۳ — پاسخ به ویزارد:** توکن بازو از `@botfather` (مخفی تایپ می شود)، نام کاربری ربات، شناسه مالک (اختیاری)، پورت وب (پیش فرض 8000) و ... — با Enter مقدار پیش فرض داخل `[ ]` پذیرفته می شود. جدول کامل سوال ها پایین تر است.
 
+**گام ۴ — پایان:** در آخر خلاصه ای با آدرس پنل وب، نام کاربری و دستورهای سرویس چاپ می شود. سپس «کارهای بعد از نصب» را انجام دهید.
+
+**به روزرسانی آنلاین** (`.env` و `data/` حفظ می شود و قبل از آن از DB پشتیبان گرفته می شود):
+```bash
+cd /root/special-materials-robot-project
+bash install.sh --update          # فقط برنامه: git pull + pip + migrate + ری استارت + تست سلامت
+bash install.sh --full-update     # اول ارتقای سیستم عامل (apt upgrade)، بعد همان --update
+```
+
+دستی (بدون curl):
 ```bash
 git clone https://github.com/silent4time/special-materials-robot-project.git
 cd special-materials-robot-project
 bash install.sh
 ```
 
-ریپو در `./special-materials-robot-project` (یا `INSTALL_DIR=/opt/nasoz`) کلون می‌شود.
+### ب) نصب آفلاین (سرور بدون دسترسی به GitHub/PyPI)
 
-## نصب‌کننده چه می‌کند
+بسته آفلاین همه چیز را با خودش دارد: کد برنامه، همه wheel های Python برای **Ubuntu 24.04 / Python 3.12 / x86_64**، `install_offline.sh` و `SHA256SUMS`. فقط apt باید به یک mirror (مثلا ubuntu.parsvds.com یا mirror دیتاسنتر) برسد تا tesseract و python3-venv نصب شوند.
 
-1. بسته‌های سیستم: `python3 python3-venv python3-pip git curl tesseract-ocr tesseract-ocr-fas tesseract-ocr-eng sqlite3 fontconfig` (فونت Vazirmatn داخل `fonts/` است)
-2. **ویزارد فارسی** (قبل از نصب‌های طولانی) و نوشتن `.env` با `chmod 600`
-3. `.venv` + `pip install -r requirements.txt` + تست import ماژول‌ها + ساخت/مهاجرت دیتابیس و پوشه‌های `data/ uploads/ reports/`
-4. دو سرویس systemd: **`nasoz-bot`** (ربات) و **`nasoz-web`** (پنل وب) با `Restart=always`، فعال در بوت (در root/sudo پیش‌فرض بله). بدون systemd با `nohup` اجرا می‌شود.
-5. تست سلامت: `getMe`، زنده بودن ربات، پاسخ `200` از `/login` پنل وب؛ و خلاصهٔ فارسی (آدرس وب، دستورات سرویس)
+**گام ۱ — دریافت بسته:** فایل `nasoz_offline_<تاریخ>_<commit>.tar.gz` را (از لینکی که در اختیارتان گذاشته شده) دانلود کنید. ساخت بسته روی سیستمی با اینترنت آزاد: `bash scripts/build_offline_bundle.sh` (خروجی در `dist/`).
+
+اگر بسته بزرگ تر از 25 مگابایت باشد ممکن است به صورت چند تکه برسد: `...tar.gz.part0`، `...tar.gz.part1`، `...tar.gz.part2`. همه تکه ها را دانلود کنید و همه را (بدون تغییر نام) کنار هم نگه دارید. می توانید یا همین تکه ها را به سرور بفرستید و آنجا به هم بچسبانید (گام ۳)، یا در ویندوز (CMD) یکی کنید:
+```bat
+copy /b nasoz_offline_X.tar.gz.part0+nasoz_offline_X.tar.gz.part1+nasoz_offline_X.tar.gz.part2 nasoz_offline_X.tar.gz
+```
+
+**گام ۲ — ارسال با WinSCP:** در WinSCP با پروتکل SFTP و کاربر root به سرور وصل شوید، به پوشه `/root` بروید و فایل `tar.gz` (یا همه تکه های `.part*`) را به آنجا بکشید.
+
+**گام ۳ — یکی کردن تکه ها (فقط اگر تکه تکه فرستادید):** در SSH:
+```bash
+cd /root
+cat nasoz_offline_X.tar.gz.part0 nasoz_offline_X.tar.gz.part1 nasoz_offline_X.tar.gz.part2 > nasoz_offline_X.tar.gz
+# یا کوتاه تر (ترتیب part0، part1، ... حفظ می شود):  cat nasoz_offline_X.tar.gz.part* > nasoz_offline_X.tar.gz
+```
+(به جای `nasoz_offline_X` نام واقعی فایل را بگذارید؛ با `ls /root` ببینید.)
+
+**گام ۴ — بررسی سالم بودن فایل:**
+```bash
+sha256sum nasoz_offline_X.tar.gz
+```
+عدد چاپ شده باید دقیقا با sha256 ای که همراه بسته داده شده یکی باشد. اگر فرق داشت فایل ناقص است؛ دوباره بفرستید.
+
+**گام ۵ — باز کردن و نصب:**
+```bash
+tar -xzf nasoz_offline_X.tar.gz
+cd nasoz_offline_X
+bash install_offline.sh          # نصب در /opt/nasoz (برای مسیر دیگر: INSTALL_DIR=/مسیر bash install_offline.sh)
+```
+`install_offline.sh` اول SHA256SUMS همه فایل ها را بررسی می کند، سپس کد را در `/opt/nasoz` کپی و همان ویزارد را اجرا می کند (pip فقط از `wheels/` بسته نصب می کند، `--no-index`). برای دیدن مراحل بدون هیچ تغییری (چیزی در /opt/nasoz کپی یا نصب نمی شود): `bash install_offline.sh --dry-run`.
+
+**به روزرسانی آفلاین با بسته جدید** (`.env` و `data/` و `uploads/` حفظ می شود، قبل از آن پشتیبان DB گرفته می شود):
+```bash
+cd /root
+tar -xzf nasoz_offline_<جدید>.tar.gz && cd nasoz_offline_<جدید>
+bash install_offline.sh --update          # یا --full-update برای ارتقای سیستم عامل هم
+# یا بدون باز کردن دستی:
+bash /opt/nasoz/scripts/install.sh --update --offline /root/nasoz_offline_<جدید>.tar.gz
+```
+در حالت آفلاین git pull انجام نمی شود و ارتقای سیستم عامل فقط با `--full-update` اجرا می شود. بسته ساخته شده با `--with-debs` اگر apt به هیچ mirror نرسد tesseract و python3-venv را از فایل های .deb خودش نصب می کند.
+
+### بازگردانی بک آپ روی سرور (هر دو روش)
+فایل بک آپ (`nasoz_backup_....zip`) را با WinSCP به `/root` بفرستید، سپس در پوشه نصب (`/opt/nasoz` در روش آفلاین یا `/root/special-materials-robot-project` در روش آنلاین):
+```bash
+cd /opt/nasoz
+bash scripts/install.sh --restore /root/nasoz_backup_1405-07-25_0200.zip    # همان: bash install.sh --restore ...
+```
+اول فایل بررسی می شود (فایل نامعتبر بدون هیچ تغییری رد می شود)، سرویس ها متوقف می شوند، یک بک آپ «پیش از بازگردانی» گرفته می شود، داده ها برمی گردند، migrate و استارت و تست سلامت انجام می شود. با `--dry-run` فقط مراحل چاپ می شود.
+
+## کارهای بعد از نصب
+
+1. **باز کردن پورت پنل وب:** روی سرور
+   ```bash
+   sudo ufw allow 8000/tcp
+   ```
+   و در پنل ابری یا فایروال شرکت ارائه دهنده سرور (Security Group / Firewall) هم پورت ورودی **8000/TCP** را باز کنید (اگر پورت دیگری در ویزارد دادید، همان را).
+2. **مالک ربات:** در بله به ربات `/start` بفرستید — **اولین کسی که /start بزند مالک می شود** (مگر شناسه مالک را در سوال ۳ داده باشید).
+3. **ورود پنل وب** (اگر شناسه مالک را در ویزارد نداده اید، بعد از اولین /start):
+   ```bash
+   cd /opt/nasoz && bash install.sh --web-login      # در روش آنلاین: cd /root/special-materials-robot-project
+   ```
+   نام کاربری و رمز: `grep WEB_ADMIN_ .env` — پنل: `http://IP-سرور:8000/login`
+4. **فقط یک نمونه با هر توکن:** نسخه قدیمی ربات روی هر ماشین دیگری را خاموش کنید.
+
+## نصب کننده چه می کند
+
+1. بسته های سیستم: `python3 python3-venv python3-pip git curl tesseract-ocr tesseract-ocr-fas tesseract-ocr-eng sqlite3 fontconfig` (فونت Vazirmatn داخل `fonts/` است)
+2. **ویزارد فارسی** (قبل از نصب های طولانی) و نوشتن `.env` با `chmod 600`
+3. `.venv` + `pip install -r requirements.txt` + تست import ماژول ها + ساخت/مهاجرت دیتابیس و پوشه های `data/ uploads/ reports/`
+4. دو سرویس systemd: **`nasoz-bot`** (ربات) و **`nasoz-web`** (پنل وب) با `Restart=always`، فعال در بوت (در root/sudo پیش فرض بله). بدون systemd با `nohup` اجرا می شود.
+5. تست سلامت: `getMe`، زنده بودن ربات، پاسخ `200` از `/login` پنل وب؛ و خلاصه فارسی (آدرس وب، دستورات سرویس)
+
+خروجی ترمینال نصب کننده عمدا بدون نیم فاصله (ZWNJ) است، چون PuTTY و CMD آن را نشان نمی دهند و کلمه ها به هم می چسبند.
 
 ### سؤال‌های ویزارد
 
@@ -53,35 +143,6 @@ bash install.sh
 
 ### نوار پیشرفت و لاگ نصب
 هر مرحله با سرخطی مثل `[۴/۱۱] ۳۶٪ ███░░░░░░░ محیط پایتون و وابستگی‌ها...` نمایش داده می‌شود. خروجی کامل apt/pip در `data/logs/nasoz_install_<تاریخ>.log` است (پیش از مشخص شدن پوشه، موقتاً در `/tmp`). در خطا، مرحلهٔ ناموفق، ۱۵ خط آخر لاگ و مسیر لاگ چاپ می‌شود و اجرای دوباره امن است. بدون ترمینال یا با `NO_COLOR=1` خروجی ساده و بی‌رنگ است.
-
-## نصب آفلاین (سرور بدون دسترسی به GitHub/PyPI)
-روی سیستمی که اینترنت آزاد دارد:
-```bash
-bash scripts/build_offline_bundle.sh          # → dist/nasoz_offline_<تاریخ>_<commit>.tar.gz
-```
-فایل را با WinSCP به `/root` سرور بفرستید. روی سرور (apt باید به یک mirror مثل ubuntu.parsvds.com برسد):
-```bash
-cd /root
-tar -xzf nasoz_offline_*.tar.gz
-cd nasoz_offline_*/
-bash install_offline.sh                        # نصب در /opt/nasoz (تغییر با INSTALL_DIR=/مسیر)
-```
-به‌روزرسانی با بستهٔ جدید (‎.env و data/ حفظ می‌شود، پیش از آن پشتیبان DB گرفته می‌شود):
-```bash
-tar -xzf nasoz_offline_<جدید>.tar.gz && cd nasoz_offline_<جدید>/ && bash install_offline.sh --update
-# یا: bash /opt/nasoz/scripts/install.sh --update --offline /root/nasoz_offline_<جدید>.tar.gz
-```
-در حالت آفلاین pip فقط از `wheels/` بسته نصب می‌کند (`--no-index`)، git pull انجام نمی‌شود و ارتقای سیستم‌عامل فقط با `--full-update` اجرا می‌شود. بازگردانی بک‌آپ (`--restore`) مثل قبل است. بستهٔ ساخته‌شده با `--with-debs` اگر apt به mirror نرسد tesseract و python3-venv را از ‎.deb های خودش نصب می‌کند.
-
-## بعد از نصب
-
-1. در بله به ربات `/start` بزنید — اولین نفر **مالک** می‌شود (یا همان شناسهٔ سؤال ۳).
-2. فعال‌کردن ورود پنل وب برای مالک (اگر شناسه مالک را در ویزارد نداده‌اید):
-   ```bash
-   cd special-materials-robot-project && bash install.sh --web-login
-   ```
-   نام کاربری/رمز: `grep WEB_ADMIN_ .env`
-3. پنل: `http://IP-سرور:8000/login` — اگر فایروال فعال است: `sudo ufw allow 8000/tcp` (و در پنل ابری، پورت را باز کنید).
 
 ## دستورات
 
