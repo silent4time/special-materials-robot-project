@@ -27,6 +27,21 @@
     «🎯 هدف اصلی» از نوار بالا؛ «📋 فعالیت کاربران» در تنظیمات (مالک/مدیر).</p>
 </div>
 
+{% if can(user, "report.daily") %}
+<div class="card" id="daily">
+  <h2>📈 مصرف روزانه مواد</h2>
+  <p class="muted">همان گزارش ربات: میانگین مصرف روزانهٔ هر ماده/تاندیش از موجودی روزانه سایت و مصرف ماهیانه.</p>
+  <form method="get" action="/reports/daily" class="form-grid">
+    <label>بازه (روز)<input type="number" name="days" min="1" max="365" value="30"></label>
+    <label>بخش<select name="section"><option value="">همه بخش‌ها</option><option value="slab">اسلب</option><option value="bloom">بلوم</option><option value="billet">بیلت</option></select></label>
+    <div class="report-actions">
+      <button type="submit" class="btn">PDF</button>
+      <button type="submit" class="btn" formaction="/reports/daily.xlsx">اکسل</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
 {% if can(user, "report.n_tundish") %}
 <div class="card" id="n-tundish">
   <h2>🧮 نیاز مواد برای N تاندیش</h2>

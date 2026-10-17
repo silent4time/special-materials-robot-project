@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}تنظیمات ربات{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>⚙️ تنظیمات ربات</h1>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+</div>
+{% if can(user, "appearance") %}
+<div class="card" id="appearance">
+  <h2>🎨 ظاهر</h2>
+  <h3>📝 متن دعوت‌نامه کاربران</h3>
+  <form method="post" action="/settings/bot/text/invite"><textarea name="text" rows="4" style="width:100%">{{ invite_text }}</textarea>
+    <p class="muted" style="white-space:pre-line">{{ hint_invite }}</p><button type="submit">ذخیره (خالی = پیش‌فرض)</button></form>
+  <h3>👋 پیام خوشامدگویی</h3>
+  <form method="post" action="/settings/bot/text/welcome"><textarea name="text" rows="4" style="width:100%">{{ welcome_text }}</textarea>
+    <p class="muted" style="white-space:pre-line">{{ hint_welcome }}</p><button type="submit">ذخیره (خالی = پیش‌فرض)</button></form>
+  {% for w, title, key, acc in [("logo","🖼 لوگوی ربات","logo_path","image/*"),("letterhead","📄 سربرگ PDF","letterhead_pdf",".pdf"),("invite","تصویر دعوت‌نامه","invite_image_path","image/*"),("welcome","تصویر خوشامد","welcome_image_path","image/*")] %}
+  <h3>{{ title }} {{ "✅" if files[key] else "—" }}</h3>
+  <form method="post" action="/settings/bot/asset/{{ w }}" enctype="multipart/form-data">
+    <input type="file" name="file" accept="{{ acc }}"> <button type="submit">ذخیره (بدون فایل = حذف)</button></form>
+  {% endfor %}
+</div>
+{% endif %}
+{% if can(user, "stock_group") %}
+<div class="card" id="stock-group">
+  <h2>📣 گروه گزارش موجودی</h2>
+  <p>{% if stock_group %}شناسه گروه فعال: {{ stock_group }}{% else %}⚠️ گروه گزارش موجودی هنوز تنظیم نشده است.{% endif %}</p>
+  <p class="muted">برای تنظیم: ربات را به گروه بله اضافه کنید و داخل همان گروه (توسط مالک/مدیر) بفرستید: /set_stock_group</p>
+  {% if stock_group_db %}<form method="post" action="/settings/bot/stock-group/clear"><button type="submit">حذف شناسه گروه</button></form>{% endif %}
+</div>
+{% endif %}
+{% if is_owner %}
+<div class="card" id="assistant">
+  <h2>🤖 دستیار هوشمند صوتی</h2>
+  <pre class="muted" style="white-space:pre-wrap">{{ assistant_status }}</pre>
+  <form method="post" action="/settings/bot/assistant" style="display:inline"><input type="hidden" name="enable" value="1"><button type="submit">فعال</button></form>
+  <form method="post" action="/settings/bot/assistant" style="display:inline"><input type="hidden" name="enable" value="0"><button type="submit">غیرفعال</button></form>
+</div>
+{% endif %}
+{% endblock %}

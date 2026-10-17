@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}ورود فایل‌ها{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>📤 ورود فایل‌ها</h1>
+  <p class="muted">همان ۴ ورودی ربات با همان پردازش و همان مجوز («ورود فایل‌ها»).</p>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err" style="white-space:pre-wrap">{{ error }}</div>{% endif %}
+  {% if summary %}<pre class="muted" style="white-space:pre-wrap">{{ summary }}</pre>{% endif %}
+  {% if ocr_preview %}<details><summary>جزئیات خوانش عکس</summary><pre class="muted">{{ ocr_preview }}</pre></details>{% endif %}
+  {% if new_inbound %}<p>📄 گزارش اقلام ورودی به انبار: <a class="btn" href="/files/inbound/{{ new_inbound.id }}.pdf">PDF</a> <a class="btn" href="/files/inbound/{{ new_inbound.id }}.xlsx">اکسل</a></p>{% endif %}
+</div>
+<div class="card" id="stock">
+  <h2>📥 به‌روزرسانی موجودی انبار</h2>
+  <p class="muted">فقط موجودی شناسه‌های موجود به‌روز می‌شود؛ بقیهٔ ستون‌های منبع اصلی دست نمی‌خورد. شناسهٔ جدید فقط اگر کد ۴ رقمی آن در منبع اصلی باشد (نه ۱۸۰۰) اضافه می‌شود و ستون‌های مشترک هم‌کدها پیش‌پر می‌شود؛ ستون‌های خالی در نتیجه فهرست می‌شوند.</p>
+  <form method="post" action="/files/stock" enctype="multipart/form-data" class="form-grid">
+    <input type="file" name="file" accept=".xlsx" required><button class="btn" type="submit">ارسال</button>
+  </form>
+  {{ file_guide("product_inventory")|safe }}
+</div>
+<div class="card" id="monthly">
+  <h2>📥 مصرف ماهیانه اقلام</h2>
+  <form method="post" action="/files/monthly" enctype="multipart/form-data" class="form-grid">
+    <input type="file" name="file" accept=".xlsx" required><button class="btn" type="submit">ارسال</button>
+  </form>
+  {{ file_guide("monthly_consumption")|safe }}
+</div>
+<div class="card" id="photo">
+  <h2>📸 عکس‌های آمار تولید</h2>
+  <form method="post" action="/reports/main-goal/inputs/production-photo?back=files" enctype="multipart/form-data" class="form-grid">
+    <input type="file" name="photo" accept="image/*" required><button class="btn" type="submit">ارسال</button>
+  </form>
+  {{ file_guide("mg_production_photo")|safe }}
+</div>
+<div class="card" id="sequence">
+  <h2>📤 گزارش جامع تاندیش در سکوئنس</h2>
+  <form method="post" action="/reports/main-goal/inputs/sequence?back=files" enctype="multipart/form-data" class="form-grid">
+    <input type="file" name="file" accept=".xlsx" required><button class="btn" type="submit">ارسال</button>
+  </form>
+  {{ file_guide("mg_sequence")|safe }}
+</div>
+{% endblock %}
