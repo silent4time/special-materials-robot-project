@@ -1,0 +1,5 @@
+# دستیار هوشمند صوتی (اختیاری) — نصب: bash scripts/install_assistant.sh
+faster-whisper>=1.0.0
+av<19            # av 19 removed metadata_errors= (faster-whisper decode_audio)
+requests>=2.31.0
+piper-tts>=1.2.0

@@ -4,6 +4,7 @@
   status            DB / backup facts for «وضعیت» (owners, admins, DB size, last + nightly backup)
   list              numbered backups in data/backups (newest first): name|size|type|date
   backup [--send]   manual full backup (services.backup) → path, size, sha256; --send → owners on Bale
+  assistant-model NAME  set the voice assistant's Ollama model (bot setting assistant_model; never enables it)
 
 Terminal output only: ZWNJ/zero-width chars are replaced (PuTTY/CMD glue words), and the bot
 token is never printed (errors are redacted)."""
@@ -101,6 +102,21 @@ def cmd_backup(send: bool) -> int:
     return 0
 
 
+def cmd_assistant_model(name: str) -> int:
+    name = name.strip()
+    if not name:
+        out("نام مدل لازم است")
+        return 2
+    try:
+        from services import voice_assistant as va
+        _db().set_setting(va.SETTING_MODEL, name, updated_by="install_assistant.sh")
+    except Exception as exc:  # noqa: BLE001
+        out(f"⚠ ثبت مدل دستیار ناموفق بود: {type(exc).__name__}")
+        return 2
+    out(f"✓ مدل دستیار: {name}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     cmd = argv[0] if argv else ""
     if cmd == "status":
@@ -109,6 +125,8 @@ def main(argv: list[str]) -> int:
         return cmd_list()
     if cmd == "backup":
         return cmd_backup("--send" in argv)
+    if cmd == "assistant-model":
+        return cmd_assistant_model(argv[1] if len(argv) > 1 else "")
     out(__doc__)
     return 2
 
