@@ -867,10 +867,18 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     assert "توضیحات" not in wb.sheetnames
     co_ws, ct_ws = wb.worksheets
     co_text = _sheet_text(co_ws)
-    assert "با نوسازی" in co_text and "«با نوسازی»" in co_text
-    assert COL_MONTHLY in co_text and "۳ ماه آینده" in co_text and "مصرف پیش‌بینی‌شده در افق" in co_text
+    assert "با نوسازی" in str(co_ws["B1"].value) and "با نوسازی" in str(ct_ws["B1"].value)
+    # T11: only the template's 7 columns; the calculation columns stay internal
+    from services.critical_items_report import HORIZON_NOTE, TEMPLATE_COLUMNS
+
+    for ws in (co_ws, ct_ws):
+        assert [ws.cell(2, i).value for i in range(1, 8)] == TEMPLATE_COLUMNS, ws.title
+        assert ws.cell(2, 8).value is None, ws.title
+    for gone in (COL_MONTHLY, "مصرف پیش‌بینی‌شده در افق", "افق (ماه)", "مبدأ", "۳ ماه آینده"):
+        assert gone not in co_text, gone
     assert "توضیحات" in co_text and "توضیحات" in _sheet_text(ct_ws)
-    assert "1655" in co_text  # missing-origin flag in the notes block
+    assert HORIZON_NOTE in co_text and "اجناس داخلی ۳ ماه، اجناس وارداتی ۶ ماه" in co_text
+    assert "1655" in res.audit["missing"]  # missing-origin flag stays in the bot text / audit
     for p in (res.company_pdf, res.contractor_pdf):
         _assert_portrait(p)
     assert "با_نوسازی" in res.company_pdf.name
@@ -895,7 +903,7 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     assert "بدون نوسازی" in wo.titles["company"] and "بدون نوسازی" in wo.titles["contractor"]
     wb2 = load_workbook(wo.xlsx)
     assert "بدون نوسازی" in _sheet_text(wb2.worksheets[1])
-    assert "«بدون نوسازی»" in _sheet_text(wb2.worksheets[0])
+    assert "بدون نوسازی" in str(wb2.worksheets[0]["B1"].value)
     for p in (wo.company_pdf, wo.contractor_pdf):
         _assert_portrait(p)
     assert wo.company_pdf != res.company_pdf and wo.xlsx != res.xlsx
@@ -969,14 +977,65 @@ def test_bot_flow(tmp: Path) -> None:
                                "message": {"message_id": 55, "chat": msg["chat"]}})
     names = [p.name for p, _ in client.docs]
     td = _today_tag()
-    assert names == [f"لیست_اقلام_بحرانی_{td}_با_نوسازی_شرکت.pdf", f"لیست_اقلام_بحرانی_{td}_با_نوسازی_پیمانکار.pdf",
-                     f"لیست_اقلام_بحرانی_{td}_با_نوسازی.xlsx"], names
+    from services import critical_report_archive as cra
+
+    drafts = cra.list_drafts(db)
+    assert len(drafts) == 1, drafts
+    rid = int(drafts[0]["id"])
+    pre = f"لیست_اقلام_بحرانی_{td}_با_نوسازی_پیش‌نویس_{rid}"
+    assert names == [f"{pre}_شرکت.pdf", f"{pre}_پیمانکار.pdf", f"{pre}.xlsx"], names
     assert "گزارش اصلی" in client.docs[0][1] and "پیمانکار" in client.docs[1][1]
-    assert "با نوسازی" in client.docs[0][1] and "با نوسازی" in client.docs[2][1]
-    assert "حالت «با نوسازی»" in client.msgs[-1], client.msgs[-1]
-    assert "شرکت (گزارش اصلی): 4 قلم" in client.msgs[-1], client.msgs[-1]
-    assert "میانگین مصرف ماهانه بر اساس ۳ ماه گذشته: 1000" in client.msgs[-1], client.msgs[-1]
-    assert "۶ ماه آینده" in client.msgs[-1] and "مبدأ نامشخص" in client.msgs[-1]
+    assert "پیش‌نویس" in client.docs[0][1] and "با نوسازی" in client.docs[2][1]
+    summary = client.msgs[-2]
+    assert "حالت «با نوسازی»" in summary and "پیش‌نویس" in summary, summary
+    assert "شرکت (گزارش اصلی): 4 قلم" in summary, summary
+    assert "مبدأ نامشخص" in summary, summary
+    assert f"پیش‌نویس #{rid}" in client.msgs[-1]
+    dk = [b["callback_data"] for row in markups[-1]["inline_keyboard"] for b in row]
+    assert dk == [f"crd|notes|{rid}", f"crd|ok|{rid}", f"crd|del|{rid}"], dk
+    for p, _ in client.docs[:2]:
+        _assert_portrait(p)
+
+    def cq(data: str, n: int = 0) -> None:
+        app.handle_callback_query({"id": f"cqd{n}", "data": data, "from": msg["from"],
+                                   "message": {"message_id": 56, "chat": msg["chat"]}})
+
+    # write notes → draft re-sent with the notes; edit again; approve
+    cq(f"crd|notes|{rid}")
+    assert "توضیحات پیش‌نویس" in client.msgs[-1]
+    client.docs.clear()
+    say("یادداشت اول کاربر\nیادداشت دوم کاربر")
+    assert len(client.docs) == 3 and "پیش‌نویس" in client.docs[0][1], [c for _, c in client.docs]
+    assert "یادداشت اول کاربر" in client.msgs[-1]
+    from openpyxl import load_workbook
+
+    txt = " ".join(str(c.value) for c in load_workbook(client.docs[2][0]).worksheets[0]["C"] if c.value)
+    assert "یادداشت اول کاربر" in txt and "یادداشت دوم کاربر" in txt, txt[-300:]
+    cq(f"crd|notes|{rid}", 1)
+    say("یادداشت ویرایش‌شده")
+    assert cra.get_report(db, rid)["user_notes"] == "یادداشت ویرایش‌شده"
+    client.docs.clear()
+    cq(f"crd|ok|{rid}", 2)
+    rep_ = cra.get_report(db, rid)
+    assert rep_["status"] == cra.STATUS_APPROVED and rep_["approved_by"], rep_
+    names = [p.name for p, _ in client.docs]
+    fin = f"لیست_اقلام_بحرانی_{td}_با_نوسازی_تأییدشده_{rid}"
+    assert names == [f"{fin}_شرکت.pdf", f"{fin}_پیمانکار.pdf", f"{fin}.xlsx"], names
+    assert all(str(p).startswith(str(cra.archive_root())) for p, _ in client.docs), client.docs[0][0]
+    txt = " ".join(str(c.value) for c in load_workbook(client.docs[2][0]).worksheets[0]["C"] if c.value)
+    assert "یادداشت ویرایش‌شده" in txt and "یادداشت اول" not in txt
+    assert "تأیید و ذخیره شد" in client.msgs[-1]
+    # approved → read-only; archive list re-sends the final files
+    _r, err = cra.set_notes(db, rid, "x", user)
+    assert err, "approved report must not be editable"
+    cq(f"crd|notes|{rid}", 3)
+    assert app._critical_pending.get("901") is None
+    app.on_critical_archive(dict(msg, text=kb.BTN_CRITICAL_ARCHIVE))
+    ak = [b["callback_data"] for row in markups[-1]["inline_keyboard"] for b in row]
+    assert ak == [f"crd|get|{rid}"], ak
+    client.docs.clear()
+    cq(f"crd|get|{rid}", 4)
+    assert [p.name for p, _ in client.docs] == names
     for p, _ in client.docs[:2]:
         _assert_portrait(p)
     # stale callback after the report → friendly alert, no new docs
@@ -992,11 +1051,22 @@ def test_bot_flow(tmp: Path) -> None:
     assert not client.docs and "یکی از دو دکمه" in client.msgs[-1]
     say(kb.BTN_CRITICAL_RENO_WITHOUT)
     names = [p.name for p, _ in client.docs]
-    assert names == [f"لیست_اقلام_بحرانی_{td}_بدون_نوسازی_شرکت.pdf", f"لیست_اقلام_بحرانی_{td}_بدون_نوسازی_پیمانکار.pdf",
-                     f"لیست_اقلام_بحرانی_{td}_بدون_نوسازی.xlsx"], names
-    assert "حالت «بدون نوسازی»" in client.msgs[-1]
-    assert "شرکت (گزارش اصلی): 3 قلم" in client.msgs[-1] and "پیمانکار (گزارش جداگانه): 1 قلم" in client.msgs[-1], client.msgs[-1]
-    print("bot critical flow (inline با نوسازی + typed بدون نوسازی) OK")
+    rid2 = int(cra.list_drafts(db)[0]["id"])
+    pre = f"لیست_اقلام_بحرانی_{td}_بدون_نوسازی_پیش‌نویس_{rid2}"
+    assert names == [f"{pre}_شرکت.pdf", f"{pre}_پیمانکار.pdf", f"{pre}.xlsx"], names
+    summary = client.msgs[-2]
+    assert "حالت «بدون نوسازی»" in summary
+    assert "شرکت (گزارش اصلی): 3 قلم" in summary and "پیمانکار (گزارش جداگانه): 1 قلم" in summary, summary
+    # approve as-is (no notes) and cancel flow
+    cq(f"crd|ok|{rid2}", 5)
+    assert cra.get_report(db, rid2)["status"] == cra.STATUS_APPROVED and not cra.get_report(db, rid2)["user_notes"]
+    app.on_critical_report_start(dict(msg, text=kb.BTN_CRITICAL_REPORT))
+    say(kb.BTN_CRITICAL_RENO_WITH)
+    rid3 = int(cra.list_drafts(db)[0]["id"])
+    cq(f"crd|del|{rid3}", 6)
+    assert cra.get_report(db, rid3)["status"] == cra.STATUS_CANCELLED and not cra.list_drafts(db)
+    assert [r["id"] for r in cra.list_approved(db)] == [rid2, rid], cra.list_approved(db)
+    print("bot critical flow (draft → notes → edit → approve → archive; approve as-is; cancel) OK")
 
 
 def test_web(tmp: Path) -> dict:
@@ -1022,7 +1092,8 @@ def test_web(tmp: Path) -> dict:
         r = c.get(p)
         assert r.status_code == 200, (p, r.status_code, r.text[:300])
     r = c.get("/reports")
-    assert "اقلام شرکت (PDF)" in r.text and "اقلام پیمانکار (PDF)" in r.text, r.text[-2000:]
+    assert 'action="/reports/critical-items/draft"' in r.text and "تولید پیش‌نویس" in r.text, r.text[-2000:]
+    assert "گزارش‌های تأییدشده" in r.text
     assert 'name="renovation" value="with"' in r.text and 'name="renovation" value="without"' in r.text
     r = c.get("/reports?renovation=without")
     assert 'value="without" checked' in r.text
@@ -1047,14 +1118,60 @@ def test_web(tmp: Path) -> dict:
         wb = load_workbook(io.BytesIO(r.content))
         label = "بدون نوسازی" if reno == "without" else "با نوسازی"
         assert "توضیحات" not in wb.sheetnames, wb.sheetnames  # notes live under each table
-        notes = " ".join(str(x.value) for row in wb.worksheets[0].iter_rows() for x in row if x.value)
-        assert f"«{label}»" in notes, notes[:300]
+        assert label in str(wb.worksheets[0]["B1"].value)
+        assert wb.worksheets[0].cell(2, 8).value is None  # template columns only
     # legacy month params are ignored: report date = today, same basis
     r = c.get("/reports/critical-items?jalali_year=1400&jalali_month=1", follow_redirects=False)
     assert r.status_code == 200 and r.content[:4] == b"%PDF", r.status_code
     r = c.get("/reports")
     assert "بدون انتخاب ماه" in r.text and _basis_label() in r.text, r.text[-3000:]
     assert f"تاریخ گزارش: {_today_tag().replace('-', '/')}" in r.text
+    # T11 draft workflow (same archive as the bot)
+    from services import critical_report_archive as cra
+
+    r = c.post("/reports/critical-items/draft", data={"renovation": "without"}, follow_redirects=False)
+    assert r.status_code == 303 and "/reports/critical-items/report/" in r.headers["location"], r.headers
+    rid = int(r.headers["location"].split("/report/")[1].split("?")[0])
+    assert cra.get_report(db, rid)["status"] == cra.STATUS_DRAFT and cra.get_report(db, rid)["source"] == "web"
+    r = c.get(f"/reports/critical-items/report/{rid}")
+    assert r.status_code == 200 and "پیش‌نویس" in r.text and "اجناس داخلی ۳ ماه" in r.text, r.text[-1500:]
+    assert 'value="approve"' in r.text and "<textarea" in r.text
+    r = c.get(f"/reports/critical-items/report/{rid}/file/xlsx")
+    assert r.status_code == 200 and r.content[:2] == b"PK"
+    assert "%D9%BE%DB%8C%D8%B4" in r.headers.get("content-disposition", "")  # «پیش…»
+    r = c.post(f"/reports/critical-items/report/{rid}/notes", data={"notes": "توضیح وب ۱", "action": "save"},
+               follow_redirects=False)
+    assert r.status_code == 303 and cra.get_report(db, rid)["user_notes"] == "توضیح وب ۱"
+    r = c.get(f"/reports/critical-items/report/{rid}/file/company")
+    assert r.status_code == 200 and r.content[:4] == b"%PDF"
+    # approve with an edited textarea → the edit is saved first
+    r = c.post(f"/reports/critical-items/report/{rid}/notes", data={"notes": "توضیح وب ۲", "action": "approve"},
+               follow_redirects=False)
+    rep_ = cra.get_report(db, rid)
+    assert r.status_code == 303 and rep_["status"] == cra.STATUS_APPROVED and rep_["user_notes"] == "توضیح وب ۲", rep_
+    r = c.get(f"/reports/critical-items/report/{rid}/file/xlsx")
+    wb = load_workbook(io.BytesIO(r.content))
+    assert "توضیح وب ۲" in " ".join(str(x.value) for x in wb.worksheets[0]["C"] if x.value)
+    assert "%D8%AA%D8%A3%DB%8C%DB%8C%D8%AF" in r.headers.get("content-disposition", "")  # «تأیید»
+    r = c.get("/reports")
+    assert f"/reports/critical-items/report/{rid}/file/xlsx" in r.text
+    r = c.get(f"/reports/critical-items/report/{rid}")
+    assert "<textarea" not in r.text and "تأییدشده" in r.text
+    r = c.post(f"/reports/critical-items/report/{rid}/notes", data={"notes": "x", "action": "save"},
+               follow_redirects=False)
+    assert cra.get_report(db, rid)["user_notes"] == "توضیح وب ۲"  # approved = read-only
+    r = c.get("/reports/critical-items/report/99999", follow_redirects=False)
+    assert r.status_code == 303
+    r = c.get(f"/reports/critical-items/report/{rid}/file/bogus", follow_redirects=False)
+    assert r.status_code == 303
+    # mix (70 بیلت + 20 بلوم + 100 اسلب)
+    r = c.get("/reports/n-tundish-mix.xlsx?billet=70&bloom=20&slab=100&renovation=with", follow_redirects=False)
+    assert r.status_code in (200, 303), r.status_code
+    if r.status_code == 200:
+        assert r.content[:2] == b"PK"
+    r = c.get("/reports/n-tundish-mix?billet=x", follow_redirects=False)
+    assert r.status_code == 303
+    print("web critical draft → notes → approve → archive OK", rid)
     # other web PDF endpoints: PDF (portrait) or a redirect with a Persian error
     for ep in ("/reports/remaining-critical", "/reports/surplus", "/reports/user-activity",
                "/reports/monthly-summary"):

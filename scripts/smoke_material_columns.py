@@ -200,7 +200,7 @@ def part_b() -> None:
         # user's sample «140506» — NO base material columns, not the shared styler.
         from openpyxl import load_workbook as _lw
 
-        from analytics.critical_items import REPORT_COLUMNS as _RC
+        from services.critical_items_report import TEMPLATE_COLUMNS as _RC
         from excel.table_style import template_locked_name
 
         spy.take()

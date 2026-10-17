@@ -50,8 +50,8 @@ def _font_sig(c):
 
 
 def check_critical_sheet(ws, tpl, *, n_rows: int, n_notes: int) -> None:
-    from analytics.critical_items import REPORT_COLUMNS
     from excel.critical_template import TEMPLATE_COLUMN_OF, TEMPLATE_WIDTHS
+    from services.critical_items_report import TEMPLATE_COLUMNS as REPORT_COLUMNS
 
     n = len(REPORT_COLUMNS)
     name = ws.title
@@ -74,6 +74,10 @@ def check_critical_sheet(ws, tpl, *, n_rows: int, n_notes: int) -> None:
     # header + body styles per template column
     hdr = [ws.cell(2, i).value for i in range(1, n + 1)]
     check(hdr == list(REPORT_COLUMNS), f"{name}: header {hdr}")
+    check(ws.cell(2, n + 1).value is None, f"{name}: no columns beyond the template")
+    # template order (sheet «140506», RTL): A=کد چهاررقمی (rightmost), B=ردیف
+    check([tpl[f"{c}2"].value.strip() for c in "AB"] == ["کد چهاررقمی", "ردیف"], "template A2/B2 order")
+    check((ws["A2"].value, ws["B2"].value) == ("کد چهاررقمی", "ردیف"), f"{name}: A2/B2 order")
     check("آیدی کد" not in hdr and "کلیدواژه" not in hdr, f"{name}: no base material columns")
     for i, col in enumerate(REPORT_COLUMNS, start=1):
         tl = TEMPLATE_COLUMN_OF.get(col)
@@ -106,7 +110,10 @@ def check_critical_sheet(ws, tpl, *, n_rows: int, n_notes: int) -> None:
     for r in range(first, last + 1):
         check(f"C{r}:{L(n - 1)}{r}" in merges, f"{name}: note row {r} merged C..{L(n - 1)}")
         c = ws.cell(r, 3)
-        check(bool(c.value), f"{name}: note text row {r}")
+        if r == first:
+            check(bool(c.value), f"{name}: first note row has text")
+        if not c.value:  # blank note line: bordered like the template's empty rows
+            check(_border_sig(c)[3] is not None, f"{name}: blank note row {r} bordered")
         check(c.alignment.wrap_text is True and c.alignment.horizontal == tpl["C15"].alignment.horizontal,
               f"{name}: note align row {r}")
     check(_font_sig(ws.cell(first, 2)) == _font_sig(tpl["B15"]), f"{name}: توضیحات font")
@@ -120,7 +127,7 @@ def check_critical_sheet(ws, tpl, *, n_rows: int, n_notes: int) -> None:
 def test_critical_synthetic() -> None:
     from openpyxl import load_workbook
 
-    from analytics.critical_items import REPORT_COLUMNS
+    from services.critical_items_report import TEMPLATE_COLUMNS as REPORT_COLUMNS
     from excel.critical_template import (TEMPLATE_PATH, TEMPLATE_SHEET, load_template_workbook,
                                          write_critical_items_pdf, write_critical_items_xlsx)
     from excel.table_style import finalize_path, template_locked_name
@@ -134,8 +141,7 @@ def test_critical_synthetic() -> None:
     def row(code, i, desc, stock, need, days):
         r = dict.fromkeys(REPORT_COLUMNS)
         r.update({"کد چهاررقمی": code, "ردیف": i, "کد و شرح کالا": desc, "موجودی": stock,
-                  "واحد": "Kg", "نیاز": need, "حد تحمل(روز)": days, "مبدأ": "داخلی",
-                  "افق (ماه)": 3})
+                  "واحد": "Kg", "نیاز": need, "حد تحمل(روز)": days})
         return r
 
     rows = [row("1662", 1, "بتن 86 نوسازی", 42383, 977617.4, 4),
@@ -144,7 +150,7 @@ def test_critical_synthetic() -> None:
     sheets = [
         {"name": "140507 شرکت", "title": "لیست اقلام بحرانی نسوز تاندیش — شرکت — با نوسازی (1405/07/25)",
          "columns": list(REPORT_COLUMNS), "rows": rows,
-         "notes": ["حالت: با نوسازی", "این جدول برای ۳ ماه آینده …", "یادداشت سوم"]},
+         "notes": ["افق محاسبه: اجناس داخلی ۳ ماه، اجناس وارداتی ۶ ماه.", "یادداشت دوم", "", ""]},
         {"name": "140507 پیمانکار", "title": "لیست اقلام بحرانی نسوز تاندیش — پیمانکار — با نوسازی (1405/07/25)",
          "columns": list(REPORT_COLUMNS), "rows": rows[:1], "notes": ["یک یادداشت", "دو"]},
     ]
@@ -153,7 +159,7 @@ def test_critical_synthetic() -> None:
     check(wb.sheetnames == ["140507 شرکت", "140507 پیمانکار"], f"sheets {wb.sheetnames}")
     check(TEMPLATE_SHEET not in wb.sheetnames and "توضیحات" not in wb.sheetnames, "no proto / notes sheet")
     check(template_locked_name(wb) == "critical_items", "critical xlsx tagged template-locked")
-    check_critical_sheet(wb.worksheets[0], tpl, n_rows=3, n_notes=3)
+    check_critical_sheet(wb.worksheets[0], tpl, n_rows=3, n_notes=4)
     check_critical_sheet(wb.worksheets[1], tpl, n_rows=1, n_notes=2)
     # the shared styler must leave it untouched
     before = out.read_bytes()
@@ -202,8 +208,16 @@ def test_critical_live_copy() -> None:
         df = res.frames.get(seg)
         n_rows = 0 if df is None else len(df)
         n_notes = ws.max_row - 2 - max(n_rows, 1)
-        check(n_notes >= 3, f"live {ws.title}: notes block ({n_notes})")
+        from services.critical_items_report import HORIZON_NOTE, MIN_NOTE_ROWS
+
+        check(n_notes == MIN_NOTE_ROWS, f"live {ws.title}: notes block ({n_notes})")
         check_critical_sheet(ws, tpl, n_rows=n_rows, n_notes=n_notes)
+        first = 3 + max(n_rows, 1)
+        notes = [ws.cell(r, 3).value for r in range(first, first + n_notes)]
+        check(notes[0] == HORIZON_NOTE, f"live {ws.title}: horizon note first ({notes[0]})")
+        check(str(notes[1] or "").startswith("تاریخ گزارش:") and "تاندیش" in str(notes[1]),
+              f"live {ws.title}: date/basis note ({notes[1]})")
+        check(all(v is None for v in notes[2:]), f"live {ws.title}: rest of the notes block blank {notes[2:]}")
         _ = critical_item_count(df)
     from pypdf import PdfReader
 
@@ -254,9 +268,132 @@ def test_monthly_summary() -> None:
     print("  monthly summary vs approved sample OK" if not FAILS else "  monthly summary FAIL")
 
 
+def test_critical_notes_and_archive() -> None:
+    """T11: ≤2 fixed notes + user lines; draft → notes → approve archive (temp UPLOAD_DIR)."""
+    from services import critical_report_archive as cra
+    from services.critical_items_report import HORIZON_NOTE, compose_notes, user_note_lines
+
+    check(compose_notes(["a", "b"], "", 5) == ["a", "b", "", "", ""], "compose_notes pads blanks")
+    check(compose_notes(["a", "b"], " x \n\n y ", 5) == ["a", "b", "x", "y", ""], "compose_notes user lines")
+    check(len(compose_notes(["a", "b"], "\n".join("l" * 3 for _ in range(30)), 5)) == 2 + cra.MAX_NOTE_LINES
+          or len(user_note_lines("\n".join(["l"] * 30))) <= 30, "notes capped")
+    check("اجناس داخلی ۳ ماه، اجناس وارداتی ۶ ماه" in HORIZON_NOTE, "horizon note text")
+    db_path = ROOT / "data" / "bot.db"
+    if not db_path.is_file():
+        print("  (no live DB — archive test skipped)")
+        return
+    import config
+    from db.models import Database
+
+    check(str(cra.archive_root()).startswith(str(_smoke_env.SMOKE_TMP)), f"archive in temp {cra.archive_root()}")
+    copy = TMP / "bot_copy_archive.db"
+    src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    dst = sqlite3.connect(copy)
+    src.backup(dst)
+    src.close()
+    dst.close()
+    db = Database(copy)
+    owner = [u for u in db.list_users() if u.get("role") == "owner" and u.get("active")]
+    if not owner:
+        return
+    user = owner[0]
+    rep, res = cra.create_draft(db, user, reno_mode="with", source="bot")
+    if rep is None:
+        print("  (archive: no draft —", (res.error or "")[:60], ")")
+        return
+    rid = int(rep["id"])
+    check(rep["status"] == cra.STATUS_DRAFT and not cra.list_approved(db), "draft created, not approved")
+    files = cra.report_files(db, rep)
+    check(set(files) >= {"xlsx"} and all(p.is_file() for p in files.values()), f"draft files {files}")
+    check(all("پیش‌نویس" in p.name for p in files.values()), "draft file names")
+    rep, err = cra.set_notes(db, rid, "یادداشت نمونه ۱\nیادداشت نمونه ۲", user)
+    check(err is None and rep["user_notes"] == "یادداشت نمونه ۱\nیادداشت نمونه ۲", f"set_notes {err}")
+    long_rep, err = cra.set_notes(db, rid, "x" * (cra.MAX_NOTES_CHARS + 5), user)
+    check(err is None and len(long_rep["user_notes"]) == cra.MAX_NOTES_CHARS, "too long notes capped")
+    rep, err = cra.set_notes(db, rid, "یادداشت نمونه ۱\nیادداشت نمونه ۲", user)
+    rep, err = cra.approve(db, rid, user)
+    check(err is None and rep["status"] == cra.STATUS_APPROVED, f"approve {err}")
+    files = cra.report_files(db, rep)
+    check(all("تأییدشده" in p.name and str(p).startswith(str(cra.archive_root())) for p in files.values()),
+          f"final files {files}")
+    from openpyxl import load_workbook
+
+    ws = load_workbook(files["xlsx"]).worksheets[0]
+    col_c = [c.value for c in ws["C"] if c.value]
+    check("یادداشت نمونه ۱" in col_c and "یادداشت نمونه ۲" in col_c and HORIZON_NOTE in col_c,
+          f"final notes in xlsx {col_c[-5:]}")
+    # missing file → re-rendered from the stored rows
+    files["xlsx"].unlink()
+    again = cra.report_files(db, rep)
+    check(again["xlsx"].is_file(), "missing archive file re-rendered")
+    check([r["id"] for r in cra.list_approved(db)] == [rid], "approved list")
+    _r, err = cra.approve(db, rid, user)
+    check(err is not None, "double approve refused")
+    _r, err = cra.cancel(db, rid, user)
+    check(err is not None, "approved report cannot be cancelled")
+    _ = config
+    print("  critical notes + draft/approve archive OK" if not FAILS else "  critical archive FAIL")
+
+
+def test_mix() -> None:
+    """T11b: «70 بیلت + 20 بلوم + 100 اسلب» = Σ rate × count (+ casting floor × total)."""
+    from services import n_tundish_report as nt
+
+    check(nt.parse_mix("بیلت ۷۰ بلوم ۲۰ اسلب ۱۰۰") == {"billet": 70, "bloom": 20, "slab": 100},
+          f"parse_mix 1 {nt.parse_mix('بیلت ۷۰ بلوم ۲۰ اسلب ۱۰۰')}")
+    check(nt.parse_mix("۷۰ بیلت، ۲۰ بلوم و ۱۰۰ اسلب") == {"billet": 70, "bloom": 20, "slab": 100}, "parse_mix 2")
+    check(nt.parse_mix("70 بیلت 100 اسلب") == {"billet": 70, "bloom": 0, "slab": 100},
+          f"parse_mix 3 {nt.parse_mix('70 بیلت 100 اسلب')}")
+    check(nt.parse_mix("بیلت") is None and nt.parse_mix("12") is None, "parse_mix needs ≥2 sections")
+    db_path = ROOT / "data" / "bot.db"
+    if not db_path.is_file():
+        return
+    from db.models import Database
+
+    copy = TMP / "bot_copy_mix.db"
+    src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    dst = sqlite3.connect(copy)
+    src.backup(dst)
+    src.close()
+    dst.close()
+    db = Database(copy)
+    owner = [u for u in db.list_users() if u.get("role") == "owner" and u.get("active")]
+    if not owner:
+        return
+    mix = {"billet": 70, "bloom": 20, "slab": 100}
+    res = nt.generate_mix_files(db, owner[0], mix, "with", output_dir=TMP / "mix")
+    if res.error:
+        print("  (mix:", res.error[:60], ")")
+        return
+    check(res.pdf.is_file() and res.xlsx.is_file(), "mix files")
+    from openpyxl import load_workbook
+
+    ws = load_workbook(res.xlsx).worksheets[0]
+    hdr_row = next(r for r in range(1, 8) if ws.cell(r, 1).value == "کد ۴ رقمی")
+    hdr = [c.value for c in ws[hdr_row]]
+    for col in (nt.COL_PER_BILLET, nt.COL_PER_BLOOM, nt.COL_PER_SLAB, nt.COL_PER_CF, res.need_col):
+        check(col in hdr, f"mix column {col}")
+    check(hdr[:3] == ["کد ۴ رقمی", "آیدی کد", "شرح"], f"mix base columns {hdr[:3]}")
+    num = lambda v: float(v) if isinstance(v, (int, float)) else 0.0  # noqa: E731
+    bad = 0
+    for r in range(hdr_row + 1, ws.max_row + 1):
+        row = {h: ws.cell(r, i + 1).value for i, h in enumerate(hdr)}
+        if not row.get("کد ۴ رقمی") or not isinstance(row.get(res.need_col), (int, float)):
+            continue
+        exp = (70 * num(row[nt.COL_PER_BILLET]) + 20 * num(row[nt.COL_PER_BLOOM])
+               + 100 * num(row[nt.COL_PER_SLAB]) + 190 * num(row[nt.COL_PER_CF]))
+        bad += abs(exp - float(row[res.need_col])) > 0.6
+    check(bad == 0, f"mix need = Σ rate × count ({bad} rows differ)")
+    fonts = {c.font.name for row in ws.iter_rows() for c in row if c.value not in (None, "")}
+    check(fonts == {"Tahoma"}, f"mix fonts {fonts}")
+    print("  mix 70/20/100 OK" if not FAILS else "  mix FAIL")
+
+
 def main() -> None:
     test_critical_synthetic()
     test_critical_live_copy()
+    test_critical_notes_and_archive()
+    test_mix()
     test_monthly_summary()
     assert not FAILS, FAILS[:10]
     print("SMOKE_TEMPLATE_REPORTS_OK")
