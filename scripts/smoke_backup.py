@@ -160,14 +160,32 @@ def main() -> int:
         def __getattr__(self, n):
             return lambda *a, **k: {"ok": True}
     fc = FC()
+    # OWNER-ONLY hard lock (1405/07/26): even a DB override written straight into
+    # role_permissions (bypassing the UI) must not open backups for a manager/officer.
+    db2.upsert_user("704", "responsible_officer", display_name="کاردان")
+    perm.bind(db2)
+    db2.set_role_permission("manager", perm.BACKUP, True, updated_by="smoke")
+    db2.set_role_permission("responsible_officer", perm.BACKUP, True, updated_by="smoke")
+    perm.invalidate()
+    for role in ("manager", "responsible_officer", "technician", "observer"):
+        assert perm.BACKUP not in perm.role_features(role), role
+    assert perm.BACKUP in perm.role_features("owner")
+    assert perm.BACKUP not in perm.TOGGLABLE_FEATURES and perm.BACKUP in perm.LOCKED_OWNER_ONLY
+    ok, why = perm.set_permission(db2, db2.get_user("701"), "manager", perm.BACKUP, True)
+    assert not ok and "قابل تغییر نیست" in why, why
+    assert all(r["feature"] != perm.BACKUP for r in perm.matrix_rows("manager"))
+    assert "بک‌آپ (پشتیبان‌گیری): مالک (فقط مالک (قفل))" in perm.matrix_text_fa(), perm.matrix_text_fa()
+    assert [u["bale_user_id"] for u in bk.owner_recipients(db2)] == ["701"]
     assert bk.nightly_tick(fc, db2, paths=paths, now=datetime(2026, 10, 17, 1, 30, tzinfo=TEHRAN)) is None
     name = bk.nightly_tick(fc, db2, paths=paths, now=datetime(2026, 10, 17, 2, 0, 30, tzinfo=TEHRAN))
     assert name and bk.kind_of(paths.backups / name) == bk.AUTO and fc.docs and fc.docs[-1][0] == "701"
+    assert {d[0] for d in fc.docs} == {"701"}, fc.docs  # nightly file → owner only
     assert bk.nightly_tick(fc, db2, paths=paths, now=datetime(2026, 10, 17, 9, 0, tzinfo=TEHRAN)) is None  # once a day
     assert "✅" in db2.get_setting(bk.S_LAST_AUTO_STATUS) and "آخرین پشتیبان خودکار" in bk.last_auto_status_fa(db2)
     broken = bk.Paths(db=tmp / "missing" / "x.db", uploads=paths.uploads, assets=paths.assets, backups=paths.backups, env=paths.env)
     assert bk.nightly_tick(fc, db2, paths=broken, now=datetime(2026, 10, 18, 3, 0, tzinfo=TEHRAN)) is None
     assert "❌" in db2.get_setting(bk.S_LAST_AUTO_STATUS) and any("ناموفق" in m[1] for m in fc.msgs)
+    assert {m[0] for m in fc.msgs} == {"701"}, fc.msgs  # failure notice → owner only
     assert bk.nightly_tick(fc, db2, paths=paths, now=datetime(2026, 10, 18, 3, 10, tzinfo=TEHRAN)) is None  # 30-min backoff
     assert bk.nightly_tick(fc, db2, paths=paths, now=datetime(2026, 10, 18, 3, 45, tzinfo=TEHRAN))  # retried OK
     big = bk.BALE_MAX_UPLOAD
@@ -184,20 +202,25 @@ def main() -> int:
     app = hm.BotApp(fc, db2)
     def msg(uid, text="", **kw):
         return {"chat": {"id": int(uid)}, "from": {"id": int(uid), "first_name": "x"}, "text": text, **kw}
-    assert kb.BTN_BACKUP in kb.keyboard_texts(kb.bot_settings_menu(db2.get_user("702")))
-    assert kb.BTN_BACKUP not in kb.keyboard_texts(kb.bot_settings_menu(db2.get_user("703")))
-    assert kb.BTN_BACKUP_RESTORE not in kb.keyboard_texts(kb.backup_menu(db2.get_user("702")))
-    app.handle_message(msg(703, kb.BTN_BACKUP_CREATE))
-    assert not fc.docs
-    app.handle_message(msg(702, kb.BTN_BACKUP_CREATE))
-    assert fc.docs and fc.docs[-1][1].endswith("_manual.zip"), fc.docs
-    app.handle_message(msg(702, kb.BTN_BACKUP_LIST))
+    assert kb.BTN_BACKUP in kb.keyboard_texts(kb.bot_settings_menu(db2.get_user("701")))
+    for uid in ("702", "703", "704"):  # manager (even with the DB override), technician, officer
+        assert kb.BTN_BACKUP not in kb.keyboard_texts(kb.bot_settings_menu(db2.get_user(uid))), uid
+    assert kb.BTN_BACKUP_RESTORE in kb.keyboard_texts(kb.backup_menu(db2.get_user("701")))
+    for uid in ("702", "703", "704"):
+        for btn in (kb.BTN_BACKUP, kb.BTN_BACKUP_CREATE, kb.BTN_BACKUP_LIST, kb.BTN_BACKUP_RESTORE):
+            app.handle_message(msg(uid, btn))
+            assert "فقط برای «مالک»" in fc.msgs[-1][1], (uid, btn, fc.msgs[-1][1])
+    assert not fc.docs, fc.docs
+    app.handle_message(msg(701, kb.BTN_BACKUP_CREATE))
+    assert fc.docs and fc.docs[-1][1].endswith("_manual.zip") and fc.docs[-1][0] == "701", fc.docs
+    app.handle_message(msg(701, kb.BTN_BACKUP_LIST))
     lst = [m for m in fc.msgs if m[2] and "inline_keyboard" in (m[2] or {})][-1]
     cb = lst[2]["inline_keyboard"][0][0]["callback_data"]
-    app.handle_callback_query({"id": "1", "data": cb, "from": {"id": 702}, "message": {"chat": {"id": 702}}})
+    app.handle_callback_query({"id": "1", "data": cb, "from": {"id": 701}, "message": {"chat": {"id": 701}}})
     assert len(fc.docs) == 2
-    app.handle_message(msg(702, kb.BTN_BACKUP_RESTORE))
-    assert "فقط توسط مالک" in fc.msgs[-1][1]
+    # a manager replaying the owner's ⬇️ callback gets nothing
+    app.handle_callback_query({"id": "1b", "data": cb, "from": {"id": 702}, "message": {"chat": {"id": 702}}})
+    assert len(fc.docs) == 2 and {d[0] for d in fc.docs} == {"701"}
     # owner restore: send zip → summary → r1 → r2
     db2.upsert_user("798", "technician", display_name="موقت")
     app.handle_message(msg(701, kb.BTN_BACKUP_RESTORE))
@@ -234,14 +257,26 @@ def main() -> int:
         assert c.post("/login", data={"username": f"u{uid}", "password": "secret1234"}, follow_redirects=False).status_code in (302, 303)
         return c
     own, mgr, tech = login("701"), login("702"), login("703")
+    db3.set_role_permission("manager", perm.BACKUP, True, updated_by="smoke")  # must stay ignored
+    perm.invalidate()
     assert tech.get("/settings/backups", follow_redirects=False).status_code in (302, 303, 403)
-    r = mgr.post("/settings/backups/create")
+    nm = bk.list_backups()[0]["name"]
+    for c in (mgr, tech):
+        for r in (c.get("/settings/backups", follow_redirects=False),
+                  c.post("/settings/backups/create", follow_redirects=False),
+                  c.get(f"/settings/backups/file/{nm}", follow_redirects=False)):
+            assert r.status_code in (302, 303, 403) and r.content[:2] != b"PK", r.status_code
+            if r.status_code == 403:
+                assert "فقط برای «مالک»" in r.text, r.text[-400:]
+    assert 'href="/settings/backups"' not in mgr.get("/home").text  # nav link hidden
+    assert 'href="/settings/backups"' in own.get("/home").text
+    r = own.post("/settings/backups/create")
     assert r.status_code == 200 and "_manual.zip" in r.text
     nm = bk.list_backups()[0]["name"]
-    d = mgr.get(f"/settings/backups/file/{nm}")
+    d = own.get(f"/settings/backups/file/{nm}")
     assert d.status_code == 200 and d.content[:2] == b"PK"
-    assert mgr.get("/settings/backups/file/..%2F..%2Fbot.db").status_code == 404
-    assert "♻️ بازگردانی" not in mgr.get("/settings/backups").text
+    assert own.get("/settings/backups/file/..%2F..%2Fbot.db").status_code == 404
+    assert "♻️ بازگردانی" in own.get("/settings/backups").text
     assert mgr.post("/settings/backups/restore/upload", files={"file": ("z.zip", z.read_bytes(), "application/zip")},
                     follow_redirects=False).status_code in (302, 303, 403)
     r = own.post("/settings/backups/restore/upload", files={"file": ("t.zip", bad_sha.read_bytes(), "application/zip")})
