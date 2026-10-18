@@ -194,13 +194,20 @@ def _bk_ctx(db, user, **kw):
             "is_owner": require_owner(user), **kw}
 
 
+def _require_backup_owner(user=Depends(current_user)):
+    """💾 بک‌آپ = owner only, hard lock (same rule as the bot; role toggles cannot open it)."""
+    if not perm.can(user, perm.BACKUP):
+        raise ForbiddenFa(perm.OWNER_ONLY_DENIED_FA[perm.BACKUP])
+    return user
+
+
 @router.get("/backups")
-async def backups_page(request: Request, user=Depends(require_feature(perm.BACKUP)), db: Database = Depends(get_db)):
+async def backups_page(request: Request, user=Depends(_require_backup_owner), db: Database = Depends(get_db)):
     return render(request, "settings_backups.html", _bk_ctx(db, user))
 
 
 @router.post("/backups/create")
-async def backups_create(request: Request, user=Depends(require_feature(perm.BACKUP)), db: Database = Depends(get_db)):
+async def backups_create(request: Request, user=Depends(_require_backup_owner), db: Database = Depends(get_db)):
     from services import backup as bk
 
     try:
@@ -212,7 +219,7 @@ async def backups_create(request: Request, user=Depends(require_feature(perm.BAC
 
 
 @router.get("/backups/file/{name}")
-async def backups_download(name: str, user=Depends(require_feature(perm.BACKUP)), db: Database = Depends(get_db)):
+async def backups_download(name: str, user=Depends(_require_backup_owner), db: Database = Depends(get_db)):
     from fastapi import HTTPException
     from fastapi.responses import FileResponse
 

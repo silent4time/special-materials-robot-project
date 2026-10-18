@@ -571,6 +571,11 @@ class BotApp:
         self._material_req_pending.pop(uid, None)
         self._warehouse_ret_pending.pop(uid, None)
         self._n_tundish_pending.pop(uid, None)
+        locked = [f for f in features if f in perm.LOCKED_OWNER_ONLY]
+        if features and len(locked) == len(features):  # owner-only hard lock (e.g. 💾 بک‌آپ)
+            self._reply(message, perm.OWNER_ONLY_DENIED_FA.get(locked[0], "⛔ این بخش فقط برای «مالک» است."),
+                        kb.main_menu(user))
+            return True
         self._reply(
             message,
             "دسترسی ندارید؛ این بخش برای نقش شما فعال نیست "
@@ -1844,7 +1849,7 @@ class BotApp:
             message,
             "🔐 دسترسی نقش‌ها\n"
             "نقشی را که می‌خواهید تنظیم کنید انتخاب کنید. دسترسی‌های مالک قفل است؛ "
-            "«کاربران» و «دسترسی نقش‌ها» همیشه فقط برای مالک و مدیر است.\n"
+            "«کاربران» و «دسترسی نقش‌ها» همیشه فقط برای مالک و مدیر است و «💾 بک‌آپ» همیشه فقط برای مالک.\n"
             "تغییرها فوراً در ربات و وب اعمال و در «📋 فعالیت کاربران» ثبت می‌شوند.\n\n"
             "وضعیت فعلی:\n" + perm.matrix_text_fa(),
             kb.role_perms_role_menu(),
@@ -5045,7 +5050,9 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return None
-        if self._deny_technician(message, user, perm.BACKUP):
+        if not perm.can(user, perm.BACKUP):  # owner-only hard lock (no role toggle)
+            self._backup_restore_pending.pop(str(user["bale_user_id"]), None)
+            self._reply(message, perm.OWNER_ONLY_DENIED_FA[perm.BACKUP], kb.main_menu(user))
             return None
         return user
 
@@ -5162,8 +5169,8 @@ class BotApp:
         parts = data[len(kb.CB_BACKUP_PREFIX):].split("|", 1)
         act = parts[0]
         if act == "get":
-            if not perm.can(user, perm.BACKUP):
-                answer("دسترسی ندارید.", alert=True)
+            if not perm.can(user, perm.BACKUP):  # owner only
+                answer("فایل بک‌آپ فقط برای مالک است.", alert=True)
                 return
             path = bk.resolve(parts[1] if len(parts) > 1 else "")
             if not path:

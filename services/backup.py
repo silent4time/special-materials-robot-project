@@ -361,6 +361,15 @@ def last_auto_status_fa(db: Any) -> str:
     return f"آخرین پشتیبان خودکار: {at} (به وقت تهران) — {st or ''}"
 
 
+def owner_recipients(db: Any) -> list[dict]:
+    """Who may receive a backup file (or its failure notice): active «مالک» users ONLY.
+    Hard lock (1405/07/26): managers and other roles never get backup files, whatever
+    the role-permission toggles say (services.permissions.LOCKED_OWNER_ONLY)."""
+    from services import permissions as perm
+
+    return [u for u in db.list_users(active_only=True) if perm.is_owner(u) and perm.can(u, perm.BACKUP)]
+
+
 def nightly_tick(client: Any, db: Any, *, paths: Paths | None = None, now: datetime | None = None) -> str | None:
     """Call every minute from the bot loop. Runs once per Tehran day after 02:00; a bot that
     was down at 02:00 catches up on start. Failure → owner notified, retry after 30 min."""
@@ -378,7 +387,7 @@ def nightly_tick(client: Any, db: Any, *, paths: Paths | None = None, now: datet
         except ValueError:
             pass
     db.set_setting(S_LAST_ATTEMPT, now.isoformat())
-    owners = [u for u in db.list_users(active_only=True) if u.get("role") == "owner"]
+    owners = owner_recipients(db)
     stamp = f"{_jalali(now).replace('-', '/')} {now.strftime('%H:%M')}"
     try:
         path = create_backup(AUTO, paths=paths, actor="nightly")

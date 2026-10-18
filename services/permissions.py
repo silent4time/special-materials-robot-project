@@ -60,7 +60,7 @@ TUNDISH_REPORT_SETTINGS = "tundish_report_settings"
 REMINDERS = "reminders"
 STOCK_GROUP = "stock_group"
 APPEARANCE = "appearance"
-BACKUP = "backup"  # «💾 بک‌آپ» (create/list/download; restore = owner only)
+BACKUP = "backup"  # «💾 بک‌آپ» — OWNER ONLY, hard lock (create/list/download/restore/nightly file)
 
 FEATURE_LABEL_FA: dict[str, str] = {
     SITE_STOCK: "موجودی روزانه سایت",
@@ -119,7 +119,7 @@ _DEFAULTS: dict[str, frozenset[str]] = {
     REMINDERS: ADMINS,
     STOCK_GROUP: ADMINS,
     APPEARANCE: ADMINS,
-    BACKUP: ADMINS,
+    BACKUP: frozenset({OWNER}),
 }
 
 REPORT_FEATURES = (
@@ -133,10 +133,17 @@ DERIVED = {REPORTS: REPORT_FEATURES, SETTINGS: SETTINGS_FEATURES}
 # owner/manager only, never toggled (spec: users & role-permission pages)
 LOCKED_ADMIN_ONLY = frozenset({USERS, ROLE_PERMISSIONS})
 LOCKED_ADMIN_ONLY_NOTE_FA = "فقط مالک و مدیر (قفل)"
+# owner only, never toggled (1405/07/26 user decision): backup files — nightly, manual,
+# list/download, restore — go to / are reachable by the owner role only, bot and web.
+LOCKED_OWNER_ONLY = frozenset({BACKUP})
+LOCKED_OWNER_ONLY_NOTE_FA = "فقط مالک (قفل)"
+OWNER_ONLY_DENIED_FA = {
+    BACKUP: "⛔ فایل‌های بک‌آپ (پشتیبان) فقط برای «مالک» است؛ این بخش برای نقش شما در دسترس نیست و با «🔐 دسترسی نقش‌ها» هم باز نمی‌شود.",
+}
 ALL_FEATURES = tuple(_DEFAULTS)
 # Order shown in the bot inline checklist and on the web page.
 TOGGLABLE_FEATURES: tuple[str, ...] = tuple(
-    f for f in ALL_FEATURES if f not in DERIVED and f not in LOCKED_ADMIN_ONLY
+    f for f in ALL_FEATURES if f not in DERIVED and f not in LOCKED_ADMIN_ONLY and f not in LOCKED_OWNER_ONLY
 )
 EDITABLE_ROLES: tuple[str, ...] = tuple(r for r in ROLES if r != OWNER)
 
@@ -210,6 +217,8 @@ def role_features(role: str | None) -> set[str]:
             if role in ADMINS:
                 out.add(f)
             continue
+        if f in LOCKED_OWNER_ONLY:
+            continue  # owner returned above; DB overrides are ignored
         allowed = ov.get(f, role in _DEFAULTS.get(f, frozenset()))
         if allowed:
             out.add(f)
@@ -311,7 +320,8 @@ def matrix_text_fa() -> str:
     lines = []
     for f in ALL_FEATURES:
         roles = [ROLES[r] for r in ROLES if f in role_features(r)]
-        extra = f" ({LOCKED_ADMIN_ONLY_NOTE_FA})" if f in LOCKED_ADMIN_ONLY else ""
+        extra = (f" ({LOCKED_ADMIN_ONLY_NOTE_FA})" if f in LOCKED_ADMIN_ONLY
+                 else f" ({LOCKED_OWNER_ONLY_NOTE_FA})" if f in LOCKED_OWNER_ONLY else "")
         lines.append(f"• {FEATURE_LABEL_FA.get(f, f)}: {'، '.join(roles) or '—'}{extra}")
     return "\n".join(lines)
 
