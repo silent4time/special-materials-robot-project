@@ -967,6 +967,7 @@ def build_monthly_summary(
     excel_out: Path | str | None = None,
     start: tuple[int, int] | None = None,
     end: tuple[int, int] | None = None,
+    unit_maps: tuple[dict, dict] | None = None,
 ) -> tuple[MonthlySummaryData, Path]:
     """Load → aggregate → optional month/year filter → write Excel.
 
@@ -974,6 +975,11 @@ def build_monthly_summary(
     """
     ensure_dirs()
     detail = load_monthly_detail(source_path)
+    if unit_maps:
+        from services.unit_source import apply_units
+
+        detail = apply_units(detail, unit_maps, unit_col="واحد", id_col="کد کالا",
+                             code_col="کد دسته بندی", name_col="شرح")
     data = aggregate_monthly_detail(detail)
     if start is not None or end is not None:
         data = filter_summary_by_month_range(data, start=start, end=end)

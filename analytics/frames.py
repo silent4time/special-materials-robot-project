@@ -75,6 +75,11 @@ def load_extract_frame(
                 continue
             try:
                 frame, _meta = process_file(path, file_type, user)
+                if file_type != "product_inventory" and frame is not None and "unit" in frame.columns:
+                    # واحد always from منبع اصلی (by ID / 4-digit code); file unit only as fallback
+                    from services.unit_source import apply_units, main_source_maps
+
+                    frame = apply_units(frame, main_source_maps(db))
                 return frame
             except Exception as exc:  # noqa: BLE001
                 logger.warning("load %s from %s failed: %s", file_type, path, exc)

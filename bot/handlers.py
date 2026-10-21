@@ -4118,8 +4118,11 @@ class BotApp:
 
             out_dir = unique_dir(REPORT_DIR, "monthly_summary")
             excel_path = out_dir / f"{fa_stem('خلاصه مصرفی ماهیانه', range_label)}.xlsx"
+            from services.unit_source import main_source_maps
+
             data, excel_path = build_monthly_summary(
                 source,
+                unit_maps=main_source_maps(self.db),
                 excel_out=excel_path,
                 start=start_ym,
                 end=end_ym,
