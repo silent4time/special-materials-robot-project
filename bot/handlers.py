@@ -1936,8 +1936,8 @@ class BotApp:
         self.main_goal_report.start_sequence_xlsx(message, via_files=True)
 
     def on_production_photos_upload(self, message: dict) -> None:
-        """«📸 عکس‌های آمار تولید» (فقط عکس تب ریخته‌گری) از منوی «📤 ورود فایل‌ها»."""
-        self.main_goal_report.start_prod_photo(message, via_files=True)
+        """«📝 آمار تولید» (ورود متنی) از منوی «📤 ورود فایل‌ها»."""
+        self.main_goal_report.start_production_stats(message, via_files=True)
 
     def on_upload_menu(self, message: dict) -> None:
         user = self._user_or_deny(message)

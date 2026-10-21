@@ -108,7 +108,8 @@ BTN_HELP = "❓ راهنما"
 BTN_WAREHOUSE_STOCK = "📥 به‌روزرسانی موجودی انبار"
 BTN_MONTHLY = "📥 مصرف ماهیانه اقلام"
 BTN_SEQUENCE_REPORT = "📤 گزارش جامع تاندیش در سکوئنس"
-BTN_PRODUCTION_PHOTOS = "📸 عکس‌های آمار تولید"
+BTN_PRODUCTION_STATS = "📝 آمار تولید"
+BTN_PRODUCTION_PHOTOS = BTN_PRODUCTION_STATS  # photo/OCR mode removed (text-only input)
 BTN_MAIN_SOURCE_FILE = "📦 منبع اصلی"
 BTN_INV_MENU = BTN_MAIN_SOURCE_FILE
 BTN_FULL_REPLACE = "📦 جایگزینی کامل منبع اصلی"
@@ -180,12 +181,29 @@ BTN_MG_RECENT = "📜 آخرین گزارش‌های هدف اصلی"
 BTN_MG_BULK = "📦 آپلود گروهی"
 BTN_MG_BULK_DONE = "✅ پایان آپلود گروهی"
 BTN_MG_BULK_STOP = "✖️ توقف آپلود گروهی (ماه‌های ذخیره‌شده می‌مانند)"
-BTN_MG_INPUT_PROD = "📸 آپلود عکس آمار تولید"
+BTN_MG_INPUT_PROD = BTN_PRODUCTION_STATS
 BTN_MG_INPUT_PROD_XLSX = "📤 آپلود اکسل آمار تولید"
 BTN_MG_INPUT_BILLET = "📤 اکسل مصرف تاندیش بیلت"
 BTN_MG_INPUT_BLOOM = "📤 اکسل مصرف تاندیش بلوم"
 BTN_MG_INPUT_SLAB = "📤 اکسل مصرف تاندیش اسلب"
-BTN_MG_INPUT_CORRECT = "✏️ اصلاح دستی تولید"
+BTN_MG_INPUT_CORRECT = BTN_PRODUCTION_STATS
+# «📝 آمار تولید» text-only input menu
+BTN_PS_NEW = "➕ ثبت اطلاعات ماه دیگر"
+BTN_PS_EDIT = "✏️ ویرایش ماه‌های ثبت‌شده"
+BTN_PS_DELETE = "🗑 حذف ماه ثبت‌شده"
+BTN_PS_BACK = "↩️ بازگشت به منوی قبل"
+BTN_PS_CONFIRM = "✅ تأیید و ذخیره"
+BTN_PS_REPLACE = "✅ بله، جایگزین شود"
+BTN_PS_DEL_CONFIRM = "✅ بله، حذف شود"
+BTN_PS_REENTER_ALL = "🔁 ورود مجدد همهٔ مقادیر"
+BTN_PS_FIELDS = {
+    "ccm1": "ccm1 (اسلب ۱)",
+    "ccm2": "ccm2 (اسلب ۲)",
+    "ccm3": "ccm3 (بلوم)",
+    "ccm4": "ccm4 (بیلت ۱)",
+    "ccm5": "ccm5 (بیلت ۲)",
+    "melts": "تعداد کل ذوب‌ها",
+}
 BTN_MG_CANCEL = BTN_CANCEL
 BTN_MG_BACK = BTN_BACK  # kept name; nav handles «one level up»
 BTN_MG_ADD_SECTION = "➕ افزودن بخش دیگر"
@@ -410,6 +428,9 @@ LEGACY_ALIASES: dict[str, str] = {
     "📥 ثبت ورودی (عکس تولید / اکسل تاندیش)": BTN_MG_INPUTS,
     "📦 آپلود گروهی چند ماه (تشخیص خودکار)": BTN_MG_BULK,
     "📄 آپلود اکسل آمار تولید": BTN_MG_INPUT_PROD_XLSX,
+    "📸 عکس‌های آمار تولید": BTN_PRODUCTION_STATS,
+    "📸 آپلود عکس آمار تولید": BTN_PRODUCTION_STATS,
+    "✏️ اصلاح دستی تولید": BTN_PRODUCTION_STATS,
     "📥 مصرف ماهیانه": BTN_MONTHLY,  # before 1405/07/20
     # settings
     "⚙️ تنظیمات گزارش تاندیش": BTN_TR_SETTINGS,
@@ -743,6 +764,29 @@ def main_goal_inputs_menu() -> dict:
         ],
         "mg_inputs",
     )
+
+
+def production_stats_menu() -> dict:
+    """«📝 آمار تولید» menu — stays open after every action until the user leaves."""
+    return _kb([[BTN_PS_NEW], [BTN_PS_EDIT, BTN_PS_DELETE], [BTN_PS_BACK, BTN_HOME]], "flow", nav=False)
+
+
+def production_stats_entry_menu() -> dict:
+    return _kb([[BTN_CANCEL]], "flow", nav=False)
+
+
+def production_stats_confirm_menu(confirm: str = BTN_PS_CONFIRM) -> dict:
+    return _kb([[confirm], [BTN_CANCEL]], "flow", nav=False)
+
+
+def production_stats_months_menu(months: list[str]) -> dict:
+    rows = [months[i : i + 3] for i in range(0, len(months), 3)]
+    return _kb(rows + [[BTN_CANCEL]], "flow", nav=False)
+
+
+def production_stats_field_menu() -> dict:
+    f = list(BTN_PS_FIELDS.values())
+    return _kb([f[0:2], f[2:4], f[4:6], [BTN_PS_REENTER_ALL], [BTN_CANCEL]], "flow", nav=False)
 
 
 def main_goal_range_menu() -> dict:
@@ -1253,7 +1297,7 @@ def _button_features() -> dict[str, tuple[str, ...]]:
         BTN_WAREHOUSE_STOCK: (P.FILE_INPUTS,),
         BTN_MONTHLY: (P.FILE_INPUTS,),
         BTN_SEQUENCE_REPORT: (P.FILE_INPUTS,),
-        BTN_PRODUCTION_PHOTOS: (P.FILE_INPUTS,),
+        BTN_PRODUCTION_STATS: (P.FILE_INPUTS, P.MAIN_GOAL),
         BTN_MAIN_SOURCE_FILE: (P.FILE_INPUTS, P.MAIN_SOURCE_EDIT),
         BTN_INV_DOWNLOAD: (P.FILE_INPUTS, P.MAIN_SOURCE_EDIT),
         BTN_INV_LIST_CATEGORIES: (P.FILE_INPUTS, P.MAIN_SOURCE_EDIT),

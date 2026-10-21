@@ -4,7 +4,7 @@ Menu: منوی اصلی → 🎯 هدف اصلی
 Roles: owner / manager / responsible_officer (حذف ماه: owner / manager)
 
 Flow:
-  1) 📥 ثبت ورودی ماه — عکس/اکسل آمار تولید، اکسل مصرف تاندیش هر بخش، یا
+  1) 📥 ثبت ورودی ماه — 📝 آمار تولید (ورود متنی)، اکسل مصرف تاندیش هر بخش، یا
      📦 آپلود گروهی — هر فایل جداگانه (نوع + ماه خودکار) ذخیره و باقی‌ماندهٔ ماه اعلام می‌شود
   2) 🗂 ماه‌های ذخیره‌شده (فقط در منوی هدف اصلی؛ حذف برای مالک/مدیر)
   3) 🎯 سناریو ۱: تناژ هدف (بازه + بخش) → تاندیش و مواد لازم → PDF + اکسل
@@ -29,13 +29,17 @@ from services.file_names import unique_dir
 from config import REPORT_DIR, UPLOAD_DIR, ensure_dirs
 from services import main_goal_history as mgh
 from services import main_goal_persist as mgp
-from services import main_goal_production_ocr as mgocr
 from services import main_goal_report as mg
+from bot.production_stats_flow import PS_BUTTONS, ProductionStatsMixin
 
 if TYPE_CHECKING:  # pragma: no cover
     from bot.handlers import BotApp
 
 logger = logging.getLogger(__name__)
+
+PHOTO_REMOVED_FA = (
+    "ورود آمار تولید با عکس حذف شده است؛ از دکمهٔ «📝 آمار تولید» مقادیر را متنی وارد کنید."
+)
 
 _MENU_BTNS = {
     kb.BTN_MG_MENU,
@@ -51,7 +55,6 @@ _MENU_BTNS = {
     kb.BTN_MG_INPUT_BILLET,
     kb.BTN_MG_INPUT_BLOOM,
     kb.BTN_MG_INPUT_SLAB,
-    kb.BTN_MG_INPUT_CORRECT,
     kb.BTN_MG_REPORT_REQ,
 }
 # Buttons that only make sense inside a pending step
@@ -71,6 +74,7 @@ _STEP_BTNS = {
     kb.BTN_MG_RANGE_12,
     kb.BTN_MG_RANGE_CUSTOM,
     kb.BTN_MG_CONFIRM_PARTIAL,
+    *PS_BUTTONS,
 }
 _RANGE_BTNS = {
     kb.BTN_MG_RANGE_3: 3,
@@ -95,7 +99,7 @@ def _global_buttons() -> set[str]:
     return vals
 
 
-class MainGoalReportFlow:
+class MainGoalReportFlow(ProductionStatsMixin):
     def __init__(self, app: "BotApp") -> None:
         self.app = app
         self.pending: dict[str, dict[str, Any]] = {}
@@ -175,17 +179,16 @@ class MainGoalReportFlow:
         if text == kb.BTN_MG_INPUTS:
             self.open_inputs(message)
             return True
-        if text == kb.BTN_MG_INPUT_PROD:
-            self.start_prod_photo(message)
+        if text == kb.BTN_PRODUCTION_STATS:
+            nav = (getattr(self.app, "_nav", {}) or {}).get(uid) or {}
+            here = nav.get("origin") if nav.get("key") == "flow" else nav.get("key")
+            self.start_production_stats(message, via_files=(here == "files"))
             return True
         if text == kb.BTN_MG_INPUT_PROD_XLSX:
             self.start_prod_xlsx(message)
             return True
         if text in _INPUT_SECTION:
             self.start_cons_xlsx(message, _INPUT_SECTION[text])
-            return True
-        if text == kb.BTN_MG_INPUT_CORRECT:
-            self.start_prod_correct(message)
             return True
         if text == kb.BTN_MG_REPORT_REQ:
             self.start_range_report(message)
@@ -206,12 +209,14 @@ class MainGoalReportFlow:
             return False
 
         mode = p.get("await")
+        if str(mode or "").startswith("ps_"):
+            return self.handle_ps_text(message, p, text)
         if mode == "bulk":
             if text in (kb.BTN_MG_BULK_DONE, kb.BTN_MG_BULK_STOP):
                 return self._bulk_done(message, p, stopped=text == kb.BTN_MG_BULK_STOP)
             self._reply(
                 message,
-                "فایل‌ها (Excel به‌صورت Document یا عکس آمار تولید) را بفرستید یا "
+                "فایل‌های Excel را به‌صورت Document بفرستید یا "
                 f"«{kb.BTN_MG_BULK_DONE}» را بزنید.",
                 kb.main_goal_bulk_menu(),
             )
@@ -228,13 +233,6 @@ class MainGoalReportFlow:
             return self._on_scn_confirm(message, p, text)
         if mode == "fc_months":
             return self._on_fc_months(message, p, text)
-        if mode == "prod_photo":
-            self._reply(
-                message,
-                "در انتظار عکس آمار تولید هستید — تصویر صفحه (اسکرین‌شات) را به‌صورت عکس بفرستید.",
-                kb.main_goal_upload_menu(),
-            )
-            return True
         if mode == "prod_xlsx":
             self._reply(message, "در انتظار فایل Excel آمار تولید (.xlsx) هستید.", kb.main_goal_upload_menu())
             return True
@@ -253,8 +251,6 @@ class MainGoalReportFlow:
                 kb.main_goal_upload_menu(),
             )
             return True
-        if mode == "prod_correct":
-            return self._on_prod_correct(message, p, text)
         if mode == "range_pick":
             return self._on_range_pick(message, p, text)
         if mode == "range_custom":
@@ -270,6 +266,10 @@ class MainGoalReportFlow:
         if not p:
             return False
         aw = p.get("await")
+        if str(aw or "").startswith("ps_"):
+            if aw == "ps_menu":
+                return False
+            return self._ps_menu(message, p)
         if aw == "scn_section":
             self.start_target(message)
             return True
@@ -286,6 +286,9 @@ class MainGoalReportFlow:
         """«✖️ انصراف» while a هدف اصلی step is pending (routed by BotApp.on_cancel)."""
         uid = self.app._uid(message)
         p = self.pending.get(uid) or {}
+        if str(p.get("await") or "").startswith("ps_"):
+            self.ps_cancel(message, p)
+            return
         self.clear(uid)
         user = self.app._user_or_deny(message)
         if not user:
@@ -297,7 +300,7 @@ class MainGoalReportFlow:
                 kb.main_goal_inputs_menu(),
             )
             return
-        back_inputs = p.get("await") in {"prod_photo", "prod_xlsx", "cons_xlsx", "seq_xlsx", "prod_correct"}
+        back_inputs = p.get("await") in {"prod_xlsx", "cons_xlsx", "seq_xlsx"}
         if p.get("via_files"):
             markup = kb.upload_files_menu(user)
         else:
@@ -319,7 +322,7 @@ class MainGoalReportFlow:
         self._reply(
             message,
             f"🎯 {mg.TITLE_FA}\n{mg.SUBTITLE_FA}\n\n"
-            f"• «{kb.BTN_MG_INPUTS}»: عکس/اکسل آمار تولید، اکسل مصرف تاندیش هر بخش یا «{kb.BTN_MG_BULK}».\n"
+            f"• «{kb.BTN_MG_INPUTS}»: «{kb.BTN_PRODUCTION_STATS}» (ورود متنی)، اکسل مصرف تاندیش هر بخش یا «{kb.BTN_MG_BULK}».\n"
             f"• «{kb.BTN_MG_REPORT_REQ}»: بازه ۳/۶/۱۲ ماهه یا بازهٔ سفارشی از سابقه.\n"
             "• سناریو ۱ (تناژ هدف) و سناریو ۲ (پیش‌بینی ماه‌های آینده).\n\n"
             f"{hist}",
@@ -426,8 +429,7 @@ class MainGoalReportFlow:
             message,
             "📦 آپلود گروهی\n"
             "فایل‌های پذیرفته‌شده (به هر ترتیب، هر تعداد ماه):\n"
-            "• عکس آمار تولید — فقط تصویر صفحه (اسکرین‌شات) تب «ریخته‌گری» سامانهٔ otsteel (عکس تب «کوره» رد می‌شود)\n"
-            "• یا اکسل آمار تولید (.xlsx)\n"
+            "• اکسل آمار تولید (.xlsx) — آمار تولید ماهانه را می‌توانید متنی از «📝 آمار تولید» وارد کنید\n"
             "• اکسل مصرف تاندیش بیلت / بلوم / اسلب (.xlsx)\n"
             "• اکسل لاگ سکوئنس تاندیش (.xlsx)\n"
             "نوع فایل و ماه به‌طور خودکار تشخیص داده می‌شود (از نام فایل، نام شیت یا سربرگ؛ "
@@ -441,12 +443,10 @@ class MainGoalReportFlow:
         """Return True if this document belonged to a هدف اصلی upload step."""
         uid = self.app._uid(message)
         p = self.pending.get(uid)
-        if not p or p.get("await") not in {"bulk", "prod_xlsx", "cons_xlsx", "seq_xlsx", "prod_photo"}:
+        if not p or p.get("await") not in {"bulk", "prod_xlsx", "cons_xlsx", "seq_xlsx"}:
             return False
         if p.get("await") in {"prod_xlsx", "cons_xlsx", "seq_xlsx"}:
             return self._handle_input_document(message, p)
-        if p.get("await") == "prod_photo":
-            return self.handle_photo(message)
         user = self._user(message)
         if not user:
             self.clear(uid)
@@ -456,11 +456,12 @@ class MainGoalReportFlow:
         file_id = doc.get("file_id")
         mime = str(doc.get("mime_type") or "")
         if file_id and (mime.startswith("image/") or file_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))):
-            return self._on_bulk_photo(message, user, p)
+            self._reply(message, PHOTO_REMOVED_FA, kb.main_goal_bulk_menu())
+            return True
         if not file_id or not file_name.lower().endswith(".xlsx"):
             self._reply(
                 message,
-                f"فقط .xlsx یا عکس آمار تولید پذیرفته می‌شود (دریافت شد: {file_name or 'بدون‌نام'}).",
+                f"فقط فایل .xlsx پذیرفته می‌شود (دریافت شد: {file_name or 'بدون‌نام'}).",
                 kb.main_goal_bulk_menu(),
             )
             return True
@@ -537,40 +538,6 @@ class MainGoalReportFlow:
             return True
         head = f"📄 «{file_name}»" + (f" → {kind_fa}" if kind_fa else "")
         return self._bulk_reply(message, p, head, out, act, user)
-
-    def _on_bulk_photo(self, message: dict, user: dict, p: dict) -> bool:
-        file_id = self.app._extract_image_file_id(message)
-        if not file_id:
-            self._reply(message, "تصویر معتبر دریافت نشد.", kb.main_goal_bulk_menu())
-            return True
-        dest_dir = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / str(p["batch"])
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        p["seq"] = int(p.get("seq") or 0) + 1
-        dest = dest_dir / f"production_{p['seq']:03d}.png"
-        return self.app._heavy(
-            message, "OCR عکس آمار تولید", True, lambda: self._bulk_photo_ocr(message, user, p, file_id, dest)
-        )
-
-    def _bulk_photo_ocr(self, message: dict, user: dict, p: dict, file_id: str, dest: Path) -> bool:
-        try:
-            self.app.client.download_file(file_id, dest)
-            ocr_res = mgocr.ocr_production_image(dest)
-            out = mgp.store_production_from_ocr(
-                self.db, dest, user=user, source="bot", filename=dest.name, ocr_result=ocr_res
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("main_goal bulk photo failed")
-            self._reply(message, user_errors.error_fa("خطا در OCR عکس", exc), kb.main_goal_bulk_menu())
-            return True
-        if out.tab_rejected:
-            self._reply(message, "📸 " + (out.error_fa or mgocr.ALARM_UNKNOWN_FA), kb.main_goal_bulk_menu())
-            log_activity(self.db, user, "main_goal_production_photo_rejected_tab")
-            return True
-        if not out.ok:
-            out.error_fa = (out.error_fa or "OCR ناقص بود.") + (
-                f" برای اصلاح، بعد از پایان «{kb.BTN_MG_INPUT_CORRECT}» را بزنید."
-            )
-        return self._bulk_reply(message, p, "📸 عکس آمار تولید", out, "main_goal_store_production_ocr", user)
 
     @staticmethod
     def _remaining_line(out: Any) -> str:
@@ -803,7 +770,7 @@ class MainGoalReportFlow:
         lines = [
             f"{kb.BTN_MG_INPUTS}",
             f"آپلود ورودی‌ها از «{kb.BTN_UPLOAD_MENU}»: موجودی انبار، مصرف ماهیانه، "
-            "عکس آمار تولید (تب ریخته‌گری) و «گزارش جامع تاندیش در سکوئنس».",
+            "«گزارش جامع تاندیش در سکوئنس»؛ آمار تولید متنی از «📝 آمار تولید».",
             f"چند فایل/چند ماه با هم: «{kb.BTN_MG_BULK}» | راهنما: «{kb.BTN_FILE_GUIDE}»",
             "",
         ]
@@ -855,23 +822,6 @@ class MainGoalReportFlow:
             kb.main_goal_upload_menu(),
         )
 
-    def start_prod_photo(self, message: dict, via_files: bool = False) -> None:
-        user = self._start_user(message, via_files)
-        if not user:
-            return
-        batch = tehran_now().strftime("%Y%m%d_%H%M%S")
-        self.pending[str(user["bale_user_id"])] = {"await": "prod_photo", "batch": batch, "via_files": via_files}
-        self.app._file_guide_kind[str(user["bale_user_id"])] = "mg_production_photo"
-        self._reply(
-            message,
-            "📸 عکس تب «ریخته گری» صفحه آمار تولید (otsteel.ksc.ir/productionstatistics) را "
-            "همراه با فیلتر تاریخ ماه بفرستید.\n"
-            "⛔ عکس تب «کوره» پذیرفته نمی‌شود.\n"
-            "نگاشت CCM: ۱و۲=اسلب، ۳=بلوم، ۴و۵=بیلت.\n"
-            "پس از OCR می‌توانید اعداد را دستی اصلاح کنید.",
-            kb.main_goal_upload_menu(),
-        )
-
     def start_prod_xlsx(self, message: dict) -> None:
         user = self._user(message)
         if not user:
@@ -899,100 +849,14 @@ class MainGoalReportFlow:
             kb.main_goal_upload_menu(),
         )
 
-    def start_prod_correct(self, message: dict) -> None:
-        user = self._user(message)
-        if not user:
-            return
-        self.pending[str(user["bale_user_id"])] = {"await": "prod_correct"}
-        self._reply(
-            message,
-            "✏️ اصلاح دستی تولید — یک خط به این شکل بفرستید:\n"
-            "شهریور ۱۴۰۵ | اسلب 99300 | بلوم 18500 | بیلت 33600 | ذوب 920\n"
-            "(بخش‌های خالی اختیاری‌اند)",
-            kb.main_goal_cancel_menu(),
-        )
-
     def handle_photo(self, message: dict) -> bool:
-        """Handle production screenshot while awaiting prod_photo."""
+        """Photo/OCR input was removed: production stats are text-only (📝 آمار تولید)."""
         uid = self.app._uid(message)
         p = self.pending.get(uid)
-        if not p or p.get("await") != "prod_photo":
+        if not p:
             return False
-        user = self._user(message)
-        if not user:
-            self.clear(uid)
-            return True
-        file_id = self.app._extract_image_file_id(message)
-        if not file_id:
-            self._reply(message, "تصویر معتبر دریافت نشد. Photo بفرستید.", kb.main_goal_upload_menu())
-            return True
-        dest_dir = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / str(p["batch"])
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / "production.png"
-        try:
-            self.app.client.download_file(file_id, dest)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("main_goal photo download failed")
-            self._reply(message, user_errors.error_fa("دانلود عکس ناموفق", exc), kb.main_goal_upload_menu())
-            return True
-        self._reply(message, "⏳ در حال OCR عکس تولید…", kb.main_goal_upload_menu())
-        # 19c: OCR runs in the background pool (this user's next messages wait in order)
-        return self.app._heavy(
-            message, "OCR عکس تولید", False, lambda: self._ocr_production_photo(message, user, uid, p, dest)
-        )
-
-    def _ocr_production_photo(self, message: dict, user: dict, uid: str, p: dict, dest: Path) -> bool:
-        try:
-            ocr_res = mgocr.ocr_production_image(dest)
-            out = mgp.store_production_from_ocr(
-                self.db, dest, user=user, source="bot", filename="production.png", ocr_result=ocr_res
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("main_goal OCR store failed")
-            self._reply(message, user_errors.error_fa("خطا در OCR/ذخیره", exc), kb.main_goal_menu())
-            self.clear(uid)
-            return True
-        if out.tab_rejected:
-            # Wrong tab (furnace) or undeterminable → alarm, nothing stored; wait for a new photo.
-            ev = (out.ocr_result.tab_evidence if out.ocr_result else {}) or {}
-            logger.info("main_goal photo rejected: tab=%s evidence=%s", ev.get("decision"), ev)
-            try:
-                dest.unlink(missing_ok=True)
-            except OSError:
-                pass
-            p["await"] = "prod_photo"
-            p.pop("ocr_draft", None)
-            self.pending[uid] = p
-            self._reply(message, out.error_fa or mgocr.ALARM_UNKNOWN_FA, kb.main_goal_upload_menu())
-            log_activity(self.db, user, "main_goal_production_photo_rejected_tab")
-            return True
-        if not out.ok:
-            # keep pending for correction
-            p["await"] = "prod_correct"
-            p["ocr_draft"] = {
-                "path": str(dest),
-                "raw": (out.ocr_result.ocr_raw_text if out.ocr_result else ""),
-                "confidence": (out.ocr_result.ocr_confidence if out.ocr_result else None),
-                "year": out.ocr_result.year if out.ocr_result else None,
-                "month": out.ocr_result.month if out.ocr_result else None,
-                "slab": out.ocr_result.slab_tons if out.ocr_result else 0,
-                "bloom": out.ocr_result.bloom_tons if out.ocr_result else 0,
-                "billet": out.ocr_result.billet_tons if out.ocr_result else 0,
-                "melt": out.ocr_result.melt_count if out.ocr_result else None,
-                "ccm": dict(out.ocr_result.ccm_tons) if out.ocr_result else {},
-            }
-            self.pending[uid] = p
-            self._reply(
-                message,
-                (out.error_fa or "OCR ناقص بود.") + "\n\n" + (out.summary or "")
-                + "\n\n✏️ اصلاح دستی را به شکل "
-                "«شهریور ۱۴۰۵ | اسلب 99300 | بلوم 18500 | بیلت 33600 | ذوب 920» بفرستید.",
-                kb.main_goal_cancel_menu(),
-            )
-            return True
-        self.clear(uid)
-        log_activity(self.db, user, "main_goal_store_production_ocr")
-        self._reply(message, out.summary + "\n" + self._remaining_line(out), self._done_menu(p, user))
+        markup = kb.main_goal_bulk_menu() if p.get("await") == "bulk" else None
+        self._reply(message, PHOTO_REMOVED_FA, markup)
         return True
 
     def _handle_input_document(self, message: dict, p: dict) -> bool:
@@ -1069,76 +933,6 @@ class MainGoalReportFlow:
         self._reply(message, out.summary + "\n" + self._remaining_line(out), self._done_menu(p, user))
         return True
 
-    def _on_prod_correct(self, message: dict, p: dict, text: str) -> bool:
-        uid = self.app._uid(message)
-        user = self._user(message)
-        if not user:
-            self.clear(uid)
-            return True
-        parsed = _parse_manual_production(text)
-        if not parsed:
-            self._reply(
-                message,
-                "فرمت نامعتبر. مثال:\nشهریور ۱۴۰۵ | اسلب 99300 | بلوم 18500 | بیلت 33600 | ذوب 920",
-                kb.main_goal_cancel_menu(),
-            )
-            return True
-        draft = p.get("ocr_draft") or {}
-        base = mgocr.ProductionOCRResult(
-            ok=False,
-            year=draft.get("year"),
-            month=draft.get("month"),
-            period_key=None,
-            slab_tons=float(draft.get("slab") or 0),
-            bloom_tons=float(draft.get("bloom") or 0),
-            billet_tons=float(draft.get("billet") or 0),
-            melt_count=draft.get("melt"),
-            ccm_tons={int(k): float(v) for k, v in (draft.get("ccm") or {}).items()},
-            ocr_raw_text=str(draft.get("raw") or ""),
-            ocr_confidence=draft.get("confidence"),
-        )
-        if base.year and base.month:
-            base.period_key = f"m:{int(base.year):04d}-{int(base.month):02d}"
-        fixed = mgocr.apply_manual_corrections(base, **parsed)
-        if not fixed.ok:
-            self._reply(message, fixed.error_fa or "اصلاح ناقص است.", kb.main_goal_cancel_menu())
-            return True
-        # store without requiring the image path
-        path = Path(draft["path"]) if draft.get("path") else None
-        if path and path.is_file():
-            out = mgp.store_production_from_ocr(
-                self.db,
-                path,
-                user=user,
-                source="bot",
-                filename=path.name,
-                ocr_result=fixed,
-                manual_corrected=True,
-            )
-        else:
-            # create a placeholder path under uploads
-            dest_dir = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / "manual"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            placeholder = dest_dir / f"{fixed.period_key}.txt"
-            placeholder.write_text(fixed.ocr_raw_text or text, encoding="utf-8")
-            out = mgp.store_production_from_ocr(
-                self.db,
-                placeholder,
-                user=user,
-                source="bot",
-                filename=placeholder.name,
-                ocr_result=fixed,
-                manual_corrected=True,
-            )
-        self.clear(uid)
-        if not out.ok:
-            self._reply(message, out.error_fa or "ذخیره ناموفق", kb.main_goal_inputs_menu())
-            return True
-        log_activity(self.db, user, "main_goal_store_production_manual")
-        self._reply(message, out.summary + "\n" + self._remaining_line(out), kb.main_goal_inputs_menu())
-        return True
-
-    # ------------------------------------------------------------ ب) درخواست گزارش بازه
     def start_range_report(self, message: dict) -> None:
         user = self._user(message)
         if not user:
@@ -1243,27 +1037,3 @@ class MainGoalReportFlow:
             self.db, spec, inventory=self._inventory(user), require_complete=False
         )
         return self._deliver(message, user, model, result, stem_prefix="main_goal_range")
-
-
-def _parse_manual_production(text: str) -> dict | None:
-    """Parse 'شهریور ۱۴۰۵ | اسلب 99300 | بلوم 18500 | بیلت 33600 | ذوب 920'."""
-    from bot.jalali import parse_month_year_token
-
-    s = mg.normalize_text(text)
-    if not s:
-        return None
-    out: dict = {}
-    tok = parse_month_year_token(s)
-    if tok:
-        out["year"], out["month"] = tok
-    for label, key in (("اسلب", "slab_tons"), ("بلوم", "bloom_tons"), ("بیلت", "billet_tons"), ("ذوب", "melt_count")):
-        m = __import__("re").search(rf"{label}\s*[:=]?\s*([\d٬,]+(?:\.\d+)?)", s)
-        if m:
-            v = mgh.parse_number(m.group(1))
-            if v is not None:
-                out[key] = v
-    if "year" not in out or "month" not in out:
-        return None
-    if not any(k in out for k in ("slab_tons", "bloom_tons", "billet_tons")):
-        return None
-    return out
