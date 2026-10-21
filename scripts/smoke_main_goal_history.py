@@ -290,7 +290,7 @@ def test_bot_flow(tmp: Path) -> None:
     f5 = write_month(tmp / "b5", "مرداد", 1.1)
     f6 = write_month(tmp / "b6", "شهریور", 1.2)
     txt, btns = send("701", kb.BTN_MG_BULK)
-    assert "ریخته‌گری" in txt and "سکوئنس" in txt and "خودکار" in txt, txt
+    assert "📝 آمار تولید" in txt and "سکوئنس" in txt and "خودکار" in txt, txt
     assert {kb.BTN_MG_BULK_DONE, kb.BTN_MG_BULK_STOP, kb.BTN_BACK} <= set(btns), btns
     order = [f6["slab_consumption"], f5["production"], f4["production"], f6["production"],
              f5["billet_consumption"], f4["billet_consumption"], f6["billet_consumption"],

@@ -38,7 +38,7 @@ _SECTIONS: list[tuple[str, str]] = [
     (
         perm.MAIN_GOAL,
         f"{kb.BTN_MAIN_GOAL}\n"
-        f"• «{kb.BTN_MG_INPUTS}»: عکس/اکسل آمار تولید، اکسل مصرف تاندیش هر بخش، یا «{kb.BTN_MG_BULK}».\n"
+        f"• «{kb.BTN_MG_INPUTS}»: «{kb.BTN_PRODUCTION_STATS}» (ورود متنی وزن محصول ccm1 تا ccm5 به کیلوگرم + کل ذوب‌ها)، اکسل مصرف تاندیش هر بخش، یا «{kb.BTN_MG_BULK}».\n"
         f"• «{kb.BTN_MG_HISTORY}»: ماه‌های ذخیره‌شده و بخش‌های ناقص؛ سناریو ۱ و ۲ از همین سابقه.",
     ),
     (
