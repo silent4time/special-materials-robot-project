@@ -3228,6 +3228,14 @@ class Database:
             )
             return cur.rowcount > 0
 
+    def delete_main_goal_month_by_key(self, period_key: str) -> bool:
+        """Drop the derived legacy aggregate row of one month (re-synced on next input)."""
+        with self.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM main_goal_months WHERE period_key = ?", (str(period_key),)
+            )
+            return cur.rowcount > 0
+
     def delete_main_goal_production_by_key(self, period_key: str) -> bool:
         with self.connect() as conn:
             cur = conn.execute(

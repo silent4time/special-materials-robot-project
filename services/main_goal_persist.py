@@ -1,4 +1,4 @@
-"""Persist normalized main-goal inputs (production OCR / tundish Excel) and
+"""Persist normalized main-goal inputs (text production stats / tundish Excel) and
 build MonthRecord history + range reports from DB.
 
 Shared by bot + web. Legacy ``main_goal_months.stats_json`` is kept in sync when
@@ -18,7 +18,6 @@ import pandas as pd
 from bot.jalali import format_date, format_month_year, jalali_today, tehran_now
 from config import UPLOAD_DIR
 from services import main_goal_history as mgh
-from services import main_goal_production_ocr as ocr
 from services import main_goal_report as mg
 
 HISTORY_DIR_NAME = mgh.HISTORY_DIR_NAME
@@ -28,7 +27,7 @@ SECTIONS = mgh.SECTIONS
 STATUS_VALID = "valid"
 STATUS_CASTING_UNVALIDATED = "casting_needs_validation"
 STATUS_FURNACE_PROVISIONAL = "furnace_tab_provisional"
-NEEDS_CASTING_NOTE_FA = "نیاز به عکس تب ریخته‌گری"
+NEEDS_CASTING_NOTE_FA = "نیاز به ثبت «📝 آمار تولید»"
 PROVISIONAL_LABEL_FA = "⚠ موقت (تب کوره) — " + NEEDS_CASTING_NOTE_FA
 
 
@@ -66,113 +65,10 @@ class InputStoreOutcome:
     period_label: str = ""
     replaced: bool = False
     summary: str = ""
-    ocr_result: ocr.ProductionOCRResult | None = None
+    ocr_result: Any = None  # legacy field (photo/OCR input removed)
     needs_confirm: bool = False
     tab_rejected: bool = False
     missing_parts: list[str] = field(default_factory=list)
-
-
-def store_production_from_ocr(
-    db: Any,
-    image_path: Path | str,
-    *,
-    user: dict,
-    source: str,
-    filename: str | None = None,
-    ocr_result: ocr.ProductionOCRResult | None = None,
-    manual_corrected: bool = False,
-) -> InputStoreOutcome:
-    path = Path(image_path)
-    result = ocr_result or ocr.ocr_production_image(path)
-    tab = (getattr(result, "report_tab", None) or "unknown").strip() or "unknown"
-    if getattr(result, "tab_rejected", False) or tab in {"furnace", "unknown"}:
-        # Only CASTING-tab photos (or manual/excel values) may be stored.
-        return InputStoreOutcome(
-            ok=False,
-            error_fa=result.error_fa
-            or (ocr.ALARM_FURNACE_FA if tab == "furnace" else ocr.ALARM_UNKNOWN_FA),
-            ocr_result=result,
-            tab_rejected=True,
-            summary="",
-        )
-    if not result.period_key or result.total_tons <= 0:
-        return InputStoreOutcome(
-            ok=False,
-            error_fa=result.error_fa or "استخراج تولید از عکس ناموفق بود.",
-            ocr_result=result,
-            needs_confirm=True,
-            summary=ocr.result_summary_fa(result),
-        )
-    dest_dir = UPLOAD_DIR / HISTORY_DIR_NAME / _safe_dir(result.period_key)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / f"production{path.suffix.lower() or '.png'}"
-    try:
-        if path.resolve() != dest.resolve():
-            shutil.copy2(path, dest)
-    except OSError:
-        dest = path
-    now = tehran_now()
-    if tab == "casting" and getattr(result, "needs_validation", False) and not manual_corrected:
-        status = STATUS_CASTING_UNVALIDATED
-    else:
-        status = STATUS_VALID
-    sec_melts = result.section_melts() if hasattr(result, "section_melts") else {}
-    row, replaced = db.upsert_main_goal_production(
-        period_key=result.period_key,
-        period_label=result.period_label,
-        year=result.year,
-        month=result.month,
-        sort_key=period_sort_key(result.year, result.month, result.period_key),
-        slab_tons=result.slab_tons,
-        bloom_tons=result.bloom_tons,
-        billet_tons=result.billet_tons,
-        total_tons=result.total_tons,
-        melt_count=result.melt_count,
-        melt_weight_kg=getattr(result, "melt_weight_kg", None),
-        product_weight_kg=getattr(result, "product_weight_kg", None),
-        slab_count=getattr(result, "slab_count", None),
-        bloom_billet_count=getattr(result, "bloom_billet_count", None),
-        melts_per_day=getattr(result, "melts_per_day", None),
-        report_tab=tab,
-        source_status=status,
-        slab_melt_count=sec_melts.get("slab"),
-        bloom_melt_count=sec_melts.get("bloom"),
-        billet_melt_count=sec_melts.get("billet"),
-        ccm1_tons=result.ccm_tons.get(1),
-        ccm2_tons=result.ccm_tons.get(2),
-        ccm3_tons=result.ccm_tons.get(3),
-        ccm4_tons=result.ccm_tons.get(4),
-        ccm5_tons=result.ccm_tons.get(5),
-        source_type="manual" if manual_corrected else "ocr",
-        source_path=str(dest),
-        source_filename=filename or path.name,
-        ocr_raw_text=result.ocr_raw_text,
-        ocr_confidence=result.ocr_confidence,
-        ocr_fields_json=result.to_fields_json(),
-        manual_corrected=1 if manual_corrected else 0,
-        notes_json=json.dumps(result.notes, ensure_ascii=False),
-        missing_json=json.dumps(result.missing, ensure_ascii=False),
-        bale_user_id=user["bale_user_id"],
-        actor_display_name=user.get("display_name"),
-        source=source,
-        created_at_tehran=now.isoformat(),
-        jalali_date=format_date(now),
-    )
-    sync_month_aggregate(db, result.period_key, user=user, source=source)
-    verb = "جایگزین شد" if replaced else "ذخیره شد"
-    summary = (
-        f"✅ آمار تولید «{result.period_label}» {verb} (از عکس).\n"
-        + ocr.result_summary_fa(result)
-    )
-    return InputStoreOutcome(
-        ok=True,
-        period_key=result.period_key,
-        period_label=result.period_label,
-        replaced=replaced,
-        summary=summary,
-        ocr_result=result,
-        missing_parts=_missing_parts(db, result.period_key),
-    )
 
 
 def store_production_from_excel(
@@ -197,9 +93,9 @@ def store_production_from_excel(
             ok=False,
             error_fa="تناژ از فایل Excel استخراج نشد: " + "؛ ".join(stats.missing or ["بدون مقدار"]),
         )
-    # wrap as OCR-like result for store path
-    fake = ocr.ProductionOCRResult(
-        ok=True,
+    from types import SimpleNamespace
+
+    fake = SimpleNamespace(
         year=period.year,
         month=period.month,
         period_key=period.key(),
@@ -207,9 +103,9 @@ def store_production_from_excel(
         slab_tons=stats.slab_tons,
         bloom_tons=stats.bloom_tons,
         billet_tons=stats.billet_tons,
+        total_tons=stats.total_tons,
         notes=list(stats.notes),
         missing=list(stats.missing),
-        fields={"source": "excel"},
     )
     dest_dir = UPLOAD_DIR / HISTORY_DIR_NAME / _safe_dir(fake.period_key)
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -251,7 +147,7 @@ def store_production_from_excel(
         source_filename=filename or path.name,
         ocr_raw_text=None,
         ocr_confidence=None,
-        ocr_fields_json=fake.to_fields_json(),
+        ocr_fields_json=json.dumps({"source": "excel"}),
         manual_corrected=0,
         notes_json=json.dumps(fake.notes, ensure_ascii=False),
         missing_json=json.dumps(fake.missing, ensure_ascii=False),

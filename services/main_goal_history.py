@@ -959,7 +959,7 @@ def scenario_forecast(model: HistoryModel, months_ahead: int) -> ScenarioResult:
             error_fa=(
                 "هیچ ماهی در سابقه تناژ ثبت‌شده ندارد؛ پیش‌بینی تناژ ممکن نیست.\n"
                 + model.tonnage_basis_line()
-                + "\nعکس تب ریخته‌گری (آمار تولید) را برای حداقل یک ماه ثبت کنید."
+                + "\n«📝 آمار تولید» را برای حداقل یک ماه ثبت کنید."
             ),
             kind="forecast", title="", subtitle="", sections=[], summary="",
         )
