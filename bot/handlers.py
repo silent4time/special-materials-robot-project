@@ -1582,6 +1582,10 @@ class BotApp:
         self._reply(message, out.text + "\n\n" + self._status_text(out.session, user), reply_menu)
         if out.inbound_report and out.inbound_report.get("id"):
             self._send_inbound_report_files(message, out.inbound_report)
+        if out.unit_alert:
+            from services.unit_mismatch import send_alert
+
+            send_alert(self.client, self.db, out.unit_alert, uploader=str(user["bale_user_id"]))
 
     # ---------- 📊 گزارش جامع (merged «گزارش کلی مواد» + «PDF کامل تحلیل») ----------
     def on_comprehensive_prompt(self, message: dict) -> None:

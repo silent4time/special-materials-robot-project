@@ -39,6 +39,7 @@ class UploadOutcome:
     text: str
     session: dict | None = None
     inbound_report: dict | None = None
+    unit_alert: dict | None = None
 
 
 def process_upload(
@@ -58,6 +59,13 @@ def process_upload(
     """
     dest = Path(dest)
     dest_dir = dest.parent
+    # main-source units BEFORE this upload (a stock file must not compare with itself)
+    try:
+        from services.unit_source import main_source_maps
+
+        unit_maps = main_source_maps(db)
+    except Exception:  # noqa: BLE001
+        unit_maps = ({}, {})
     # If a «مصرف ماهیانه / مواد مصرفی» upload actually matches the
     # منبع اصلی (product_inventory) cleaned format, treat it as a primary
     # inventory refresh so warehouse master data stays current.
@@ -306,12 +314,24 @@ def process_upload(
     if result.extra_columns_dropped:
         extra_cols_note = "\nستون‌های اضافی کنار گذاشته شد."
     actor_line = f"ثبت‌کننده: {actor_fa}"
+    unit_alert = None
+    if not (pending == "product_inventory" and upload_origin == "main_source"):
+        try:
+            from services.unit_mismatch import check_upload
+
+            unit_alert = check_upload(
+                db, raw_path=Path(result.raw_path), clean_path=Path(result.clean_path), file_type=pending,
+                maps=unit_maps, file_label=label, actor=actor_fa,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("unit mismatch check failed")
     if pending == "product_inventory":
         log_activity(db, user, "upload_product_inventory")
     elif pending == "monthly_consumption":
         log_activity(db, user, "upload_monthly_consumption")
     return UploadOutcome(
         ok=True, kind="ok", pending=pending, session=session, inbound_report=inbound_report,
+        unit_alert=unit_alert,
         text=(
             f"✅ فایل «{label}» دریافت شد.\n"
             f"از {result.raw_row_count} ردیف خام، {new_kept} ردیف نگه داشته شد."

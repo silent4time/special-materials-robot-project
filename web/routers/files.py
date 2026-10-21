@@ -84,8 +84,30 @@ async def _excel(request, db, user, file, pending):
     if not out.ok:
         return _page(request, db, user, error=out.text, status_code=400)
     inbound = out.inbound_report if (out.inbound_report or {}).get("id") else None
+    summary = out.text
+    if out.unit_alert:
+        summary = out.text + "\n\n" + out.unit_alert["text"]
+        _notify_unit_alert(db, out.unit_alert, user)
     return _page(request, db, user, message=f"✅ «{file_guides.TITLES.get(pending, pending)}» ثبت شد.",
-                 summary=out.text, new_inbound=inbound)
+                 summary=summary, new_inbound=inbound)
+
+
+def _notify_unit_alert(db: Database, alert: dict, user: dict) -> None:
+    """Web upload: same warning on the page + Bale message to uploader and owner/manager."""
+    try:
+        from bot.bale_api import BaleClient
+        from config import BALE_BOT_TOKEN
+        from services.unit_mismatch import send_alert
+
+        if not BALE_BOT_TOKEN.strip():
+            return
+        client = BaleClient()
+        try:
+            send_alert(client, db, alert, uploader=str(user["bale_user_id"]))
+        finally:
+            client.close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @router.post("/stock")
