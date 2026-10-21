@@ -24,6 +24,8 @@ SECTION_FA = {"slab": "اسلب", "bloom": "بلوم", "billet": "بیلت"}
 SITE_COLS = ["ردیف", "بخش", "شناسه کالا", "شرح کالا", "مصرف (کاهش موجودی)", "افزایش (ورودی)", "تعداد ثبت در بازه"]
 MG_COLS = ["ردیف", "بخش", "ماده", "واحد", "مصرف", "ماه‌ها"]
 MG_COUNT_COLS = ["بخش", "ماه", "تعداد تاندیش"]
+MON_COLS = ["ردیف", "بخش", "شناسه کالا", "شرح کالا", "واحد", "مصرف خالص", "ماه‌ها"]
+TT_SECTION = {"تاندیش اسلب": "slab", "تاندیش بلوم": "bloom", "تاندیش بیلت": "billet"}
 
 
 def _num(v: float) -> int | float:
@@ -67,6 +69,10 @@ class PeriodConsumptionResult:
     mg_counts: list[dict[str, Any]] = field(default_factory=list)
     mg_months: list[tuple[int, int]] = field(default_factory=list)
     mg_missing: list[tuple[int, int]] = field(default_factory=list)
+    mon_rows: list[dict[str, Any]] = field(default_factory=list)
+    mon_months: list[tuple[int, int]] = field(default_factory=list)
+    mon_missing: list[tuple[int, int]] = field(default_factory=list)
+    basis_note: str = ""
     error: str | None = None
     pdf: Path | None = None
     xlsx: Path | None = None
@@ -81,12 +87,22 @@ class PeriodConsumptionResult:
 
     def source_line(self) -> str:
         parts = []
+        if self.basis_note:
+            parts.append(self.basis_note)
+        if self.mon_rows:
+            from bot.jalali import PERSIAN_MONTH_NAMES
+
+            ms = "، ".join(f"{PERSIAN_MONTH_NAMES[m]} {y}" for y, m in self.mon_months)
+            parts.append(f"(ج) فایل «مصرف ماهیانه» بارگذاری‌شده (خالص؛ برگشتی کسر) برای: {ms}")
+            if self.mon_missing:
+                miss = "، ".join(f"{PERSIAN_MONTH_NAMES[m]} {y}" for y, m in self.mon_missing)
+                parts.append(f"ماه‌های بازه بدون فایل مصرف ماهیانه (حذف از مبنا، صفر نیست): {miss}")
         if self.site_rows:
             parts.append(
                 f"(الف) اختلاف ثبت‌های «موجودی روزانه سایت» ({self.site_entry_count} ثبت؛ "
                 "فقط کاهش موجودی = مصرف، افزایش = ورودی)"
             )
-        else:
+        elif not self.mon_rows:
             parts.append("(الف) موجودی روزانه سایت: برای هیچ قلمی دو ثبت (مبنا + ثبت در بازه) نیست — اختلافی محاسبه نشد")
         if self.mg_rows or self.mg_counts:
             from bot.jalali import PERSIAN_MONTH_NAMES
@@ -106,6 +122,18 @@ class PeriodConsumptionResult:
 
     def sections(self) -> list[dict[str, Any]]:
         secs: list[dict[str, Any]] = []
+        if self.mon_rows:
+            secs.append(
+                {
+                    "title": "ج) مصرف از فایل مصرف ماهیانهٔ بارگذاری‌شده",
+                    "sheet_title": "مصرف ماهیانه",
+                    "columns": MON_COLS,
+                    "rows": self.mon_rows,
+                    "material": {"id": "شناسه کالا", "name": "شرح کالا", "mode": "per_id"},
+                    "empty_message": "—",
+                    "header_bg": "#b26a00",
+                }
+            )
         if self.site_rows:
             secs.append(
                 {
@@ -144,6 +172,10 @@ class PeriodConsumptionResult:
 
     def bot_text(self, top: int = 8) -> str:
         lines = [f"📅 {self.title}", self.source_line(), ""]
+        if self.mon_rows:
+            lines.append(f"ج) فایل مصرف ماهیانه: {len(self.mon_rows)} قلم")
+            for r in sorted(self.mon_rows, key=lambda r: -float(r["مصرف خالص"] or 0))[:top]:
+                lines.append(f"• {r['بخش']} | {str(r['شرح کالا'])[:40]}: {r['مصرف خالص']} {r['واحد']}")
         if self.site_rows:
             lines.append(f"الف) موجودی روزانه سایت: {len(self.site_rows)} قلم")
             for r in sorted(self.site_rows, key=lambda r: -float(r["مصرف (کاهش موجودی)"] or 0))[:top]:
@@ -259,6 +291,46 @@ def _mg_rows(db: Any, months: list[tuple[int, int]], section: str | None) -> tup
     return rows, counts, sorted(used_months)
 
 
+def _monthly_rows(db: Any, months: list[tuple[int, int]], section: str | None, user: dict | None):
+    """Source (ج): uploaded «مصرف ماهیانه» file — net qty per item for the range months."""
+    from analytics.tundish import _jalali_ym_from_row, signed_quantity
+    from services.data_months import monthly_frame
+
+    f = monthly_frame(db, user)
+    if f is None or f.empty or not months or "quantity" not in f.columns:
+        return [], []
+    f = f.copy()
+    f["_ym"] = [_jalali_ym_from_row(d, m) for d, m in zip(f.get("date", [None] * len(f)), f.get("month", [None] * len(f)))]
+    f = f[f["_ym"].isin(set(months))]
+    if section and "tundish_type" in f.columns:
+        f = f[f["tundish_type"].astype(str).str.strip().map(TT_SECTION) == section]
+    if f.empty:
+        return [], []
+    f["_q"] = signed_quantity(f)
+    used = sorted(set(f["_ym"]))
+    from bot.jalali import PERSIAN_MONTH_NAMES
+
+    rows = []
+    keys = [c for c in ("tundish_type", "id", "material_name", "unit") if c in f.columns]
+    for k, g in f.groupby(keys, dropna=False):
+        d = dict(zip(keys, k if isinstance(k, tuple) else (k,)))
+        tt = str(d.get("tundish_type") or "")
+        sec = TT_SECTION.get(tt.strip())
+        rows.append({
+            "بخش": SECTION_FA.get(sec, tt) if sec else tt,
+            "شناسه کالا": str(d.get("id") or ""),
+            "شرح کالا": str(d.get("material_name") or ""),
+            "واحد": str(d.get("unit") or ""),
+            "مصرف خالص": _num(g["_q"].sum()),
+            "ماه‌ها": "، ".join(f"{PERSIAN_MONTH_NAMES[m]} {y}" for y, m in sorted(set(g["_ym"]))),
+            "_s": (tt, -float(g["_q"].sum())),
+        })
+    rows.sort(key=lambda r: r.pop("_s"))
+    for i, r in enumerate(rows, 1):
+        r["ردیف"] = i
+    return rows, used
+
+
 def data_availability(db: Any, section: str | None = None) -> dict[str, Any]:
     """What the two sources actually hold (for clear «insufficient data» messages)."""
     entries = [
@@ -277,7 +349,14 @@ def data_availability(db: Any, section: str | None = None) -> dict[str, Any]:
             q += " WHERE section = ?"
             args = (section,)
         months = sorted({(int(r[0] or 0), int(r[1] or 0)) for r in conn.execute(q, args).fetchall()} - {(0, 0)})
+    from services.data_months import report_months
+
+    try:
+        mon = report_months(db, None, "monthly_summary")
+    except Exception:  # noqa: BLE001
+        mon = []
     return {
+        "mon_months": mon,
         "site_dates": dates,
         "site_entries": len(entries),
         "site_items_with_diff": sum(1 for n in per_item.values() if n >= 2),
@@ -309,14 +388,18 @@ def availability_text_fa(av: dict[str, Any]) -> str:
         ) + " (فقط ماه‌هایی که کامل داخل بازه باشند استفاده می‌شوند)."
     else:
         mg = "• مصرف تاندیش ماهانهٔ هدف اصلی: هیچ ماهی ثبت نشده است."
-    return "دادهٔ موجود:\n" + site + "\n" + mg
+    mon = av.get("mon_months") or []
+    mo = ("• فایل مصرف ماهیانه: " + "، ".join(f"{PERSIAN_MONTH_NAMES.get(m, m)} {y}" for y, m in mon)) if mon \
+        else "• فایل مصرف ماهیانه: بارگذاری نشده است."
+    return "دادهٔ موجود:\n" + mo + "\n" + site + "\n" + mg
 
 
 def has_any_data(av: dict[str, Any]) -> bool:
-    return bool(av.get("site_items_with_diff") or av.get("mg_months"))
+    return bool(av.get("site_items_with_diff") or av.get("mg_months") or av.get("mon_months"))
 
 
-def build(db: Any, start: date, end: date, *, range_label: str, section: str | None = None) -> PeriodConsumptionResult:
+def build(db: Any, start: date, end: date, *, range_label: str, section: str | None = None,
+          user: dict | None = None, basis_note: str = "") -> PeriodConsumptionResult:
     if section not in (None, "", "slab", "bloom", "billet"):
         section = None
     res = PeriodConsumptionResult(start=start, end=end, range_label=range_label, section=section or None)
@@ -325,7 +408,11 @@ def build(db: Any, start: date, end: date, *, range_label: str, section: str | N
     res.mg_rows, res.mg_counts, res.mg_months = _mg_rows(db, full, res.section)
     if res.mg_months:
         res.mg_missing = [ym for ym in full if ym not in set(res.mg_months)]
-    if not res.site_rows and not res.mg_rows and not res.mg_counts:
+    res.basis_note = basis_note
+    res.mon_rows, res.mon_months = _monthly_rows(db, full, res.section, user)
+    if res.mon_months:
+        res.mon_missing = [ym for ym in full if ym not in set(res.mon_months)]
+    if not res.site_rows and not res.mg_rows and not res.mg_counts and not res.mon_rows:
         from bot.jalali import format_date
 
         res.error = (
@@ -349,12 +436,14 @@ def generate_files(
     section: str | None = None,
     letterhead_path: Path | str | None = None,
     output_dir: Path | None = None,
+    user: dict | None = None,
+    basis_note: str = "",
 ) -> PeriodConsumptionResult:
     from config import REPORT_DIR, ensure_dirs
     from excel.simple_report import generate_simple_report_xlsx
     from pdf.generator import generate_simple_report_pdf
 
-    res = build(db, start, end, range_label=range_label, section=section)
+    res = build(db, start, end, range_label=range_label, section=section, user=user, basis_note=basis_note)
     if res.error:
         return res
     ensure_dirs()

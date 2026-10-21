@@ -1623,7 +1623,7 @@ class BotApp:
         if pending.get("start_ym"):
             self._run_month_ranged_report(
                 message, user, mode, tuple(pending["start_ym"]), tuple(pending["end_ym"]),
-                section=section or "",
+                section=section or "", basis_note=str(pending.get("basis_note") or ""),
             )
         else:
             self._run_ranged_analysis(
@@ -3467,13 +3467,25 @@ class BotApp:
                     kb.year_picker_menu(years),
                 )
                 return True
-            if preset in {"current", "3m", "ytd"}:
+            if preset in {"current", "3m", "ytd", "6m", "12m"}:
                 try:
-                    start_ym, end_ym = resolve_month_year_preset(preset)
+                    start_ym, end_ym = resolve_month_year_preset(preset if preset in {"current", "3m", "ytd"} else "3m")
                 except ValueError:
                     return False
+                note = ""
+                if mode != "user_activity":
+                    # T14b: presets = latest N months THAT HAVE DATA (not calendar months)
+                    from services import data_months as dmo
+
+                    try:
+                        got = dmo.resolve_preset_by_data(preset, dmo.report_months(self.db, user, mode))
+                    except Exception:  # noqa: BLE001
+                        logger.exception("data-month preset failed")
+                        got = None
+                    if got:
+                        start_ym, end_ym, _used, note = got
                 self._clear_analysis_pending(uid)
-                self._run_month_ranged_report(message, user, mode, start_ym, end_ym)
+                self._run_month_ranged_report(message, user, mode, start_ym, end_ym, basis_note=note)
                 return True
             return False
 
@@ -3739,6 +3751,7 @@ class BotApp:
         end_ym: tuple[int, int],
         *,
         section: str | None = None,
+        basis_note: str = "",
     ) -> None:
         """Dispatch report generation for an inclusive Jalali month/year range.
 
@@ -3746,9 +3759,12 @@ class BotApp:
         period); "" = همه بخش‌ها.
         """
         if mode in self._SECTION_STEP_MODES and section is None:
-            self._ask_section_step(message, user, mode, start_ym=list(start_ym), end_ym=list(end_ym))
+            self._ask_section_step(message, user, mode, start_ym=list(start_ym), end_ym=list(end_ym),
+                                   basis_note=basis_note)
             return
         range_label = format_month_year_range(start_ym, end_ym)
+        if basis_note and mode != "period":
+            range_label = f"{range_label} ({basis_note})"
         start_g, end_g = month_year_to_gregorian_bounds(start_ym, end_ym)
 
         if mode == "monthly_summary":
@@ -3765,7 +3781,8 @@ class BotApp:
 
         if mode == "period":
             self._run_ranged_analysis(
-                message, user, mode, start_g, end_g, range_label=range_label, section=section or ""
+                message, user, mode, start_g, end_g, range_label=range_label, section=section or "",
+                basis_note=basis_note,
             )
             return
 
@@ -3966,6 +3983,7 @@ class BotApp:
         *,
         range_label: str | None = None,
         section: str | None = None,
+        basis_note: str = "",
     ) -> None:
         """Day-level / month-level «📅 گزارش مصرف بازه‌ای» (rebuilt from current data)."""
         from services import period_consumption as pc
@@ -3982,7 +4000,7 @@ class BotApp:
         try:
             res = pc.generate_files(
                 self.db, start, end, range_label=label, section=section or None,
-                letterhead_path=self._letterhead_path(),
+                letterhead_path=self._letterhead_path(), user=user, basis_note=basis_note,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("period consumption failed")

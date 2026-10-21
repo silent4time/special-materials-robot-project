@@ -131,13 +131,21 @@ def filter_by_date_range(
 def _jalali_ym_from_row(date_val: object, month_val: object) -> tuple[int, int] | None:
     """Best-effort Jalali (year, month) from plant monthly date/month cells."""
     month_i = None
-    if month_val is not None and str(month_val).strip() not in {"", "nan", "None"}:
-        try:
-            month_i = int(float(str(month_val).strip()))
-        except (TypeError, ValueError):
-            month_i = None
     year_i = None
-    if date_val is not None and str(date_val).strip() not in {"", "nan", "None"}:
+    mv = str(month_val).strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")) \
+        if month_val is not None else ""
+    if mv not in {"", "nan", "None"}:
+        import re as _re
+
+        ym = _re.fullmatch(r"(1[2-4]\d\d)\s*[-/._]\s*(\d{1,2})(?:\s*[-/._]\s*\d{1,2})?", mv)
+        if ym:  # «1405-04» / «1405/04» (sample monthly format, no date column)
+            year_i, month_i = int(ym.group(1)), int(ym.group(2))
+        else:
+            try:
+                month_i = int(float(mv))
+            except (TypeError, ValueError):
+                month_i = None
+    if year_i is None and date_val is not None and str(date_val).strip() not in {"", "nan", "None"}:
         digits = "".join(ch for ch in str(date_val) if ch.isdigit())
         if len(digits) >= 4:
             try:
