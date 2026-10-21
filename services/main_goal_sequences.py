@@ -296,6 +296,31 @@ def _next_month(y: int, m: int) -> tuple[int, int]:
     return (y + 1, 1) if m == 12 else (y, m + 1)
 
 
+STALE_OPEN_MONTHS = 2
+
+
+def drop_stale_open_rows(rows: list) -> tuple[list, list]:
+    """Drop rows with no last-cast end whose start month is > STALE_OPEN_MONTHS before the
+    file's latest month (open/abandoned records, e.g. 1402–1404 rows in a Mehr 1405 export)."""
+    yms = [row_period(r) for r in rows if row_period(r)]
+    if not yms:
+        return list(rows), []
+    ly, lm = max(yms)
+    last_ord = ly * 12 + lm
+    keep, stale = [], []
+    for r in rows:
+        ym = row_period(r)
+        end = str(r.last_cast_end or "").strip()
+        open_row = not end or end == str(r.first_cast_start or "").strip() or (
+            (r.sequence_minutes or 0) > STALE_OPEN_MONTHS * 30 * 1440
+        )
+        if ym and open_row and last_ord - (ym[0] * 12 + ym[1]) > STALE_OPEN_MONTHS:
+            stale.append(r)
+        else:
+            keep.append(r)
+    return keep, stale
+
+
 def split_rows_by_period_section(
     parsed: SequenceParseResult, section: str | None = None
 ) -> tuple[dict[tuple[int, int, str], list[SequenceRow]], list[str]]:
@@ -317,8 +342,17 @@ def split_rows_by_period_section(
             f"(بخش انتخابی «{mg.SECTION_LABEL_FA.get(section, section)}» فقط برای فایل تک‌بخشی اعمال می‌شود)."
         )
     fallback = (parsed.year, parsed.month) if parsed.year and parsed.month else None
+    rows_in, stale = drop_stale_open_rows(parsed.rows)
+    if stale:
+        span = sorted({row_period(r) for r in stale if row_period(r)})
+        notes.append(
+            f"{len(stale)} ردیف باز/رهاشده (بدون زمان پایان ریخته‌گری، شروع بیش از {STALE_OPEN_MONTHS} ماه "
+            f"پیش از آخرین ماه فایل"
+            + (f"؛ {format_month_year(*span[0], named=True)} تا {format_month_year(*span[-1], named=True)}" if span else "")
+            + ") کنار گذاشته شد و در هیچ محاسبه‌ای منظور نمی‌شود."
+        )
     groups: dict[tuple[int, int, str], list[SequenceRow]] = {}
-    for r in parsed.rows:
+    for r in rows_in:
         ym = row_period(r) or fallback
         sec = override or r.section
         if not ym or not sec:

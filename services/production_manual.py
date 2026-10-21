@@ -211,3 +211,14 @@ def delete(db: Any, year: int, month: int) -> bool:
 def confirmation_fa(data: ManualProduction, replaced: bool) -> str:
     verb = "جایگزین شد" if replaced else "ثبت شد"
     return f"✅ آمار تولید {ym_text(data.year, data.month)} {verb}.\n\n" + data.summary_fa()
+
+
+def heat_note_fa(db: Any, data: "ManualProduction") -> str:
+    """Cross-check heats vs the sequence log of the same month (alert when > 2%)."""
+    hc = mgp.heat_check(db, data.key)
+    if not hc:
+        return ""
+    w = mgp.heat_alert_fa(db, data.key)
+    if w:
+        return "\n⚠ " + w
+    return f"\nℹ ذوب لاگ سکوئنس همین ماه: {hc['log']:,.0f} (اختلاف {hc['pct']:+.1f}٪، در محدودهٔ مجاز ۲٪)."

@@ -605,21 +605,66 @@ def load_history_from_db(db: Any, *, include_incomplete: bool = True) -> list[mg
             )
         )
     out.sort(key=lambda m: m.sort_key or "")
+    try:  # partial month (data up to day X) → X days + «مهر ۱۴۰۵ (۲۹ روز، تا ۰۷/۲۹)»
+        from services import period_select as ps
+
+        latest = ps.latest_data_date(db)
+        for r in out:
+            if r.kind == "month" and r.year and r.month:
+                cov, upto = ps.coverage(int(r.year), int(r.month), latest)
+                r.days = cov  # type: ignore[attr-defined]
+                if upto:
+                    r.label = ps.month_label(int(r.year), int(r.month), latest)
+    except Exception:  # noqa: BLE001
+        pass
     return out
 
 
 # ---------------------------------------------------------------- range selection
 @dataclass
 class RangeSpec:
-    kind: str  # last_n | custom
+    kind: str  # last_n | custom (month range) | days | months
     n_months: int | None = None
     start: tuple[int, int] | None = None  # (year, month)
     end: tuple[int, int] | None = None
     label_fa: str = ""
+    n_days: int | None = None
+    date_from: tuple[int, int, int] | None = None  # (y, m, d) for kind=days
+    date_to: tuple[int, int, int] | None = None
+    months: list[tuple[int, int]] | None = None  # kind=months
+    basis: dict | None = None  # filled by filter_months_by_range
 
 
 def range_last_n(n: int) -> RangeSpec:
-    return RangeSpec(kind="last_n", n_months=n, label_fa=f"{n} ماه اخیر")
+    from services.period_select import PRESET_DAYS, fa
+
+    days = PRESET_DAYS.get(int(n), int(n) * 30)
+    lab = {3: "۳ ماه اخیر", 6: "۶ ماه اخیر", 12: "یک سال اخیر"}.get(int(n), f"{fa(n)} ماه اخیر")
+    return RangeSpec(kind="last_n", n_months=n, n_days=days, label_fa=f"{lab} ({fa(days)} روز)")
+
+
+def range_days(n_days: int) -> RangeSpec:
+    from services.period_select import fa
+
+    return RangeSpec(kind="days", n_days=int(n_days), label_fa=f"{fa(n_days)} روز اخیر")
+
+
+def range_dates(a: tuple[int, int, int], b: tuple[int, int, int]) -> RangeSpec:
+    from services.period_select import fmt_date, jd
+
+    if b < a:
+        a, b = b, a
+    return RangeSpec(
+        kind="days", date_from=a, date_to=b, label_fa=f"از {fmt_date(jd(*a))} تا {fmt_date(jd(*b))}"
+    )
+
+
+def range_months(months: list[tuple[int, int]]) -> RangeSpec:
+    ms = sorted(set((int(y), int(m)) for y, m in months))
+    return RangeSpec(
+        kind="months", months=ms, start=ms[0], end=ms[-1],
+        label_fa="ماه‌های انتخابی: " + "، ".join(format_month_year(y, m, named=True) for y, m in ms),
+    )
 
 
 def range_custom(start: tuple[int, int], end: tuple[int, int]) -> RangeSpec:
@@ -631,11 +676,56 @@ def range_custom(start: tuple[int, int], end: tuple[int, int]) -> RangeSpec:
     )
 
 
+def spec_to_dict(spec: RangeSpec) -> dict:
+    return {k: getattr(spec, k) for k in (
+        "kind", "n_months", "start", "end", "label_fa", "n_days", "date_from", "date_to", "months")}
+
+
+def spec_from_dict(raw: dict) -> RangeSpec:
+    k = raw.get("kind")
+    if k == "custom" and raw.get("start") and raw.get("end"):
+        return range_custom(tuple(raw["start"]), tuple(raw["end"]))
+    if k == "months" and raw.get("months"):
+        return range_months([tuple(x) for x in raw["months"]])
+    if k == "days" and raw.get("date_from") and raw.get("date_to"):
+        return range_dates(tuple(raw["date_from"]), tuple(raw["date_to"]))
+    if k == "days" and raw.get("n_days"):
+        return range_days(int(raw["n_days"]))
+    return range_last_n(int(raw.get("n_months") or 3))
+
+
+def future_error_fa(spec: RangeSpec) -> str | None:
+    """Historical reports cannot include future months/dates (forecast is not restricted)."""
+    from services.period_select import fmt_date, is_future_month, jd, today
+
+    t = today()
+    yms: list[tuple[int, int]] = list(spec.months or [])
+    if spec.kind == "custom" and spec.start and spec.end:
+        yms += [spec.start, spec.end]
+    bad = [ym for ym in yms if is_future_month(*ym, t)]
+    if bad:
+        return "🔒 ماه آینده در گزارش سابقه قابل انتخاب نیست: " + "، ".join(
+            format_month_year(y, m, named=True) for y, m in sorted(set(bad))
+        )
+    if spec.date_to and jd(*spec.date_to) > t:
+        return f"🔒 تاریخ آینده قابل انتخاب نیست (امروز {fmt_date(t)})."
+    return None
+
+
 def parse_range_choice(text: str) -> RangeSpec | None:
-    """«۳ ماهه» / «۶ ماهه» / «یکساله» / «از مهر ۱۴۰۵ تا آذر ۱۴۰۵»."""
+    """«۳ ماهه» / «۶ ماهه» / «یکساله» / «۹۰ روز» / «1405/05/01 تا 1405/07/29» / «از مهر ۱۴۰۵ تا آذر ۱۴۰۵»."""
     s = mg.normalize_text(text)
     if not s:
         return None
+    en = s.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+    dates = re.findall(r"(\d{4})/(\d{1,2})/(\d{1,2})", en)
+    if len(dates) >= 2:
+        return range_dates(tuple(map(int, dates[0])), tuple(map(int, dates[1])))
+    m = re.fullmatch(r"(\d{1,4})\s*روز(\s*اخیر)?|(\d{1,4})", en.strip())
+    if m:
+        n = int(m.group(1) or m.group(3))
+        if 1 <= n <= 3660:
+            return range_days(n)
     if re.search(r"۳\s*ماه|3\s*ماه|سه\s*ماه", s) or s in {"۳ ماهه", "3 ماهه"}:
         return range_last_n(3)
     if re.search(r"۶\s*ماه|6\s*ماه|شش\s*ماه", s) or s in {"۶ ماهه", "6 ماهه"}:
@@ -647,55 +737,118 @@ def parse_range_choice(text: str) -> RangeSpec | None:
     rng = parse_month_year_range(s)
     if rng:
         return range_custom(rng[0], rng[1])
-    # single month → custom one-month window
     tok = parse_month_year_token(s)
     if tok:
         return range_custom(tok, tok)
     return None
 
 
-def filter_months_by_range(
-    months: list[mgh.MonthRecord], spec: RangeSpec
-) -> tuple[list[mgh.MonthRecord], list[str]]:
-    """Return (selected months, warning lines about gaps)."""
-    dated = [m for m in months if m.kind == "month" and m.year and m.month]
-    dated.sort(key=lambda m: (int(m.year), int(m.month)))
-    warns: list[str] = []
-    if spec.kind == "last_n":
-        n = int(spec.n_months or 3)
-        # anchor = last available month (or today)
-        if dated:
-            selected = dated[-n:]
-        else:
-            selected = []
-        if len(selected) < n:
-            warns.append(
-                f"فقط {len(selected)} ماه در سابقهٔ ذخیره‌شده موجود است (درخواست: {n} ماه اخیر)."
-            )
-        return selected, warns
+def _scale_record(rec: mgh.MonthRecord, f: float) -> mgh.MonthRecord:
+    import copy
 
-    assert spec.start and spec.end
+    out = copy.deepcopy(rec)
+    if f >= 0.999999:
+        return out
+    p = out.production
+    for sec in SECTIONS:
+        attr = f"{sec}_tons"
+        if getattr(p, attr, None):
+            setattr(p, attr, float(getattr(p, attr)) * f)
+    for c in out.consumptions.values():
+        if c.tundish_count is not None:
+            c.tundish_count = float(c.tundish_count) * f
+        if c.melt_count is not None:
+            c.melt_count = float(c.melt_count) * f
+        for ml in c.materials:
+            if ml.quantity is not None:
+                ml.quantity = float(ml.quantity) * f
+    return out
+
+
+def _window_for(spec: RangeSpec, latest: Any):
+    from services import period_select as ps
+
+    if spec.kind == "last_n":
+        return ps.preset_window(latest, int(spec.n_months or 3))
+    if spec.kind == "days" and spec.n_days and not spec.date_from:
+        return ps.days_window(latest, int(spec.n_days))
+    if spec.kind == "days":
+        a, b = ps.jd(*spec.date_from), ps.jd(*spec.date_to)
+        return ps.Window(a, b, spec.label_fa)
+    if spec.kind == "months":
+        return ps.months_window(spec.months or [], latest)
     y1, m1 = spec.start
     y2, m2 = spec.end
     if (y2, m2) < (y1, m1):
         y1, m1, y2, m2 = y2, m2, y1, m1
-    selected = [
-        m for m in dated if (int(m.year), int(m.month)) >= (y1, m1) and (int(m.year), int(m.month)) <= (y2, m2)
-    ]
-    # expected months in range
-    expected = []
-    y, m = y1, m1
+    ms, y, m = [], y1, m1
     while (y, m) <= (y2, m2):
-        expected.append((y, m))
-        m += 1
-        if m > 12:
-            m = 1
-            y += 1
-    have = {(int(m.year), int(m.month)) for m in selected}
-    missing_months = [format_month_year(y, m, named=True) for y, m in expected if (y, m) not in have]
-    if missing_months:
-        warns.append("ماه‌های بدون داده در بازه: " + "، ".join(missing_months))
-    # per-month incomplete sections
+        ms.append((y, m))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    w = ps.months_window(ms, latest)
+    w.label = spec.label_fa
+    return w
+
+
+def filter_months_by_range(
+    months: list[mgh.MonthRecord], spec: RangeSpec, *, db: Any = None, latest: Any = None
+) -> tuple[list[mgh.MonthRecord], list[str]]:
+    """Return (selected months, warning lines). Day windows prorate a month by overlap/covered
+    days; a partial month (data up to day X) counts X days. Months with no data are excluded."""
+    from services import period_select as ps
+
+    if latest is None:
+        latest = ps.latest_data_date(db) if db is not None else ps.today()
+    win = _window_for(spec, latest)
+    dated = [m for m in months if m.kind == "month" and m.year and m.month]
+    dated.sort(key=lambda m: (int(m.year), int(m.month)))
+    warns: list[str] = []
+    selected: list[mgh.MonthRecord] = []
+    parts: list[str] = []
+    total_days = 0
+    pick = set(win.months or [])
+    for rec in dated:
+        y, m = int(rec.year), int(rec.month)
+        cov, _upto = ps.coverage(y, m, latest)
+        if cov <= 0:
+            continue
+        if pick:
+            if (y, m) not in pick:
+                continue
+            overlap = cov
+        else:
+            ms, me = ps.jd(y, m, 1), ps.jd(y, m, cov)
+            a, b = max(ms, win.start), min(me, win.end)
+            overlap = (b.togregorian() - a.togregorian()).days + 1 if b >= a else 0
+        if overlap <= 0:
+            continue
+        nr = _scale_record(rec, overlap / cov)
+        nr.label = ps.month_label(y, m, latest, overlap)
+        nr.days = overlap  # type: ignore[attr-defined]
+        selected.append(nr)
+        parts.append(nr.label)
+        total_days += overlap
+    # expected months (calendar) in window, up to latest data month
+    expected = []
+    if pick:
+        expected = sorted(pick)
+    else:
+        y, m = win.start.year, win.start.month
+        while (y, m) <= (win.end.year, win.end.month):
+            expected.append((y, m))
+            y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    have = {(int(r.year), int(r.month)) for r in selected}
+    missing = [format_month_year(y, m, named=True) for y, m in expected if (y, m) not in have]
+    if missing:
+        warns.append("ماه‌های بدون داده در بازه (کنار گذاشته شد، صفر منظور نشد): " + "، ".join(missing))
+    spec.basis = {
+        "window": win.label,
+        "start": ps.fmt_date(win.start),
+        "end": ps.fmt_date(win.end),
+        "days": total_days,
+        "requested_days": win.days if (spec.kind == "last_n" or (spec.kind == "days" and not spec.date_from)) else None,
+        "parts": parts,
+    }
     for mrec in selected:
         miss = []
         if mrec.production.total_tons <= 0:
@@ -705,10 +858,57 @@ def filter_months_by_range(
                 miss.append("تولید")
         for sec in SECTIONS:
             if sec not in mrec.consumptions:
+                if mrec.production.total_tons > 0 and mrec.tons(sec) <= 0:
+                    continue  # section not produced that month (e.g. bloom 0) — not missing
                 miss.append(mg.SECTION_LABEL_FA[sec])
         if miss:
             warns.append(f"{mrec.label}: ناقص ({'، '.join(miss)})")
+    if db is not None:
+        for y, m in sorted(have):
+            w = heat_alert_fa(db, f"m:{y:04d}-{m:02d}")
+            if w:
+                warns.append(w)
     return selected, warns
+
+
+# ---------------------------------------------------------------- heat cross-check
+HEAT_ALERT_PCT = 2.0
+HEAT_ALERT_WHY_FA = (
+    "لاگ سکوئنس ذوب را هنگام خروج از تاندیش می‌شمارد و آمار تولید هنگام ثبت محصول؛ "
+    "کمی بیشتر بودن عدد لاگ طبیعی است."
+)
+
+
+def heat_check(db: Any, period_key: str) -> dict | None:
+    """{log, prod, pct} when both the sequence log and production stats have heats."""
+    prod = usable_production(db, period_key)
+    pm = float((prod or {}).get("melt_count") or 0)
+    lm = 0.0
+    for c in db.list_main_goal_consumption():
+        if c.get("period_key") == period_key:
+            lm += float(c.get("melt_count") or 0)
+    if pm <= 0 or lm <= 0:
+        return None
+    return {"log": lm, "prod": pm, "pct": (lm - pm) / pm * 100.0, "alert": abs(lm - pm) / pm * 100.0 > HEAT_ALERT_PCT}
+
+
+def heat_alert_fa(db: Any, period_key: str) -> str | None:
+    hc = heat_check(db, period_key)
+    if not hc or not hc["alert"]:
+        return None
+    from services.period_select import fa
+
+    lab = period_key[2:].replace("-", "/") if period_key.startswith("m:") else period_key
+    try:
+        y, m = map(int, period_key[2:].split("-"))
+        lab = format_month_year(y, m, named=True)
+    except Exception:  # noqa: BLE001
+        pass
+    lg, pr, pc = fa(f"{hc['log']:,.0f}"), fa(f"{hc['prod']:,.0f}"), fa(f"{hc['pct']:+.1f}")
+    return (
+        f"اختلاف ذوب {lab}: لاگ سکوئنس {lg} در برابر آمار تولید {pr} ({pc}٪، بیش از ۲٪). "
+        f"{HEAT_ALERT_WHY_FA} اختلاف بیش از ۲٪ را بررسی کنید."
+    )
 
 
 # ---------------------------------------------------------------- range report
@@ -741,8 +941,14 @@ def scenario_range_report(
                 "تن_بر_تاندیش": mgh._r(sm.tons_per_tundish),
                 "ذوب_بر_تاندیش": mgh._r(sm.heats_per_tundish),
                 "میانگین_تناژ_ماهانه": mgh._r(sm.avg_monthly_tons, 1),
+                "تناژ_روزانه": mgh._r(sm.total_tons / _section_days(model, sec)[0], 1)
+                if _section_days(model, sec)[0] else "—",
+                "ذوب_روزانه": mgh._r(sm.total_melts / _section_days(model, sec)[1], 2)
+                if _section_days(model, sec)[1] and sm.total_melts else "—",
             }
         )
+    all_days = sum(int(getattr(m, "days", 0) or 0) for m in model.months)
+    ton_days = sum(int(getattr(m, "days", 0) or 0) for m in model.months if m.production.total_tons > 0)
     total = sum(tons_by_sec.values())
     plan_rows.append(
         {
@@ -753,6 +959,9 @@ def scenario_range_report(
             "تن_بر_تاندیش": "—",
             "ذوب_بر_تاندیش": "—",
             "میانگین_تناژ_ماهانه": mgh._r(sum(model.sections[s].avg_monthly_tons for s in SECTIONS), 1),
+            "تناژ_روزانه": mgh._r(sum(tons_by_sec.values()) / ton_days, 1) if ton_days else "—",
+            "ذوب_روزانه": mgh._r(sum(model.sections[s].total_melts for s in SECTIONS) / all_days, 2)
+            if all_days else "—",
         }
     )
     sections = [
@@ -761,6 +970,7 @@ def scenario_range_report(
             "columns": [
                 "بخش", "تناژ_بازه", "تاندیش_بازه", "ذوب_بازه",
                 "تن_بر_تاندیش", "ذوب_بر_تاندیش", "میانگین_تناژ_ماهانه",
+                "تناژ_روزانه", "ذوب_روزانه",
             ],
             "rows": plan_rows,
         },
@@ -780,13 +990,14 @@ def scenario_range_report(
     lines = [
         f"📊 گزارش هدف اصلی — {spec.label_fa}",
         _actual_basis_fa(model, spec),
-        f"جمع تناژ: {total:,.0f} تن",
+        f"جمع تناژ: {total:,.0f} تن"
+        + (f" | {total / ton_days:,.0f} تن در روز ({ton_days} روز دارای آمار تولید)" if ton_days else ""),
     ]
     for sec in SECTIONS:
         sm = model.sections[sec]
         lines.append(
             f"• {mg.SECTION_LABEL_FA[sec]}: {sm.total_tons:,.0f} تن، "
-            f"تاندیش {sm.total_tundish:g}" if sm.total_tundish else
+            f"تاندیش {round(sm.total_tundish, 1):g}" if sm.total_tundish else
             f"• {mg.SECTION_LABEL_FA[sec]}: {sm.total_tons:,.0f} تن، تاندیش —"
         )
     lines += [f"⚠ {w}" for w in warns]
@@ -799,14 +1010,44 @@ def scenario_range_report(
         sections=sections,
         summary="\n".join(lines),
         warnings=warns,
-        params={"range_kind": spec.kind, "n_months": spec.n_months, "start": spec.start, "end": spec.end},
+        params={"range_kind": spec.kind, "n_months": spec.n_months, "start": spec.start, "end": spec.end,
+                "n_days": spec.n_days, "date_from": spec.date_from, "date_to": spec.date_to,
+                "months": spec.months, "basis": spec.basis},
         total_tons=total,
     )
 
 
+def _section_days(model: Any, sec: str) -> tuple[int, int]:
+    """(days with tonnage, days with sequence data) for per-day rates (actual covered days)."""
+    td = hd = 0
+    for m in model.months:
+        d = int(getattr(m, "days", 0) or 0)
+        if not d:
+            continue
+        if m.tons(sec) > 0:
+            td += d
+        if sec in m.consumptions and (m.consumptions[sec].melt_count or m.consumptions[sec].tundish_count):
+            hd += d
+    return td, hd
+
+
 def _actual_basis_fa(model: Any, spec: Any) -> str:
-    """T14: «مبنا: ۳ ماه تیر تا شهریور ۱۴۰۵ — درخواست: ۱۲ ماه اخیر» (stored months only)."""
+    """«مبنا: ۸۸ روز واقعی (… ) — درخواست: ۳ ماه اخیر (۹۰ روز)» or legacy month basis."""
     from analytics.tundish import basis_label_fa
+
+    b = getattr(spec, "basis", None)
+    if b:
+        from services.period_select import fa
+
+        if not b.get("parts"):
+            return f"مبنا: بدون دادهٔ ثبت‌شده — درخواست: {spec.label_fa}"
+        req = f"درخواست: {spec.label_fa}"
+        if b.get("requested_days"):
+            req += f" ({b['start']} تا {b['end']})"
+        return (
+            f"مبنا: {fa(b['days'])} روز دارای داده — " + "، ".join(b["parts"]) + f" — {req}؛ "
+            "ماه‌های بدون داده کنار گذاشته شد (صفر منظور نشد)"
+        )
 
     yms = []
     for m in model.months:
@@ -825,7 +1066,7 @@ def build_range_report(
     require_complete: bool = False,
 ) -> tuple[mgh.HistoryModel, mgh.ScenarioResult, list[str]]:
     months = load_history_from_db(db, include_incomplete=not require_complete)
-    selected, warns = filter_months_by_range(months, spec)
+    selected, warns = filter_months_by_range(months, spec, db=db)
     model = mgh.build_history_model(selected, inventory)
     result = scenario_range_report(model, spec, warnings=warns)
     return model, result, warns
@@ -876,13 +1117,17 @@ def store_sequences_from_excel(
         )
     for pk in touched:
         sync_month_aggregate(db, pk, user=user, source=source)
+    for pk in touched:
+        w = heat_alert_fa(db, pk)
+        if w:
+            split_notes = [*split_notes, "⚠ " + w]
     last_key = touched[-1]
     last_label = next(format_month_year(y, m, named=True) for (y, m, _s) in reversed(list(groups)))
     head = (
         "✅ سکوئنس‌های تاندیش ذخیره شد"
         + (f" ({len(groups)} ماه×بخش):" if len(groups) > 1 else ":")
     )
-    summary = "\n".join([head, *lines, *(f"ℹ {t}" for t in split_notes)])
+    summary = "\n".join([head, *lines, *(t if t.startswith("⚠") else f"ℹ {t}" for t in split_notes)])
     return InputStoreOutcome(
         ok=True,
         period_key=last_key,
