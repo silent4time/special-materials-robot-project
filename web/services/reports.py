@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from services.unit_source import main_source_maps
 from analytics.tundish import (
     rates_basis_suffix,
     critical_materials,
@@ -314,7 +315,7 @@ def generate_monthly_summary_files(
         from services.file_names import fa_stem, unique_dir
 
         excel_path = unique_dir(REPORT_DIR, "web_monthly_summary") / f"{fa_stem('خلاصه مصرفی ماهیانه')}.xlsx"
-        data, excel_path = build_monthly_summary(source, excel_out=excel_path)
+        data, excel_path = build_monthly_summary(source, excel_out=excel_path, unit_maps=main_source_maps(db))
         sections = summary_sections_for_pdf(data)
         path = Path(excel_path).with_suffix(".pdf")
         generate_monthly_summary_pdf(
