@@ -202,6 +202,89 @@ def filter_monthly_by_gregorian_range(
     return filter_by_date_range(work, start, end)
 
 
+def jalali_month_days(year: int, month: int) -> int:
+    """Calendar days of a Jalali month (31 ×6, 30 ×5, اسفند 29/30)."""
+    if month <= 6:
+        return 31
+    if month <= 11:
+        return 30
+    try:
+        import jdatetime
+
+        return 30 if jdatetime.date(int(year), 1, 1).isleap() else 29
+    except Exception:  # noqa: BLE001
+        return 29
+
+
+def signed_quantity(df: pd.DataFrame) -> pd.Series:
+    """Quantity with «برگشتی» (returns to warehouse) negative; everything else positive."""
+    q = _qty(df["quantity"]) if "quantity" in df.columns else pd.Series(0.0, index=df.index)
+    sign = pd.Series(1.0, index=df.index)
+    for col in ("request_return", "status"):
+        if col in df.columns:
+            is_ret = df[col].astype(str).str.strip().isin(["برگشتی", "برگشت"])
+            sign = sign.where(~is_ret, -1.0)
+    return q.abs() * sign
+
+
+def months_present(df: pd.DataFrame | None) -> list[tuple[int, int]]:
+    """Jalali (year, month) that actually have uploaded rows (any item). Months
+    without data are NOT zero months — they are simply absent from the basis."""
+    if df is None or df.empty:
+        return []
+    has_date, has_month = "date" in df.columns, "month" in df.columns
+    if not (has_date or has_month):
+        return []
+    out = set()
+    for d, m in zip(df["date"] if has_date else [None] * len(df), df["month"] if has_month else [None] * len(df)):
+        ym = _jalali_ym_from_row(d, m)
+        if ym:
+            out.add(ym)
+    return sorted(out)
+
+
+def basis_label_fa(months: list[tuple[int, int]], requested: str | None = None) -> str:
+    """«مبنا: ۳ ماه تیر تا شهریور ۱۴۰۵» (gaps listed; requested window noted when larger)."""
+    from bot.jalali import PERSIAN_MONTH_NAMES
+
+    def fa(n: object) -> str:
+        return str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+
+    if not months:
+        return "مبنا: هیچ ماهی دادهٔ مصرف ندارد"
+    ms = sorted(months)
+    ords = [y * 12 + m for y, m in ms]
+    contiguous = ords == list(range(ords[0], ords[0] + len(ords)))
+    name = lambda ym: f"{PERSIAN_MONTH_NAMES[ym[1]]}"  # noqa: E731
+    if len(ms) == 1:
+        span = f"{name(ms[0])} {fa(ms[0][0])}"
+    elif contiguous:
+        a, b = ms[0], ms[-1]
+        span = (f"{name(a)} تا {name(b)} {fa(b[0])}" if a[0] == b[0]
+                else f"{name(a)} {fa(a[0])} تا {name(b)} {fa(b[0])}")
+    else:
+        span = "، ".join(f"{name(ym)} {fa(ym[0])}" for ym in ms)
+    days = sum(jalali_month_days(y, m) for y, m in ms)
+    txt = f"مبنا: {fa(len(ms))} ماه {span} ({fa(days)} روز؛ فقط ماه‌های دارای داده)"
+    if requested:
+        txt += f" — درخواست: {requested}"
+    return txt
+
+
+def rates_basis_label(rates_df: pd.DataFrame | None, requested: str | None = None) -> str:
+    """Basis label stored on a daily_rates() result (monthly source)."""
+    months = list((rates_df.attrs or {}).get("basis_months") or []) if rates_df is not None else []
+    if not months:
+        return ""
+    return basis_label_fa(months, requested)
+
+
+def rates_basis_suffix(rates_df: pd.DataFrame | None, requested: str | None = None) -> str:
+    """«؛ مبنا: …» to append to a subtitle, or "" when the rates have no monthly basis."""
+    lab = rates_basis_label(rates_df, requested)
+    return f"؛ {lab}" if lab else ""
+
+
 def daily_rates(
     tank_df: pd.DataFrame | None,
     monthly_df: pd.DataFrame | None = None,
@@ -212,20 +295,30 @@ def daily_rates(
     """
     Average daily consumption per material (and tundish when present).
 
-    Primary source: tank/tundish consumption (quantity / distinct calendar days in span).
-    Optional monthly: quantity / 30 added as supplemental rows when material absent from tank.
+    Tank source: net quantity ÷ days of the DATASET's date coverage in the window
+    (a day in the file where an item has no row is a real zero for that item).
+    Monthly source (T14): net quantity (برگشتی subtracted) ÷ calendar days of the
+    Jalali months that ACTUALLY have uploaded data inside the window. Months with
+    no uploaded file are excluded (never counted as zero); a month that has data
+    but not this item is a real zero for the item. ``attrs['basis_months']``
+    lists the months used (see ``rates_basis_label``).
     """
     rows: list[dict[str, Any]] = []
+    basis_months: list[tuple[int, int]] = []
 
     if tank_df is not None and not tank_df.empty and "quantity" in tank_df.columns:
         work = tank_df.copy()
         if start is not None or end is not None:
             work = filter_by_date_range(work, start, end)
         if not work.empty and "material_name" in work.columns:
-            work["_qty"] = _qty(work["quantity"])
+            work["_qty"] = signed_quantity(work)
             has_date = "date" in work.columns
+            ds_span = 1
             if has_date:
                 work["_d"] = _to_dates(work["date"])
+                if work["_d"].notna().any():
+                    dmin, dmax = work["_d"].min(), work["_d"].max()
+                    ds_span = max(1, (dmax - dmin).days + 1)
             group_cols = ["material_name"]
             if "tundish_type" in work.columns:
                 group_cols.append("tundish_type")
@@ -239,12 +332,7 @@ def daily_rates(
                     keys = (keys,)
                 payload = dict(zip(group_cols, keys))
                 total = float(g["_qty"].sum())
-                if has_date and g["_d"].notna().any():
-                    dmin = g["_d"].min()
-                    dmax = g["_d"].max()
-                    span = max(1, (dmax - dmin).days + 1) if dmin and dmax else 1
-                else:
-                    span = 1
+                span = ds_span
                 payload.update(
                     {
                         "total_qty": total,
@@ -259,14 +347,11 @@ def daily_rates(
         work = monthly_df.copy()
         if start is not None or end is not None:
             work = filter_monthly_by_gregorian_range(work, start, end)
-        if "material_name" not in work.columns:
-            pass
-        else:
-            work["_qty"] = _qty(work["quantity"])
-            existing = {
-                (r.get("material_name"), r.get("tundish_type"), r.get("tundish_id"), r.get("unit"))
-                for r in rows
-            }
+        if "material_name" in work.columns and not work.empty:
+            work["_qty"] = signed_quantity(work)
+            basis_months = months_present(work)
+            days = sum(jalali_month_days(y, m) for y, m in basis_months) or 30
+            tank_materials = {r.get("material_name") for r in rows}
             group_cols = ["material_name"]
             if "tundish_type" in work.columns:
                 group_cols.append("tundish_type")
@@ -276,22 +361,15 @@ def daily_rates(
                 if not isinstance(keys, tuple):
                     keys = (keys,)
                 payload = dict(zip(group_cols, keys))
-                key = (payload.get("material_name"), payload.get("tundish_type"), None, payload.get("unit"))
-                if key in existing or any(
-                    r.get("material_name") == payload.get("material_name")
-                    and r.get("tundish_id") is None
-                    for r in rows
-                ):
-                    # prefer tank-derived rates for same material without tundish split
-                    if any(r.get("material_name") == payload.get("material_name") for r in rows):
-                        continue
+                if payload.get("material_name") in tank_materials:
+                    continue  # prefer tank-derived rates for the same material
                 total = float(g["_qty"].sum())
                 payload.update(
                     {
                         "tundish_id": None,
                         "total_qty": total,
-                        "days_span": 30,
-                        "avg_daily": total / 30.0,
+                        "days_span": int(days),
+                        "avg_daily": total / float(days),
                         "source": "monthly",
                     }
                 )
@@ -314,9 +392,11 @@ def daily_rates(
     for col in ("material_name", "tundish_type", "tundish_id", "unit", "source"):
         if col not in out.columns:
             out[col] = None
-    return out.sort_values(
+    out = out.sort_values(
         by=["material_name", "tundish_type", "tundish_id"], kind="stable"
     ).reset_index(drop=True)
+    out.attrs["basis_months"] = basis_months
+    return out
 
 
 def period_consumption(

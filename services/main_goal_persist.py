@@ -877,12 +877,13 @@ def scenario_range_report(
     ]
     note_lines = mgh._base_notes(model) + [
         f"بازه گزارش: {spec.label_fa}",
+        _actual_basis_fa(model, spec),
         "نرخ‌ها از تجمیع ماه‌های همین بازه در پایگاه داده محاسبه شده‌اند.",
     ] + warns
     sections.append(mgh._notes_section(note_lines))
     lines = [
         f"📊 گزارش هدف اصلی — {spec.label_fa}",
-        f"ماه‌های استفاده‌شده: {model.n_months}",
+        _actual_basis_fa(model, spec),
         f"جمع تناژ: {total:,.0f} تن",
     ]
     for sec in SECTIONS:
@@ -898,13 +899,26 @@ def scenario_range_report(
         error_fa=None,
         kind="range",
         title=f"{mg.TITLE_FA} — گزارش بازه",
-        subtitle=f"{spec.label_fa} | {model.n_months} ماه از سابقهٔ ذخیره‌شده",
+        subtitle=f"{_actual_basis_fa(model, spec)} | {model.n_months} ماه از سابقهٔ ذخیره‌شده",
         sections=sections,
         summary="\n".join(lines),
         warnings=warns,
         params={"range_kind": spec.kind, "n_months": spec.n_months, "start": spec.start, "end": spec.end},
         total_tons=total,
     )
+
+
+def _actual_basis_fa(model: Any, spec: Any) -> str:
+    """T14: «مبنا: ۳ ماه تیر تا شهریور ۱۴۰۵ — درخواست: ۱۲ ماه اخیر» (stored months only)."""
+    from analytics.tundish import basis_label_fa
+
+    yms = []
+    for m in model.months:
+        ym = (getattr(m, "year", None), getattr(m, "month", None))
+        if ym[0] and ym[1]:
+            yms.append((int(ym[0]), int(ym[1])))
+    lab = basis_label_fa(yms, spec.label_fa).replace("روز؛ فقط ماه‌های دارای داده", "روز؛ فقط ماه‌های ثبت‌شده")
+    return lab
 
 
 def build_range_report(

@@ -136,6 +136,25 @@ def critical_basis(db: Database, report_date: Any = None) -> TundishMonthCounts 
             r = manual[(yy, mm)]
             used.append((yy, mm, int(r["count_billet"]), int(r["count_bloom"]),
                          int(r["count_slab"]), SOURCE_MANUAL))
+    if not used:
+        # T14: no data in the 3-month window → latest (up to 3) months that DO have
+        # data before it (the header names the months actually used).
+        win = previous_complete_months(y, m)
+        idx = win[0][0] * 12 + win[0][1] - 1 - 1
+        for _ in range(36):
+            if len(used) >= 3:
+                break
+            yy, mm = idx // 12, idx % 12 + 1
+            idx -= 1
+            seq = db.sequence_tundish_counts(yy, mm)
+            if seq:
+                used.append((yy, mm, seq.get("billet", 0), seq.get("bloom", 0), seq.get("slab", 0),
+                             SOURCE_SEQUENCE_LOG))
+            elif (yy, mm) in manual:
+                r = manual[(yy, mm)]
+                used.append((yy, mm, int(r["count_billet"]), int(r["count_bloom"]),
+                             int(r["count_slab"]), SOURCE_MANUAL))
+        used.sort(key=lambda t: (t[0], t[1]))
     return basis_from_months(used, report_date=f"{y}/{m:02d}/{d:02d}", year=y, month=m)
 
 

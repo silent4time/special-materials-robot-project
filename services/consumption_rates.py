@@ -1,8 +1,9 @@
 """Consumption-rate window shared by «🛒 درخواست مواد» (bot + web).
 
 Rate window is independent of the coverage horizon (cleanup item 2): the rate is
-the average DAILY consumption over the last ``n`` COMPLETE Jalali months (monthly
-consumption total ÷ calendar days of the window); the coverage days only multiply
+the average DAILY consumption over the last ``n`` COMPLETE Jalali months (net monthly
+consumption ÷ days of the months in that window that actually have data — months
+without an uploaded file are excluded, never counted as zero); the coverage days only multiply
 that rate. Materials without monthly rows fall back to site/tank daily data.
 """
 from __future__ import annotations
@@ -13,7 +14,7 @@ from datetime import date
 import jdatetime
 import pandas as pd
 
-from analytics.tundish import daily_rates
+from analytics.tundish import basis_label_fa, daily_rates, months_present
 from bot.jalali import format_month_year_range, jalali_today, month_year_to_gregorian_bounds
 
 RATE_MONTHS = 3
@@ -53,15 +54,26 @@ def rates_last_complete_months(
     n: int = RATE_MONTHS,
     today: jdatetime.date | None = None,
 ) -> tuple[pd.DataFrame, str, RateWindow]:
-    """(rates frame like ``daily_rates``, Persian basis line, window)."""
+    """(rates frame like ``daily_rates``, Persian basis line, window).
+
+    T14: only months that ACTUALLY have uploaded monthly data count — the average
+    divides by the days of those months, never by the whole calendar window. When
+    no month of the window has data, the latest ``n`` months that do (before the
+    window end) are used instead, and the basis line says so.
+    """
     w = last_complete_months(n, today)
+    requested = f"{n} ماه کامل گذشته ({w.label})"
     parts: list[pd.DataFrame] = []
     m = daily_rates(None, monthly, start=w.start, end=w.end) if monthly is not None else pd.DataFrame()
+    fallback = False
+    if (m is None or m.empty) and monthly is not None and not monthly.empty:
+        avail = [ym for ym in months_present(monthly) if ym <= w.end_ym][-n:]
+        if avail:
+            s0, e0 = month_year_to_gregorian_bounds(avail[0], avail[-1])
+            m = daily_rates(None, monthly, start=s0, end=e0)
+            fallback = True
+    basis_months = list((m.attrs or {}).get("basis_months") or []) if m is not None else []
     if m is not None and not m.empty:
-        m = m.copy()
-        m["days_span"] = w.days
-        m["avg_daily"] = pd.to_numeric(m["total_qty"], errors="coerce").fillna(0) / float(w.days)
-        m["source"] = "monthly"
         parts.append(m)
     have = set(m["material_name"].astype(str)) if m is not None and not m.empty else set()
     t = daily_rates(tank, None, start=w.start, end=w.end) if tank is not None else pd.DataFrame()
@@ -72,12 +84,17 @@ def rates_last_complete_months(
             used_tank = True
             parts.append(t)
     out = pd.concat(parts, ignore_index=True) if parts else daily_rates(None, None)
-    basis = (
-        f"مبنای نرخ مصرف: میانگین روزانهٔ {n} ماه کامل گذشته ({w.label}، {w.days} روز) "
-        "از مصرف ماهیانه"
-        + ("؛ اقلام بدون مصرف ماهیانه از دادهٔ روزانهٔ سایت" if used_tank else "")
-        + ". روزهای پوشش فقط افق درخواست است."
-    )
-    if out.empty:
-        basis = f"در {n} ماه کامل گذشته ({w.label}) مصرفی ثبت نشده است."
+    out.attrs["basis_months"] = basis_months
+    if basis_months:
+        basis = (
+            "مبنای نرخ مصرف: میانگین روزانه از مصرف ماهیانه — "
+            + basis_label_fa(basis_months, requested)
+            + ("؛ در بازهٔ درخواستی هیچ ماهی داده نداشت، آخرین ماه‌های دارای داده استفاده شد" if fallback else "")
+            + ("؛ اقلام بدون مصرف ماهیانه از دادهٔ روزانهٔ سایت" if used_tank else "")
+            + ". روزهای پوشش فقط افق درخواست است."
+        )
+    elif used_tank:
+        basis = f"مبنای نرخ مصرف: دادهٔ روزانهٔ سایت در {requested}. روزهای پوشش فقط افق درخواست است."
+    else:
+        basis = f"در {requested} و پیش از آن مصرفی ثبت نشده است."
     return out, basis, w
