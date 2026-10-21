@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Smoke (temp DB only) for the owner's 1405/07/20 changes as integrated:
-«📤 ورود فایل‌ها» = 4 inputs (stock, monthly, production PHOTO, unified
+«📤 ورود فایل‌ها» = 4 inputs (stock, monthly, 📝 text production stats, unified
 «گزارش جامع تاندیش در سکوئنس»), ❓ file guides (text + album) for each,
 owner-only 🤖 voice assistant that stays off when not installed, voice messages
 never crash, web sequence upload + login-protected guide images."""
@@ -79,7 +79,7 @@ def main() -> int:
     assert kb.BTN_SEQUENCE_REPORT in kb.BUTTON_FEATURE and kb.BTN_PRODUCTION_PHOTOS in kb.BUTTON_FEATURE
     # mg inputs menu no longer duplicates the uploads
     mg_btns = _btns(kb.main_goal_inputs_menu())
-    assert kb.BTN_MG_INPUT_BILLET not in mg_btns and kb.BTN_MG_INPUT_PROD not in mg_btns
+    assert kb.BTN_MG_INPUT_BILLET not in mg_btns and kb.BTN_PRODUCTION_STATS in mg_btns
 
     # unified sequence upload from «📤 ورود فایل‌ها»
     send(9901, kb.BTN_UPLOAD_MENU)
@@ -97,13 +97,15 @@ def main() -> int:
     assert {("m:1405-06", "billet"), ("m:1405-06", "slab"), ("m:1405-06", "bloom"),
             ("m:1405-07", "slab"), ("m:1405-07", "billet")} <= secs, secs
 
-    # production photo from files menu: cancel returns to «📤 ورود فایل‌ها»
-    out = send(9901, kb.BTN_PRODUCTION_PHOTOS)
-    assert "ریخته گری" in out[-1][1] or "ریخته‌گری" in out[-1][1]
+    # 📝 production stats (text-only) from files menu: cancel → its menu, «بازگشت» → «📤 ورود فایل‌ها»
+    out = send(9901, kb.BTN_PRODUCTION_STATS)
+    assert "1405/07" in out[-1][1] and "کیلوگرم" in out[-1][1], out[-1][1]
     send(9901, kb.BTN_FILE_GUIDE)
     assert len(albums[-1][1]) == 2 and "mg_production_photo" in albums[-1][1][0].name
     out = send(9901, kb.BTN_CANCEL)
-    assert kb.BTN_PRODUCTION_PHOTOS in _btns(out[-1][2]), out[-1]
+    assert kb.BTN_PS_NEW in _btns(out[-1][2]), out[-1]
+    out = send(9901, kb.BTN_PS_BACK)
+    assert kb.BTN_PRODUCTION_STATS in _btns(out[-1][2]), out[-1]
 
     # stock / monthly guides
     send(9901, kb.BTN_WAREHOUSE_STOCK)
