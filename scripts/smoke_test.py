@@ -1200,7 +1200,12 @@ def main() -> int:
     assert not rem.empty
     crit = critical_materials(rates, rem, CRITICAL_DAYS)
     crit_names = set(crit["material_name"].astype(str))
-    assert "اسید سولفوریک" in crit_names
+    # T14: tank days = the FILE's date coverage (1–6 Sep = 6 days); a day without
+    # a row for the item is a real zero → acid 23.5 ÷ 6, cover 20 ÷ 3.92 ≈ 5.1 days
+    acid = rates.loc[rates["material_name"].astype(str) == "اسید سولفوریک", "avg_daily"]
+    assert abs(float(acid.sum()) - 23.5 / 6) < 1e-9, acid
+    assert "اسید سولفوریک" not in crit_names
+    assert "اسید سولفوریک" in set(critical_materials(rates, rem, 6)["material_name"].astype(str))
     sug = suggest_requests(rates, rem, 10)
     assert "suggest_qty" in sug.columns
     assert float(CRITICAL_DAYS) == 3.0
