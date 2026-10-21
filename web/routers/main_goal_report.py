@@ -63,7 +63,24 @@ def _ctx(
         if "اعتبارسنجی" in str(c.get("production_note") or ""):
             c["production_note"] = "(از عکس — اعداد را بررسی کنید)"
     summary, error, ocr_preview = _user_text(summary), _user_text(error), _user_text(ocr_preview)
+    from services import period_select as ps
+
+    latest = ps.latest_data_date(db)
+    for c in completeness:
+        c["heat_alert"] = mgp.heat_alert_fa(db, str(c.get("period_key") or ""))
+        try:
+            y, m = map(int, str(c["period_key"])[2:].split("-"))
+            c["label"] = ps.month_label(y, m, latest)
+        except Exception:  # noqa: BLE001
+            pass
+    t = ps.today()
+    pick_years = []
+    for y in (t.year - 1, t.year):
+        pick_years.append((y, [(m, st, ps.PERSIAN_MONTH_NAMES.get(m, str(m))) for m, st in ps.year_month_states(y)]))
     return {
+        "latest_data_date": ps.fmt_date(latest),
+        "today_iso": f"{t.year:04d}/{t.month:02d}/{t.day:02d}",
+        "pick_years": pick_years,
         "user": user,
         "title_fa": mg.TITLE_FA,
         "subtitle_fa": mg.SUBTITLE_FA,
@@ -240,12 +257,33 @@ async def report_range(
 ):
     from bot.jalali import parse_month_year_token
 
+    form = await request.form()
     if range_kind == "custom":
         a = parse_month_year_token(custom_from)
         b = parse_month_year_token(custom_to or custom_from)
         if not a or not b:
             return _page(request, db, user, error="بازه سفارشی: ماه شروع/پایان جلالی لازم است.", status_code=400)
         spec = mgp.range_custom(a, b)
+    elif range_kind == "days":
+        n_days = str(form.get("n_days") or "").strip()
+        d_from = str(form.get("date_from") or "").strip()
+        d_to = str(form.get("date_to") or "").strip()
+        spec = mgp.parse_range_choice(f"{d_from} تا {d_to}") if (d_from and d_to) else (
+            mgp.parse_range_choice(n_days) if n_days else None
+        )
+        if not spec or spec.kind != "days":
+            return _page(request, db, user, error="بازه روزانه: تعداد روز یا «از تاریخ / تا تاریخ» (مثلاً 1405/05/01) لازم است.", status_code=400)
+    elif range_kind == "months":
+        picks = []
+        for v in form.getlist("months"):
+            try:
+                y, m = map(int, str(v).split("-"))
+                picks.append((y, m))
+            except ValueError:
+                continue
+        if not picks:
+            return _page(request, db, user, error="حداقل یک ماه از فهرست انتخاب کنید.", status_code=400)
+        spec = mgp.range_months(picks)
     else:
         try:
             n = int(range_kind)
@@ -254,9 +292,12 @@ async def report_range(
         if n not in (3, 6, 12):
             n = 3
         spec = mgp.range_last_n(n)
+    err = mgp.future_error_fa(spec)
+    if err:
+        return _page(request, db, user, error=err, status_code=400)
 
     months = mgh.load_history(db)
-    selected, warns = mgp.filter_months_by_range(months, spec)
+    selected, warns = mgp.filter_months_by_range(months, spec, db=db)
     if not selected:
         return _page(request, db, user, error="در این بازه داده‌ای در سابقهٔ ذخیره‌شده نیست.", status_code=400)
     if warns and confirm_partial not in {"1", "on", "true", "yes"}:

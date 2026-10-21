@@ -31,7 +31,7 @@
         <td>{% if c.sections.billet %}✅{% elif "billet" in c.not_produced %}<span class="muted">بدون تولید</span>{% else %}—{% endif %}</td>
         <td>{% if c.sections.bloom %}✅{% elif "bloom" in c.not_produced %}<span class="muted">بدون تولید</span>{% else %}—{% endif %}</td>
         <td>{% if c.sections.slab %}✅{% elif "slab" in c.not_produced %}<span class="muted">بدون تولید</span>{% else %}—{% endif %}</td>
-        <td>{% if c.complete %}کامل{% else %}ناقص: {{ c.missing|join("، ") }}{% endif %}</td>
+        <td>{% if c.complete %}کامل{% else %}ناقص: {{ c.missing|join("، ") }}{% endif %}{% if c.heat_alert %}<div class="alert error">⚠ {{ c.heat_alert }}</div>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>
@@ -86,16 +86,31 @@
 <div class="card">
   <h2>📊 ب) درخواست گزارش از سابقهٔ ذخیره‌شده</h2>
   <form method="post" action="/reports/main-goal/report/range" class="form-grid">
+    <p class="muted">آخرین تاریخ داده: {{ latest_data_date }} — ۳ ماه = ۹۰ روز، ۶ ماه = ۱۸۰ روز، یک سال = ۳۶۵ روز منتهی به این تاریخ. ماه ناقص با روزهای واقعی‌اش منظور می‌شود؛ ماه بدون داده کنار گذاشته می‌شود (صفر نیست).</p>
     <label>بازه
       <select name="range_kind">
-        <option value="3">۳ ماهه</option>
-        <option value="6">۶ ماهه</option>
-        <option value="12">یکساله</option>
-        <option value="custom">بازه ورودی کاربر</option>
+        <option value="3">۳ ماه اخیر (۹۰ روز)</option>
+        <option value="6">۶ ماه اخیر (۱۸۰ روز)</option>
+        <option value="12">یک سال اخیر (۳۶۵ روز)</option>
+        <option value="days">بازه روزانه (تعداد روز یا از تاریخ تا تاریخ)</option>
+        <option value="months">انتخاب ماه از فهرست</option>
+        <option value="custom">بازه ماهانه (از ماه تا ماه)</option>
       </select>
     </label>
+    <label>تعداد روز<input type="number" name="n_days" min="1" max="3660" placeholder="۹۰"></label>
+    <label>از تاریخ<input name="date_from" placeholder="1405/05/01" pattern="[0-9۰-۹]{4}/[0-9۰-۹]{1,2}/[0-9۰-۹]{1,2}"></label>
+    <label>تا تاریخ (حداکثر {{ today_iso }})<input name="date_to" placeholder="{{ today_iso }}" pattern="[0-9۰-۹]{4}/[0-9۰-۹]{1,2}/[0-9۰-۹]{1,2}"></label>
     <label>از ماه (سفارشی)<input name="custom_from" placeholder="تیر ۱۴۰۵"></label>
     <label>تا ماه (سفارشی)<input name="custom_to" placeholder="شهریور ۱۴۰۵"></label>
+    <fieldset class="month-picker"><legend>ماه‌ها (آینده 🔒 غیرفعال)</legend>
+      {% for y, ms in pick_years %}
+      <div><b>{{ y }}</b>
+        {% for m, st, name in ms %}
+        <label class="{{ st }}"><input type="checkbox" name="months" value="{{ y }}-{{ m }}" {% if st == "future" %}disabled{% endif %}>{% if st == "future" %}🔒 {% endif %}{{ name }}{% if st == "current" %} (جاری، ناقص){% endif %}</label>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </fieldset>
     <label><input type="checkbox" name="confirm_partial" value="1"> در صورت ناقص بودن بازه، با دادهٔ موجود ادامه بده</label>
     <div class="report-actions"><button type="submit" class="btn" {% if not months %}disabled{% endif %}>ساخت PDF + اکسل</button></div>
   </form>

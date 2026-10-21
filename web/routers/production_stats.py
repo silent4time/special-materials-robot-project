@@ -97,7 +97,7 @@ async def save(request: Request, user=Depends(require_ps), db: Database = Depend
     _row, replaced = pm.store(db, data, user=user, source="web")
     log_activity(db, user, "web_production_stats_store")
     return _page(request, db, user, message=pm.confirmation_fa(data, replaced).split("\n")[0],
-                 summary=data.summary_fa())
+                 summary=data.summary_fa() + pm.heat_note_fa(db, data))
 
 
 @router.post("/delete")
