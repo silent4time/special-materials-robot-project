@@ -25,12 +25,10 @@
   </form>
   {{ file_guide("monthly_consumption")|safe }}
 </div>
-<div class="card" id="photo">
-  <h2>📸 عکس‌های آمار تولید</h2>
-  <form method="post" action="/reports/main-goal/inputs/production-photo?back=files" enctype="multipart/form-data" class="form-grid">
-    <input type="file" name="photo" accept="image/*" required><button class="btn" type="submit">ارسال</button>
-  </form>
-  {{ file_guide("mg_production_photo")|safe }}
+<div class="card" id="production">
+  <h2>📝 آمار تولید</h2>
+  <p class="muted">ورود متنی وزن محصول ccm1 تا ccm5 (کیلوگرم) و تعداد کل ذوب‌های هر ماه؛ ورود با عکس حذف شده است.</p>
+  <a class="btn" href="/reports/main-goal/production-stats">📝 آمار تولید</a>
 </div>
 <div class="card" id="sequence">
   <h2>📤 گزارش جامع تاندیش در سکوئنس</h2>

@@ -4,7 +4,7 @@
 <div class="card">
   <h1>🎯 {{ title_fa }}</h1>
   <p class="muted">{{ subtitle_fa }} — {{ ccm_note }}</p>
-  <p class="muted">الف) ثبت ورودی ماه (عکس تب «ریخته‌گری» آمار تولید / اکسل مصرف یا سکوئنس تاندیش؛ پس از هر ورودی بخش‌های باقی‌ماندهٔ همان ماه نمایش داده می‌شود) ← ب) درخواست گزارش از سابقه با بازه ۳/۶/۱۲ ماهه یا سفارشی. سناریوها همچنان فعال‌اند.</p>
+  <p class="muted">الف) ثبت ورودی ماه (📝 آمار تولید متنی / اکسل مصرف یا سکوئنس تاندیش؛ پس از هر ورودی بخش‌های باقی‌ماندهٔ همان ماه نمایش داده می‌شود) ← ب) درخواست گزارش از سابقه با بازه ۳/۶/۱۲ ماهه یا سفارشی. سناریوها همچنان فعال‌اند.</p>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert err" style="white-space:pre-wrap">{{ error }}</div>{% endif %}
   {% if summary %}<pre class="muted">{{ summary }}</pre>{% endif %}
@@ -71,24 +71,9 @@
 
 <div class="card">
   <h2>📥 الف) ثبت ورودی</h2>
-  <h3>📸 عکس آمار تولید (فقط تب «ریخته گری»)</h3>
-  <p class="muted">فقط تصویر صفحه (اسکرین‌شات) تب «ریخته گری» صفحه otsteel.ksc.ir/productionstatistics همراه با فیلتر تاریخ پذیرفته می‌شود؛ عکس تب «کوره» رد می‌شود. اعداد خوانده‌شده را پس از ذخیره با تصویر مقایسه کنید و در صورت مغایرت از «اصلاح / ورود دستی تولید» اصلاح کنید.</p>
-  <form method="post" action="/reports/main-goal/inputs/production-photo" enctype="multipart/form-data" class="form-grid">
-    <label>تصویر صفحه (اسکرین‌شات)
-      <input type="file" name="photo" accept="image/*" required>
-    </label>
-    <div class="report-actions"><button type="submit" class="btn">خواندن خودکار (OCR) و ذخیره</button></div>
-  </form>
-  {{ file_guide("mg_production_photo")|safe }}
-  <h3>✏️ اصلاح / ورود دستی تولید</h3>
-  <form method="post" action="/reports/main-goal/inputs/production-manual" class="form-grid">
-    <label>ماه جلالی<input name="period_text" placeholder="شهریور ۱۴۰۵" required></label>
-    <label>اسلب (تن)<input name="slab"></label>
-    <label>بلوم (تن)<input name="bloom"></label>
-    <label>بیلت (تن)<input name="billet"></label>
-    <label>ذوب<input name="melt"></label>
-    <div class="report-actions"><button type="submit" class="btn">ذخیره دستی</button></div>
-  </form>
+  <h3>📝 آمار تولید (ورود متنی)</h3>
+  <p class="muted">وزن محصول ccm1 تا ccm5 به کیلوگرم و تعداد کل ذوب‌های هر ماه — ثبت، ویرایش و حذف ماه‌ها.</p>
+  <div class="report-actions"><a class="btn" href="/reports/main-goal/production-stats">📝 آمار تولید</a></div>
   <h3>📤 گزارش جامع تاندیش در سکوئنس</h3>
   <p class="muted">یک فایل Excel (خروجی صفحهٔ otsteel.ksc.ir/ccssequence) برای هر سه بخش؛ بخش از ستون «ماشین» و ماه از تاریخ شروع ریخته‌گری تشخیص داده می‌شود و هر ماه/بخش جداگانه جایگزین می‌شود.</p>
   <form method="post" action="/reports/main-goal/inputs/sequence" enctype="multipart/form-data" class="form-grid">

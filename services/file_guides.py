@@ -18,7 +18,7 @@ PLACEHOLDER_FA = "راهنمای مسیر سیستم به‌زودی اضافه 
 TITLES: dict[str, str] = {
     "product_inventory": "📥 فایل موجودی انبار (Excel)",
     "monthly_consumption": "📥 مصرف ماهیانه مواد (Excel)",
-    "mg_production_photo": "📸 آمار تولید — عکس تب «ریخته‌گری»",
+    "mg_production_stats": "📝 آمار تولید (ورود متنی)",
     "mg_sequence": "📤 گزارش جامع تاندیش در سکوئنس (Excel)",
     "mg_production_xlsx": "📤 اکسل آمار تولید (قدیمی)",
     "mg_consumption": "📤 اکسل مصرف تاندیش هر بخش (قدیمی)",
@@ -26,7 +26,7 @@ TITLES: dict[str, str] = {
 }
 
 # The 4 owner-approved inputs (1405/07/19) — shown in the general guide in this order.
-MAIN_INPUTS: tuple[str, ...] = ("product_inventory", "monthly_consumption", "mg_production_photo", "mg_sequence")
+MAIN_INPUTS: tuple[str, ...] = ("product_inventory", "monthly_consumption", "mg_production_stats", "mg_sequence")
 
 _PORTAL = (
     "در پورتال «شرکت فولاد خوزستان» (صفحهٔ سامانه‌ها) روی آیکون "
@@ -51,12 +51,12 @@ SYSTEM_STEPS: dict[str, list[str] | None] = {
         "یا برای یک بخش «Slab (4-11)»، «Bloom (4-12)» یا «Billet (4-13)» را انتخاب کنید.",
         "دکمهٔ «Search» و سپس «Excel» را بزنید؛ فایل را با پسوند .xlsx ذخیره و ارسال کنید.",
     ],
-    "mg_production_photo": [
+    "mg_production_stats": [
         "در مرورگر سایت otsteel.ksc.ir را باز کنید؛ در بخش «گزارش های تولید» روی «آمار تولید» بزنید.",
-        "در صفحهٔ «نمایش آماری اطلاعات تولید» (otsteel.ksc.ir/productionstatistics) «از تاریخ» و «تا تاریخ» را تنظیم و «جستجو» را بزنید.",
-        "تب «ریخته گری» را انتخاب کنید (تب‌های «کوره» و «کوره پاتیلی» پذیرفته نمی‌شوند).",
-        "از جدول (ردیف‌های شماره CCM، «مجموع اسلب ها»، «مجموع بلوم بیلت ها»، «سرجمع کل») همراه با فیلتر تاریخ "
-        "عکس بگیرید و به‌صورت عکس بفرستید — Excel پذیرفته نمی‌شود.",
+        "«از تاریخ» را ابتدای ماه و «تا تاریخ» را آخرین روز ثبت‌شدهٔ همان ماه بگذارید و «جستجو» را بزنید.",
+        "از تب «ریخته گری» وزن محصول هر ماشین (CCM1 تا CCM5) را به کیلوگرم و از تب «کوره» تعداد کل ذوب‌ها "
+        "(مجموع ذوب‌های نرمال و با کد فرعی) را بخوانید.",
+        "در ربات «📝 آمار تولید» را بزنید و اعداد را به ترتیب پرسش‌ها وارد کنید (عکس پذیرفته نمی‌شود).",
     ],
     "mg_sequence": [
         "در مرورگر سایت otsteel.ksc.ir را باز کنید؛ بخش «نسوز تاندیش» را باز کنید و «گزارش جامع تاندیش در سکوئنس» را بزنید.",
@@ -74,7 +74,7 @@ IMG_DIR = Path(__file__).resolve().parent / "file_guides_img"
 IMAGE_COUNTS: dict[str, int] = {
     "product_inventory": 5,
     "monthly_consumption": 3,
-    "mg_production_photo": 2,
+    "mg_production_stats": 2,
     "mg_sequence": 2,
 }
 
@@ -82,11 +82,16 @@ IMAGE_COUNTS: dict[str, int] = {
 def guide_images(kind: str | None) -> list[Path]:
     kind = ALIASES.get(kind or "", kind)
     n = IMAGE_COUNTS.get(kind or "", 0)
-    return [p for p in (IMG_DIR / f"{kind}_{i}.jpg" for i in range(1, n + 1)) if p.is_file()]
+    prefix = IMG_PREFIX.get(kind or "", kind)
+    return [p for p in (IMG_DIR / f"{prefix}_{i}.jpg" for i in range(1, n + 1)) if p.is_file()]
+
+
+# kind → screenshot file prefix (otsteel «آمار تولید» page screenshots are reused)
+IMG_PREFIX: dict[str, str] = {"mg_production_stats": "mg_production_photo"}
 
 
 # older guide kinds → current input
-ALIASES: dict[str, str] = {"mg_consumption": "mg_sequence"}
+ALIASES: dict[str, str] = {"mg_consumption": "mg_sequence", "mg_production_photo": "mg_production_stats"}
 
 # kind → required file shape (kept in sync with the parsers in code)
 SHAPES: dict[str, list[str]] = {
@@ -99,9 +104,10 @@ SHAPES: dict[str, list[str]] = {
         "فرمت: .xlsx",
         "ستون‌های لازم: ماده (نام ماده)، ماه، مقدار، واحد؛ اختیاری: نوع تاندیش، کد کالا، کد دسته‌بندی، وضعیت، توضیحات.",
     ],
-    "mg_production_photo": [
-        "عکس (Photo یا فایل تصویری) از تب «ریخته‌گری»؛ نگاشت CCM: ۱و۲ = اسلب، ۳ = بلوم، ۴و۵ = بیلت.",
-        "پس از OCR اعداد قابل اصلاح دستی‌اند («✏️ اصلاح دستی تولید»).",
+    "mg_production_stats": [
+        "ورود متنی (بدون فایل): سال/ماه شمسی (مثلاً 1405/07)، سپس وزن محصول ccm1 (اسلب ۱)، ccm2 (اسلب ۲)، "
+        "ccm3 (بلوم)، ccm4 (بیلت ۱)، ccm5 (بیلت ۲) به کیلوگرم از ابتدای ماه، و تعداد کل ذوب‌ها.",
+        "ارقام فارسی/انگلیسی و جداکنندهٔ هزارگان «,» پذیرفته است؛ در محاسبات به تن تبدیل می‌شود.",
     ],
     "mg_production_xlsx": [
         "فرمت: .xlsx — سطرهای CCM/PRODUCT با تناژ هر ماشین؛ ماه شمسی در نام فایل/شیت/سربرگ (مثل «شهریور ۱۴۰۵»).",
@@ -118,7 +124,7 @@ SHAPES: dict[str, list[str]] = {
         "تشخیص داده می‌شود؛ هر ماه/بخش جداگانه جایگزین می‌شود. جایگزین آپلودهای جداگانهٔ مصرف تاندیش هر بخش.",
     ],
     "mg_bulk": [
-        "هر تعداد فایل و هر ترتیب: عکس آمار تولید (تب ریخته‌گری) یا اکسل آمار تولید، "
+        "هر تعداد فایل و هر ترتیب: اکسل آمار تولید، "
         "اکسل مصرف تاندیش بیلت/بلوم/اسلب، اکسل لاگ سکوئنس تاندیش.",
         "نوع فایل و ماه خودکار تشخیص داده می‌شود؛ ماه شمسی را در نام فایل بنویسید.",
     ],
