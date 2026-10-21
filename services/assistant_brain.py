@@ -210,16 +210,18 @@ def parse_period(t: str, today: Any = None) -> dict[str, Any] | None:
         y2, m2 = back(jt.year, jt.month, 1)
         y1, m1 = back(jt.year, jt.month, n)
         s, e = month_year_to_gregorian_bounds((y1, m1), (y2, m2))
-        return {"start": s, "end": e, "label": f"{n} ماه کامل اخیر", "months": months_span(y1, m1, y2, m2)}
+        return {"start": s, "end": e, "label": f"{n} ماه کامل اخیر", "months": months_span(y1, m1, y2, m2),
+                "preset": f"{n}m"}
     if re.search(r"(این|همین) ماه|ماه جاری", t):
-        return month_period(jt.year, jt.month, f"ماه جاری ({PERSIAN_MONTH_NAMES[jt.month]} {jt.year})")
+        return {**month_period(jt.year, jt.month, f"ماه جاری ({PERSIAN_MONTH_NAMES[jt.month]} {jt.year})"),
+                "preset": "current"}
     if re.search(r"ماه (گذشته|قبل|پیش)|ماه پیشین", t):
         y, mm = back(jt.year, jt.month, 1)
         return month_period(y, mm)
     if re.search(r"امسال|از اول سال|سال جاری", t):
         s, _e = month_year_to_gregorian_bounds((jt.year, 1), (jt.year, jt.month))
         return {"start": s, "end": g_today, "label": f"از ابتدای {jt.year}",
-                "months": months_span(jt.year, 1, jt.year, jt.month)}
+                "months": months_span(jt.year, 1, jt.year, jt.month), "preset": "ytd"}
     for name, mm in _MONTHS.items():
         mt = re.search(rf"(?<![\w]){name}(?![\w])(?: ?(?:ماه|سال))?(?: ?(1[34]\d\d))?", t)
         if mt:
@@ -1182,25 +1184,23 @@ def exec_consumption(ctx: _Ctx, it: Intent) -> Answer:
 
     p = it.slots.get("period")
     sec = it.slots.get("section")
-    if not p:
-        # T14: no period asked → the latest complete month that actually has data
-        # (a «30 days» window never holds a whole month → always «no data»).
-        g = jalali_today().togregorian()
-        av = pc.data_availability(ctx.db, sec)
-        if av.get("mg_months"):
-            import jdatetime
+    note = ""
+    if not p or p.get("preset"):
+        # T14b: no period / a preset → latest N months THAT HAVE DATA (actual basis stated)
+        from bot.jalali import month_year_to_gregorian_bounds
+        from services import data_months as dmo
 
-            from bot.jalali import PERSIAN_MONTH_NAMES
-
-            y, m = av["mg_months"][-1]
-            ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
-            p = {"start": jdatetime.date(y, m, 1).togregorian(),
-                 "end": jdatetime.date(ny, nm, 1).togregorian() - timedelta(days=1),
-                 "label": f"آخرین ماه دارای داده: {PERSIAN_MONTH_NAMES[m]} {y}"}
-        else:
+        got = dmo.resolve_preset_by_data((p or {}).get("preset") or "current",
+                                         dmo.report_months(ctx.db, None, "period", sec))
+        if got:
+            s_ym, e_ym, _used, note = got
+            s_g, e_g = month_year_to_gregorian_bounds(s_ym, e_ym)
+            p = {"start": s_g, "end": e_g, "label": (p or {}).get("label") or "آخرین ماه دارای داده"}
+        elif not p:
+            g = jalali_today().togregorian()
             p = {"start": g - timedelta(days=29), "end": g, "label": "۳۰ روز اخیر"}
     label = f"{p['label']} (از {format_date(p['start'])} تا {format_date(p['end'])})"
-    res = pc.build(ctx.db, p["start"], p["end"], range_label=label, section=sec)
+    res = pc.build(ctx.db, p["start"], p["end"], range_label=label, section=sec, basis_note=note)
     if res.error:
         return Answer(res.error, it, ok=False)
     q = it.slots.get("query") or ""
@@ -1211,7 +1211,7 @@ def exec_consumption(ctx: _Ctx, it: Intent) -> Answer:
             rows = inv.loc[inv["category_code"].map(_code_of) == code]
             if not rows.empty:
                 q = str(rows.iloc[0].get("keyword") or "")
-    site, mg = list(res.site_rows), list(res.mg_rows)
+    site, mg, mon = list(res.site_rows), list(res.mg_rows), list(res.mon_rows)
     if q:
         nq = [w for w in normalize(q).split() if len(w) >= 2]
 
@@ -1221,15 +1221,24 @@ def exec_consumption(ctx: _Ctx, it: Intent) -> Answer:
 
         site = [r for r in site if ok(r.get("شرح کالا"))]
         mg = [r for r in mg if ok(r.get("ماده"))]
-    if not site and not mg and not res.mg_counts:
+        mon = [r for r in mon if ok(r.get("شرح کالا"))]
+    if not site and not mg and not mon and not res.mg_counts:
         av = pc.data_availability(ctx.db, sec)
         msg = f"برای «{label}»" + (f" و قلم «{q}»" if q else "") + " دادهٔ مصرفی پیدا نشد.\n"
         return Answer(msg + pc.availability_text_fa(av), it, ok=False)
     lines = [f"📅 مصرف {label} — {res.section_label}" + (f" — «{q}»" if q else ""), res.source_line()]
     from services.assistant_tables import text_table
 
-    facts: dict[str, Any] = {"site": {}, "mg": {}}
+    facts: dict[str, Any] = {"site": {}, "mg": {}, "mon": {}}
     sections: list[dict[str, Any]] = []
+    if mon:
+        lines.append(f"ج) از فایل مصرف ماهیانه (خالص): {len(mon)} قلم")
+        srt = sorted(mon, key=lambda r: -float(r["مصرف خالص"] or 0))
+        for r in srt[:8]:
+            facts["mon"][str(r["شرح کالا"])] = r["مصرف خالص"]
+        lines += text_table(["بخش", "شرح کالا", "مصرف خالص", "واحد"], srt, max_rows=8, widths={"شرح کالا": 36})
+        sections.append({"title": "ج) از فایل مصرف ماهیانه", "columns": list(srt[0].keys()), "rows": srt,
+                         "material": {"id": "شناسه کالا", "name": "شرح کالا", "mode": "per_id"}})
     if site:
         lines.append(f"الف) از موجودی روزانهٔ سایت: {len(site)} قلم")
         srt = sorted(site, key=lambda r: -float(r["مصرف (کاهش موجودی)"] or 0))

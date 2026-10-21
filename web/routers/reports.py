@@ -550,7 +550,7 @@ async def n_tundish_mix_xlsx(request: Request, user=Depends(require_feature(perm
 
 
 # ---------------------------------------------------------------- 📅 گزارش مصرف بازه‌ای
-def _period(request: Request, db: Database):
+def _period(request: Request, db: Database, user: dict | None = None):
     from bot.jalali import format_month_year_range, month_year_to_gregorian_bounds
     from services import period_consumption as pc
     from web.services.reports import letterhead_path
@@ -565,18 +565,27 @@ def _period(request: Request, db: Database):
     start_ym, end_ym = (fy, fm), (ty, tm)
     if ty * 12 + tm < fy * 12 + fm:
         start_ym, end_ym = end_ym, start_ym
-    start, end = month_year_to_gregorian_bounds(start_ym, end_ym)
     section = (q.get("section") or "").strip().lower() or None
+    note = ""
+    preset = (q.get("preset") or "").strip()
+    if preset or not (q.get("from_year") or q.get("from_month")):
+        # T14b: preset / no range → latest N months THAT HAVE DATA
+        from services import data_months as dmo
+
+        got = dmo.resolve_preset_by_data(preset or "3m", dmo.report_months(db, user, "period", section))
+        if got:
+            start_ym, end_ym, _used, note = got
+    start, end = month_year_to_gregorian_bounds(start_ym, end_ym)
     res = pc.generate_files(
         db, start, end, range_label=format_month_year_range(start_ym, end_ym),
-        section=section, letterhead_path=letterhead_path(db),
+        section=section, letterhead_path=letterhead_path(db), user=user, basis_note=note,
     )
     return res, res.error
 
 
 @router.get("/period")
 async def period_pdf(request: Request, user=Depends(require_feature(perm.REPORT_PERIOD)), db: Database = Depends(get_db)):
-    res, err = _period(request, db)
+    res, err = _period(request, db, user)
     if err or not res or not res.pdf:
         return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#period", status_code=303)
     log_activity(db, user, "report_period")
@@ -585,7 +594,7 @@ async def period_pdf(request: Request, user=Depends(require_feature(perm.REPORT_
 
 @router.get("/period.xlsx")
 async def period_xlsx(request: Request, user=Depends(require_feature(perm.REPORT_PERIOD)), db: Database = Depends(get_db)):
-    res, err = _period(request, db)
+    res, err = _period(request, db, user)
     if err or not res or not res.xlsx:
         return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#period", status_code=303)
     log_activity(db, user, "report_period_xlsx")
