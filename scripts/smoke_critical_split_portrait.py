@@ -676,7 +676,10 @@ def test_inventory_upload_rules(tmp: Path) -> None:
     got = ids_qty()
     assert "378124313333E" not in got and "378118881234F" not in got, got
     assert got.get("378124312222D") == 6, got  # existing (now) 1800 row → stock update ok
-    assert "⛔ 2 ردیف اضافه نشد" in client.msgs[-1] and "378124313333E" in client.msgs[-1], client.msgs[-1]
+    # the upload reply (a «🚨» missing-items alarm may follow it)
+    up = next(m for m in reversed(client.msgs) if "دریافت شد" in m)
+    assert "⛔ 2 ردیف اضافه نشد" in up and "378124313333E" in up, up
+    assert any(m.startswith("🚨 هشدار") for m in client.msgs[-3:]), client.msgs[-3:]
 
     # --- web settings upload (authorized full source): same shared rule
     from fastapi.testclient import TestClient

@@ -88,6 +88,9 @@ async def _excel(request, db, user, file, pending):
     if out.unit_alert:
         summary = out.text + "\n\n" + out.unit_alert["text"]
         _notify_unit_alert(db, out.unit_alert, user)
+    if out.missing_alert:
+        summary = summary + "\n\n" + out.missing_alert["text"]
+        _notify_unit_alert(db, out.missing_alert, user)
     return _page(request, db, user, message=f"✅ «{file_guides.TITLES.get(pending, pending)}» ثبت شد.",
                  summary=summary, new_inbound=inbound)
 
