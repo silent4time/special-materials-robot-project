@@ -34,6 +34,7 @@ from web.routers import settings as settings_router
 from web.routers import stock as stock_router
 from web.routers import tundish_report as tundish_report_router
 from web.routers import main_goal_report as main_goal_report_router
+from web.routers import production_stats as production_stats_router
 from services.units import unit_fa
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -133,6 +134,7 @@ def create_app() -> FastAPI:
     app.include_router(reports_router.router)
     app.include_router(settings_router.router)
     app.include_router(tundish_report_router.router)
+    app.include_router(production_stats_router.router)
     app.include_router(main_goal_report_router.router)
     from web.routers import admin as admin_router, assistant as assistant_router, files as files_router
 

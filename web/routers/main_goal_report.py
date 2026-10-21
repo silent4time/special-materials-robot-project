@@ -1,4 +1,4 @@
-"""گزارش هدف اصلی — web: ثبت ورودی (عکس تولید / اکسل تاندیش) + گزارش بازه از DB + سناریوها.
+"""گزارش هدف اصلی — web: ثبت ورودی (📝 آمار تولید متنی / اکسل تاندیش) + گزارش بازه از DB + سناریوها.
 
 Thin wrapper over ``services.main_goal_report`` / ``main_goal_history`` / ``main_goal_persist``.
 """
@@ -19,7 +19,6 @@ from config import REPORT_DIR, UPLOAD_DIR, ensure_dirs
 from db.models import Database
 from services import main_goal_history as mgh
 from services import main_goal_persist as mgp
-from services import main_goal_production_ocr as mgocr
 from services import main_goal_report as mg
 from services import mandatory_reminders as rem
 from web.deps import ForbiddenFa, current_user, get_db
@@ -39,16 +38,8 @@ def require_main_goal(user=Depends(current_user)) -> dict:
     return user
 
 
-_CHECK_NUMBERS_FA = "⚠ اعداد خوانده‌شده از عکس را با تصویر مقایسه کنید؛ در صورت مغایرت از «اصلاح / ورود دستی تولید» اصلاح کنید."
-
-
 def _user_text(text: str | None) -> str | None:
-    """Replace internal/developer notes from the shared OCR layer with user guidance."""
-    if not text:
-        return text
-    from services.main_goal_production_ocr import CASTING_VALIDATION_NOTE_FA
-
-    return text.replace(CASTING_VALIDATION_NOTE_FA, _CHECK_NUMBERS_FA)
+    return text
 
 
 def _ctx(
@@ -153,69 +144,7 @@ def _inventory(db: Database, user: dict):
         return None
 
 
-# ---------------------------------------------------------------- production photo / excel
-@router.post("/inputs/production-photo")
-async def upload_production_photo(
-    request: Request,
-    photo: UploadFile = File(...),
-    user=Depends(require_main_goal_or_files),
-    db: Database = Depends(get_db),
-):
-    batch = tehran_now().strftime("%Y%m%d_%H%M%S")
-    dest_dir = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / f"web_prod_{batch}"
-    suffix = Path(photo.filename or "production.png").suffix.lower() or ".png"
-    if suffix not in _IMAGE_EXTS:
-        return _page(request, db, user, error="فقط فایل تصویری (png/jpg/webp) بفرستید.", status_code=400)
-    path = dest_dir / f"production{suffix}"
-    try:
-        fname = await _save_upload(photo, path, allow_image=True)
-    except ValueError as exc:
-        return _page(request, db, user, error=str(exc), status_code=400)
-    ocr_res = mgocr.ocr_production_image(path)
-    out = mgp.store_production_from_ocr(
-        db, path, user=user, source="web", filename=fname, ocr_result=ocr_res
-    )
-    if out.tab_rejected:
-        # Furnace / undeterminable tab → alarm only, nothing stored (same rule as bot).
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        log_activity(db, user, "web_main_goal_production_photo_rejected_tab")
-        ev = ocr_res.tab_evidence or {}
-        detail = (
-            f"تشخیص: {mgocr.TAB_LABEL_FA.get(ocr_res.report_tab, ocr_res.report_tab)}"
-            + (f" | {ocr_res.period_label}" if ocr_res.period_label else "")
-            + (f" | نشانه‌های تب کوره: {'، '.join(ev.get('furnace') or [])}" if ev.get("furnace") else "")
-        )
-        return _page(
-            request, db, user,
-            error=out.error_fa or mgocr.ALARM_UNKNOWN_FA,
-            summary=detail,
-            status_code=400,
-        )
-    preview = mgocr.result_summary_fa(ocr_res)
-    if ocr_res.ocr_raw_text:
-        preview += "\n\n— متن خام OCR —\n" + ocr_res.ocr_raw_text[:1500]
-    if not out.ok:
-        return _page(
-            request, db, user,
-            error=(out.error_fa or "OCR ناموفق") + " — می‌توانید اصلاح دستی را در فرم زیر بزنید.",
-            summary=out.summary or preview,
-            ocr_preview=preview,
-            status_code=400,
-        )
-    log_activity(db, user, "web_main_goal_store_production_ocr")
-    miss = out.missing_parts
-    extra = ("\n⚠ هنوز ناقص: " + "، ".join(miss)) if miss else "\n✅ ماه از نظر ورودی‌ها کامل است."
-    return _page(
-        request, db, user,
-        message="آمار تولید از عکس ذخیره شد.",
-        summary=out.summary + extra,
-        ocr_preview=preview,
-    )
-
-
+# ---------------------------------------------------------------- production excel (photo/OCR removed → 📝 آمار تولید)
 @router.post("/inputs/production-excel")
 async def upload_production_excel(
     request: Request,
@@ -236,51 +165,6 @@ async def upload_production_excel(
     miss = out.missing_parts
     extra = ("\n⚠ هنوز ناقص: " + "، ".join(miss)) if miss else ""
     return _page(request, db, user, message="آمار تولید Excel ذخیره شد.", summary=out.summary + extra)
-
-
-@router.post("/inputs/production-manual")
-async def production_manual(
-    request: Request,
-    period_text: str = Form(...),
-    slab: str = Form(""),
-    bloom: str = Form(""),
-    billet: str = Form(""),
-    melt: str = Form(""),
-    user=Depends(require_main_goal),
-    db: Database = Depends(get_db),
-):
-    from bot.jalali import parse_month_year_token
-
-    tok = parse_month_year_token(period_text)
-    if not tok:
-        return _page(request, db, user, error="ماه جلالی نامعتبر (مثلاً شهریور ۱۴۰۵).", status_code=400)
-    year, month = tok
-    def _num(raw):
-        raw = (raw or "").strip()
-        return mgh.parse_number(raw) if raw else None
-    fixed = mgocr.apply_manual_corrections(
-        None,
-        year=year,
-        month=month,
-        slab_tons=_num(slab),
-        bloom_tons=_num(bloom),
-        billet_tons=_num(billet),
-        melt_count=_num(melt),
-    )
-    if not fixed.ok:
-        return _page(request, db, user, error=fixed.error_fa, status_code=400)
-    dest_dir = UPLOAD_DIR / str(user["bale_user_id"]) / "main_goal" / "manual"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    placeholder = dest_dir / f"{fixed.period_key}.txt"
-    placeholder.write_text(period_text, encoding="utf-8")
-    out = mgp.store_production_from_ocr(
-        db, placeholder, user=user, source="web", filename=placeholder.name,
-        ocr_result=fixed, manual_corrected=True,
-    )
-    if not out.ok:
-        return _page(request, db, user, error=out.error_fa, status_code=400)
-    log_activity(db, user, "web_main_goal_store_production_manual")
-    return _page(request, db, user, message="تولید با اصلاح دستی ذخیره شد.", summary=out.summary)
 
 
 @router.post("/inputs/consumption")

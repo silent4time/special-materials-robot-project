@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}آمار تولید{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>📝 آمار تولید (ورود متنی)</h1>
+  <p class="muted">برای هر ماه شمسی: وزن محصول هر ماشین ریخته‌گری از ابتدای همان ماه به <b>کیلوگرم</b>
+    (ccm1 و ccm2 = اسلب، ccm3 = بلوم، ccm4 و ccm5 = بیلت) و تعداد کل ذوب‌ها (مجموع ذوب‌های نرمال و با کد فرعی).
+    در محاسبات به تن تبدیل می‌شود؛ ماهِ بدون داده در محاسبه شرکت نمی‌کند. ورود با عکس حذف شده است.</p>
+  {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err" style="white-space:pre-wrap">{{ error }}</div>{% endif %}
+  {% if summary %}<pre class="muted" style="white-space:pre-wrap">{{ summary }}</pre>{% endif %}
+</div>
+
+{% if confirm_delete %}
+<div class="card">
+  <h2>🗑 حذف آمار تولید {{ confirm_delete }}</h2>
+  <form method="post" action="/reports/main-goal/production-stats/delete" class="form-grid">
+    <input type="hidden" name="ym" value="{{ confirm_delete }}">
+    <input type="hidden" name="confirm" value="1">
+    <div class="report-actions"><button type="submit" class="btn">✅ بله، حذف شود</button>
+      <a class="btn" href="/reports/main-goal/production-stats">✖️ انصراف</a></div>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>{% if editing %}✏️ ویرایش ماه {{ form.ym }}{% else %}➕ ثبت اطلاعات ماه{% endif %}</h2>
+  <form method="post" action="/reports/main-goal/production-stats" class="form-grid">
+    <label>سال/ماه (شمسی)<input name="ym" value="{{ form.ym or '' }}" placeholder="1405/07" required></label>
+    {% for key, label, sec in fields %}
+    <label>وزن محصول {{ label }} (کیلوگرم)<input name="{{ key }}" value="{{ form[key] or '' }}" inputmode="decimal" required></label>
+    {% endfor %}
+    <label>تعداد کل ذوب‌ها (نرمال + کد فرعی)<input name="melts" value="{{ form.melts or '' }}" inputmode="numeric" required></label>
+    {% if confirm_replace %}<input type="hidden" name="replace" value="1">{% endif %}
+    <div class="report-actions"><button type="submit" class="btn">{% if confirm_replace %}✅ بله، جایگزین شود{% else %}✅ تأیید و ذخیره{% endif %}</button>
+      {% if editing or confirm_replace %}<a class="btn" href="/reports/main-goal/production-stats">✖️ انصراف</a>{% endif %}</div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>🗂 ماه‌های ثبت‌شده</h2>
+  {% if rows %}
+  <table class="table">
+    <thead><tr><th>ماه</th>{% for key, label, sec in fields %}<th>{{ label }} (kg)</th>{% endfor %}<th>ذوب</th><th>کل (تن)</th><th>ثبت</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.ym }} ({{ r.label }})</td>
+        {% for key, label, sec in fields %}<td>{{ fmt(r.data.kg[key]) }}</td>{% endfor %}
+        <td>{{ fmt(r.data.melts) }}</td>
+        <td>{{ "%.1f"|format(r.tons.slab + r.tons.bloom + r.tons.billet) }}</td>
+        <td>{{ r.jalali_date }} {{ r.actor }}</td>
+        <td><a href="/reports/main-goal/production-stats?edit={{ r.ym }}">✏️ ویرایش</a> |
+            <a href="/reports/main-goal/production-stats?delete={{ r.ym }}">🗑 حذف</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">هنوز ماهی ثبت نشده است.</p>{% endif %}
+</div>
+{% endblock %}
