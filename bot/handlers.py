@@ -4738,6 +4738,14 @@ class BotApp:
             self._on_role_perm_callback(data, message, user, answer)
             return
 
+        if data.startswith(kb.CB_MG_PICK_PREFIX):
+            user = ensure_registered(self.db, uid, self._display_name(message))
+            if not user:
+                answer("شما در سیستم ثبت نشده‌اید.", alert=True)
+                return
+            self.main_goal_report.on_month_pick_callback(data, message, user, answer)
+            return
+
         if data.startswith(kb.CB_BACKUP_PREFIX):
             user = ensure_registered(self.db, uid, self._display_name(message))
             if not user:

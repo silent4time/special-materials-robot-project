@@ -237,5 +237,5 @@ class ProductionStatsMixin:
         data = self._ps_data(p)
         _row, replaced = pm.store(self.db, data, user=user, source="bot")
         log_activity(self.db, user, "production_stats_store")
-        self._reply(message, pm.confirmation_fa(data, replaced))
+        self._reply(message, pm.confirmation_fa(data, replaced) + pm.heat_note_fa(self.db, data))
         return self._ps_menu(message, p)

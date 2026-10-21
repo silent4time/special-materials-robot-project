@@ -223,10 +223,12 @@ BTN_MG_P3 = "۳ ماه"
 BTN_MG_P6 = "۶ ماه"
 BTN_MG_P12 = "۱۲ ماه"
 BTN_MG_SKIP_TARGET = "⏭ بدون تناژ هدف"
-BTN_MG_RANGE_3 = "۳ ماهه"
-BTN_MG_RANGE_6 = "۶ ماهه"
-BTN_MG_RANGE_12 = "یکساله"
+BTN_MG_RANGE_3 = "۳ ماه اخیر (۹۰ روز)"
+BTN_MG_RANGE_6 = "۶ ماه اخیر (۱۸۰ روز)"
+BTN_MG_RANGE_12 = "یک سال اخیر (۳۶۵ روز)"
 BTN_MG_RANGE_CUSTOM = "بازه ورودی کاربر"
+# legacy labels (old keyboards still on users' screens)
+MG_RANGE_LEGACY = {"۳ ماهه": 3, "۶ ماهه": 6, "یکساله": 12}
 BTN_MG_CONFIRM_PARTIAL = "✅ ادامه با دادهٔ موجود"
 
 # ---------------------------------------------------------------------------
@@ -794,6 +796,36 @@ def main_goal_range_menu() -> dict:
         [[BTN_MG_RANGE_3, BTN_MG_RANGE_6], [BTN_MG_RANGE_12, BTN_MG_RANGE_CUSTOM], [BTN_CANCEL]],
         "flow",
     )
+
+
+CB_MG_PICK_PREFIX = "mgpk|"
+
+
+def main_goal_month_picker_inline(year: int, selected: list, states: list, *, max_year: int) -> dict:
+    """Inline Jalali month picker for historical reports: ✅ selected, 🔒 future (rejected)."""
+    from bot.jalali import PERSIAN_MONTH_NAMES
+
+    fa = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+    sel = {(int(y), int(m)) for y, m in selected}
+    btns = []
+    for m, st in states:
+        name = PERSIAN_MONTH_NAMES.get(m, str(m))
+        if st == "future":
+            btns.append({"text": f"🔒 {name}", "callback_data": f"{CB_MG_PICK_PREFIX}l|{year}|{m}"})
+            continue
+        mark = "✅ " if (year, m) in sel else ""
+        suffix = " (جاری)" if st == "current" else ""
+        btns.append({"text": f"{mark}{name}{suffix}", "callback_data": f"{CB_MG_PICK_PREFIX}t|{year}|{m}"})
+    rows = [btns[i:i + 3] for i in range(0, 12, 3)]
+    nav = [{"text": f"◀ {str(year - 1).translate(fa)}", "callback_data": f"{CB_MG_PICK_PREFIX}y|{year - 1}"}]
+    if year < max_year:
+        nav.append({"text": f"{str(year + 1).translate(fa)} ▶", "callback_data": f"{CB_MG_PICK_PREFIX}y|{year + 1}"})
+    rows.append(nav)
+    rows.append([
+        {"text": f"📊 ساخت گزارش ({str(len(sel)).translate(fa)} ماه)", "callback_data": f"{CB_MG_PICK_PREFIX}go"},
+        {"text": "🧹 پاک کردن", "callback_data": f"{CB_MG_PICK_PREFIX}c"},
+    ])
+    return {"inline_keyboard": rows}
 
 
 def main_goal_partial_confirm_menu() -> dict:

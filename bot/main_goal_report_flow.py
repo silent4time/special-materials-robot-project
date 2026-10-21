@@ -80,6 +80,7 @@ _RANGE_BTNS = {
     kb.BTN_MG_RANGE_3: 3,
     kb.BTN_MG_RANGE_6: 6,
     kb.BTN_MG_RANGE_12: 12,
+    **kb.MG_RANGE_LEGACY,
 }
 _INPUT_SECTION = {
     kb.BTN_MG_INPUT_BILLET: "billet",
@@ -940,25 +941,105 @@ class MainGoalReportFlow(ProductionStatsMixin):
         months = self._history_gate(message)
         if months is None:
             return
+        from services import period_select as ps
+
+        latest = ps.latest_data_date(self.db)
         self.pending[str(user["bale_user_id"])] = {"await": "range_pick"}
         self._reply(
             message,
             "📊 درخواست گزارش از سابقهٔ ذخیره‌شده\n"
-            f"{mgh.history_count_line(len(months))}\n\n"
+            f"{mgh.history_count_line(len(months))}\n"
+            f"آخرین تاریخ داده: {ps.fmt_date(latest)}\n\n"
             "بازه را انتخاب کنید:\n"
-            "• ۳ ماهه / ۶ ماهه / یکساله — آخرین N ماه ذخیره‌شده\n"
-            "• بازه ورودی کاربر — مثلاً «از تیر ۱۴۰۵ تا شهریور ۱۴۰۵»",
+            "• ۳ ماه اخیر = ۹۰ روز / ۶ ماه = ۱۸۰ روز / یک سال = ۳۶۵ روز، منتهی به آخرین تاریخ داده\n"
+            "• بازه ورودی کاربر — تعداد روز، از تاریخ تا تاریخ، یا انتخاب ماه از فهرست",
             kb.main_goal_range_menu(),
         )
+
+    # ---- inline month picker (historical only: future months 🔒)
+    def _picker_markup(self, p: dict) -> dict:
+        from services import period_select as ps
+
+        t = ps.today()
+        year = int(p.get("pick_year") or t.year)
+        return kb.main_goal_month_picker_inline(
+            year, p.get("pick") or [], ps.year_month_states(year), max_year=t.year
+        )
+
+    def _send_picker(self, message: dict, p: dict) -> None:
+        chat_id = (message.get("chat") or {}).get("id") or self.app._uid(message)
+        self.app.client.send_message(
+            chat_id,
+            "📅 ماه‌ها را از فهرست سال جلالی انتخاب کنید (چند ماه مجاز است). "
+            "ماه‌های آینده 🔒 قفل‌اند؛ ماه جاری به‌صورت ناقص (تا آخرین روز داده) منظور می‌شود.",
+            reply_markup=self._picker_markup(p),
+        )
+
+    def on_month_pick_callback(self, data: str, message: dict, user: dict, answer) -> None:
+        from services import period_select as ps
+
+        uid = str(user["bale_user_id"])
+        p = self.pending.get(uid)
+        if not p or p.get("await") != "range_custom":
+            answer("انتخاب ماه منقضی شده؛ دوباره «📊 درخواست گزارش از سابقه» را بزنید.", alert=True)
+            return
+        parts = data[len(kb.CB_MG_PICK_PREFIX):].split("|")
+        op = parts[0]
+        if op == "l":
+            answer("🔒 ماه آینده در گزارش سابقه قابل انتخاب نیست (فقط پیش‌بینی/نیاز ماه آینده را می‌پذیرد).", alert=True)
+            return
+        pick = [tuple(x) for x in (p.get("pick") or [])]
+        if op == "t":
+            y, m = int(parts[1]), int(parts[2])
+            if ps.is_future_month(y, m):
+                answer("🔒 ماه آینده قابل انتخاب نیست.", alert=True)
+                return
+            if (y, m) in pick:
+                pick.remove((y, m))
+            else:
+                pick.append((y, m))
+            p["pick"] = sorted(pick)
+            answer(f"{len(pick)} ماه انتخاب شد")
+        elif op == "y":
+            y = int(parts[1])
+            if y > ps.today().year:
+                answer("🔒 سال آینده قابل انتخاب نیست.", alert=True)
+                return
+            p["pick_year"] = y
+            answer()
+        elif op == "c":
+            p["pick"] = []
+            answer("پاک شد")
+        elif op == "go":
+            if not pick:
+                answer("حداقل یک ماه انتخاب کنید.", alert=True)
+                return
+            answer()
+            self.pending[uid] = p
+            self._prepare_range(message, p, mgp.range_months(pick))
+            return
+        self.pending[uid] = p
+        chat_id = (message.get("chat") or {}).get("id")
+        if chat_id is not None and message.get("message_id") is not None:
+            try:
+                self.app.client.edit_message_reply_markup(chat_id, int(message["message_id"]), self._picker_markup(p))
+            except Exception:  # noqa: BLE001
+                pass
 
     def _on_range_pick(self, message: dict, p: dict, text: str) -> bool:
         if text == kb.BTN_MG_RANGE_CUSTOM:
             p["await"] = "range_custom"
+            p["pick"] = []
             self._reply(
                 message,
-                "بازه جلالی را بنویسید (مثلاً «از تیر ۱۴۰۵ تا شهریور ۱۴۰۵» یا «شهریور ۱۴۰۵»):",
+                "بازه را بنویسید:\n"
+                "• تعداد روز — مثلاً «۴۵» یا «۴۵ روز» (منتهی به آخرین تاریخ داده)\n"
+                "• از تاریخ تا تاریخ — مثلاً «1405/05/01 تا 1405/07/29»\n"
+                "• یا بازهٔ ماه — «از تیر ۱۴۰۵ تا شهریور ۱۴۰۵»\n"
+                "یا از فهرست زیر ماه‌ها را انتخاب کنید.",
                 kb.main_goal_cancel_menu(),
             )
+            self._send_picker(message, p)
             return True
         n = _RANGE_BTNS.get(text)
         spec = mgp.range_last_n(n) if n else mgp.parse_range_choice(text)
@@ -969,15 +1050,13 @@ class MainGoalReportFlow(ProductionStatsMixin):
 
     def _on_range_custom(self, message: dict, p: dict, text: str) -> bool:
         spec = mgp.parse_range_choice(text)
-        if not spec or spec.kind != "custom":
-            # also accept last_n phrasing
-            if not spec:
-                self._reply(
-                    message,
-                    "بازه معتبر نیست. مثال: از تیر ۱۴۰۵ تا شهریور ۱۴۰۵",
-                    kb.main_goal_cancel_menu(),
-                )
-                return True
+        if not spec:
+            self._reply(
+                message,
+                "بازه معتبر نیست. مثال: «۹۰ روز»، «1405/05/01 تا 1405/07/29» یا «از تیر ۱۴۰۵ تا شهریور ۱۴۰۵»",
+                kb.main_goal_cancel_menu(),
+            )
+            return True
         return self._prepare_range(message, p, spec)
 
     def _prepare_range(self, message: dict, p: dict, spec) -> bool:
@@ -986,8 +1065,12 @@ class MainGoalReportFlow(ProductionStatsMixin):
         if not user:
             self.clear(uid)
             return True
+        err = mgp.future_error_fa(spec)
+        if err:
+            self._reply(message, err + "\nبازهٔ دیگری بنویسید یا انتخاب کنید.", kb.main_goal_cancel_menu())
+            return True
         months = mgh.load_history(self.db)
-        selected, warns = mgp.filter_months_by_range(months, spec)
+        selected, warns = mgp.filter_months_by_range(months, spec, db=self.db)
         if not selected:
             self.clear(uid)
             self._reply(
@@ -998,19 +1081,13 @@ class MainGoalReportFlow(ProductionStatsMixin):
             return True
         if warns:
             p["await"] = "range_confirm"
-            p["range_spec"] = {
-                "kind": spec.kind,
-                "n_months": spec.n_months,
-                "start": spec.start,
-                "end": spec.end,
-                "label_fa": spec.label_fa,
-            }
+            p["range_spec"] = mgp.spec_to_dict(spec)
             self.pending[uid] = p
             self._reply(
                 message,
-                "⚠ دادهٔ بازه ناقص است:\n"
+                "⚠ دادهٔ بازه ناقص است یا هشدار دارد:\n"
                 + "\n".join(f"• {w}" for w in warns)
-                + f"\n\n{len(selected)} ماه موجود است. با دادهٔ موجود ادامه دهیم؟",
+                + f"\n\nمبنا: {'، '.join(r.label for r in selected)}. با دادهٔ موجود ادامه دهیم؟",
                 kb.main_goal_partial_confirm_menu(),
             )
             return True
@@ -1022,11 +1099,7 @@ class MainGoalReportFlow(ProductionStatsMixin):
             return True
         uid = self.app._uid(message)
         user = self._user(message)
-        raw = p.get("range_spec") or {}
-        if raw.get("kind") == "custom" and raw.get("start") and raw.get("end"):
-            spec = mgp.range_custom(tuple(raw["start"]), tuple(raw["end"]))
-        else:
-            spec = mgp.range_last_n(int(raw.get("n_months") or 3))
+        spec = mgp.spec_from_dict(p.get("range_spec") or {})
         self.clear(uid)
         if not user:
             return True
