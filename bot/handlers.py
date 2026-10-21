@@ -25,6 +25,7 @@ from analytics.frames import (
     resolve_warehouse_remaining,
 )
 from analytics.tundish import (
+    rates_basis_suffix,
     critical_materials,
     daily_rates,
     filter_by_tundish_type,
@@ -248,6 +249,19 @@ class BotApp:
             return public_markup(markup)
         key = str(markup.get("_menu"))
         cur = self._nav.get(uid) or {}
+        if not hasattr(self, "_nav_markups"):
+            self._nav_markups: dict[str, dict[str, dict]] = {}
+        if key == "main" and not self._explicit_home(uid):
+            # T14 task C: after an input/action inside a section the user STAYS in
+            # that section's menu; only «منوی اصلی»، /start or «بازگشت» to the top
+            # level opens the main menu.
+            here = cur.get("origin") if cur.get("key") == "flow" else cur.get("key")
+            saved = (self._nav_markups.get(uid) or {}).get(str(here or ""))
+            if here and here != "main" and saved:
+                markup = dict(saved)
+                key = str(here)
+        if key not in ("main", "flow"):
+            self._nav_markups.setdefault(uid, {})[key] = dict(markup)
         self._mark_flow(uid, key == "flow")
         if key == "flow":
             origin = cur.get("origin") if cur.get("key") == "flow" else cur.get("key")
@@ -255,6 +269,16 @@ class BotApp:
         else:
             self._nav[uid] = {"key": key}
         return public_markup(markup)
+
+    def _explicit_home(self, uid: str) -> bool:
+        """True when the user's current message itself asks for the main menu."""
+        t = (getattr(self, "_last_in", {}) or {}).get(uid, "")
+        return (
+            not t
+            or t.startswith("/")
+            or t in (kb.BTN_HOME, kb.BTN_BACK)
+            or t in kb.REMOVED_HINTS
+        )
 
     # ---------- 19d: «operation expired after restart» ----------
     _FLOW_KEY = "flow_open:"
@@ -3799,7 +3823,7 @@ class BotApp:
             title=title,
             subtitle=(
                 f"بخش: {self._section_label(section)} | مبنا: میانگین مصرف روزانه هر ماده/تاندیش = "
-                f"مصرف ثبت‌شده در {range_label} ÷ تعداد روزهای دارای داده (موجودی روزانه سایت و مصرف ماهیانه)"
+                f"مصرف ثبت‌شده در {range_label} ÷ روزهای ماه‌های دارای داده (ماه بدون داده حذف می‌شود، صفر حساب نمی‌شود){rates_basis_suffix(rates, range_label)}"
             ),
             columns=cols,
             rows=self._df_to_row_dicts(rates, cols),
@@ -3844,7 +3868,7 @@ class BotApp:
             message,
             title=title,
             subtitle=(
-                f"مبنا: روزهای پوشش = موجودی فعلی ÷ میانگین مصرف روزانهٔ {range_label}؛ "
+                f"مبنا: روزهای پوشش = موجودی فعلی ÷ میانگین مصرف روزانهٔ {range_label}{rates_basis_suffix(rates, range_label)}؛ "
                 f"اقلام با پوشش کمتر از {CRITICAL_DAYS} روز بحرانی‌اند | منبع موجودی: {rem_source}"
             ),
             sections=[
@@ -3911,7 +3935,7 @@ class BotApp:
             message,
             title=title,
             subtitle=(
-                f"نرخ مصرف بر اساس {range_label} | "
+                f"نرخ مصرف بر اساس {range_label}{rates_basis_suffix(rates, range_label)} | "
                 f"تعریف: پوشش > {cover_th:g} روز، یا موجودی بیش از نیاز "
                 f"{SURPLUS_FORECAST_DAYS:g} روز؛ مواد با موجودی ولی بدون مصرف = مازاد/بدون مصرف؛ "
                 f"کد دسته ۱۸۰۰ به‌صورت خودکار اقلام مازاد محسوب می‌شود"
@@ -6697,6 +6721,14 @@ class BotApp:
         raw_text = (message.get("text") or "").strip()
         # Old / renamed labels → current label (old keyboards stay usable)
         text = kb.canonical(raw_text)
+        try:
+            if not hasattr(self, "_last_in"):
+                self._last_in: dict[str, str] = {}
+            self._last_in[str(((message.get("from") or {}).get("id")) or "")] = (
+                raw_text if raw_text in kb.REMOVED_HINTS else text
+            ) or ("<file>" if (message.get("document") or message.get("photo") or message.get("voice")) else "")
+        except Exception:  # noqa: BLE001
+            pass
 
         # Group chats: only /set_stock_group (avoid menu spam in groups)
         if self._is_group_chat(message):

@@ -1181,10 +1181,24 @@ def exec_consumption(ctx: _Ctx, it: Intent) -> Answer:
     from services import period_consumption as pc
 
     p = it.slots.get("period")
-    if not p:
-        g = jalali_today().togregorian()
-        p = {"start": g - timedelta(days=29), "end": g, "label": "۳۰ روز اخیر"}
     sec = it.slots.get("section")
+    if not p:
+        # T14: no period asked → the latest complete month that actually has data
+        # (a «30 days» window never holds a whole month → always «no data»).
+        g = jalali_today().togregorian()
+        av = pc.data_availability(ctx.db, sec)
+        if av.get("mg_months"):
+            import jdatetime
+
+            from bot.jalali import PERSIAN_MONTH_NAMES
+
+            y, m = av["mg_months"][-1]
+            ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+            p = {"start": jdatetime.date(y, m, 1).togregorian(),
+                 "end": jdatetime.date(ny, nm, 1).togregorian() - timedelta(days=1),
+                 "label": f"آخرین ماه دارای داده: {PERSIAN_MONTH_NAMES[m]} {y}"}
+        else:
+            p = {"start": g - timedelta(days=29), "end": g, "label": "۳۰ روز اخیر"}
     label = f"{p['label']} (از {format_date(p['start'])} تا {format_date(p['end'])})"
     res = pc.build(ctx.db, p["start"], p["end"], range_label=label, section=sec)
     if res.error:
@@ -1318,7 +1332,8 @@ def exec_tundish_stats(ctx: _Ctx, it: Intent) -> Answer:
         months = sorted((int(r[0]), int(r[1])) for r in rows)
     sec_only = it.slots.get("section")
     secs = [sec_only] if sec_only else ["slab", "bloom", "billet"]
-    manual = {(int(r["jalali_year"]), int(r["jalali_month"])): r for r in db.list_monthly_tundish_counts(limit=240)}
+    manual = {(int(r["jalali_year"]), int(r["jalali_month"])): r for r in db.list_monthly_tundish_counts(limit=240)
+              if not int(r.get("exclude_from_basis") or 0)}
     lines = ["🧱 آمار توالی تاندیش" + (f" — {SECTION_FA[sec_only]}" if sec_only else "")]
     facts: dict[str, Any] = {}
     any_data = False

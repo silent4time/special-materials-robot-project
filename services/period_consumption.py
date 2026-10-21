@@ -66,6 +66,7 @@ class PeriodConsumptionResult:
     mg_rows: list[dict[str, Any]] = field(default_factory=list)
     mg_counts: list[dict[str, Any]] = field(default_factory=list)
     mg_months: list[tuple[int, int]] = field(default_factory=list)
+    mg_missing: list[tuple[int, int]] = field(default_factory=list)
     error: str | None = None
     pdf: Path | None = None
     xlsx: Path | None = None
@@ -92,6 +93,11 @@ class PeriodConsumptionResult:
 
             months = "، ".join(f"{PERSIAN_MONTH_NAMES[m]} {y}" for y, m in self.mg_months)
             parts.append(f"(ب) جداول مصرف تاندیش ماهانهٔ «هدف اصلی» برای ماه‌های کامل: {months}")
+        if self.mg_missing:
+            from bot.jalali import PERSIAN_MONTH_NAMES
+
+            miss = "، ".join(f"{PERSIAN_MONTH_NAMES[m]} {y}" for y, m in self.mg_missing)
+            parts.append(f"ماه‌های کامل بازه بدون داده (از مبنا حذف شد، صفر حساب نشد): {miss}")
         return "منبع داده: " + (" + ".join(parts) if parts else "—")
 
     @property
@@ -315,7 +321,10 @@ def build(db: Any, start: date, end: date, *, range_label: str, section: str | N
         section = None
     res = PeriodConsumptionResult(start=start, end=end, range_label=range_label, section=section or None)
     res.site_rows, res.site_entry_count = _site_rows(db, start, end, res.section)
-    res.mg_rows, res.mg_counts, res.mg_months = _mg_rows(db, full_months_in_range(start, end), res.section)
+    full = full_months_in_range(start, end)
+    res.mg_rows, res.mg_counts, res.mg_months = _mg_rows(db, full, res.section)
+    if res.mg_months:
+        res.mg_missing = [ym for ym in full if ym not in set(res.mg_months)]
     if not res.site_rows and not res.mg_rows and not res.mg_counts:
         from bot.jalali import format_date
 

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from analytics.tundish import (
+    rates_basis_suffix,
     critical_materials,
     daily_rates,
     surplus_materials,
@@ -99,7 +100,7 @@ def generate_remaining_critical_files(
     range_label = f"{days} روز اخیر"
     title = f"پوشش کوتاه‌مدت موجودی سایت — {range_label}"
     subtitle = (
-        f"مبنا: روزهای پوشش = موجودی فعلی ÷ میانگین مصرف روزانهٔ {range_label}؛ "
+        f"مبنا: روزهای پوشش = موجودی فعلی ÷ میانگین مصرف روزانهٔ {range_label}{rates_basis_suffix(rates, range_label)}؛ "
         f"اقلام با پوشش کمتر از {CRITICAL_DAYS} روز بحرانی‌اند | منبع موجودی: {rem_source}"
     )
     sections = [
@@ -181,7 +182,7 @@ def generate_surplus_files(
     range_label = f"{days} روز اخیر"
     title = f"گزارش مواد مازاد — {range_label}"
     subtitle = (
-        f"منبع موجودی: {rem_source} | نرخ مصرف بر اساس {range_label} | "
+        f"منبع موجودی: {rem_source} | نرخ مصرف بر اساس {range_label}{rates_basis_suffix(rates, range_label)} | "
         f"تعریف: پوشش > {cover_th:g} روز؛ "
         f"کد دسته ۱۸۰۰ به‌صورت خودکار اقلام مازاد محسوب می‌شود"
     )
@@ -395,7 +396,7 @@ def generate_daily_files(
     title = f"مصرف روزانه مواد — {range_label} — {sec_label}"
     subtitle = (
         f"بخش: {sec_label} | مبنا: میانگین مصرف روزانه هر ماده/تاندیش = مصرف ثبت‌شده در {range_label} ÷ "
-        "تعداد روزهای دارای داده (موجودی روزانه سایت و مصرف ماهیانه)"
+        f"روزهای ماه‌های دارای داده (ماه بدون داده حذف می‌شود، صفر حساب نمی‌شود){rates_basis_suffix(rates, range_label)}"
     )
     rows = _df_rows(rates, cols)
     stem = _stamp_stem("daily_rates")
