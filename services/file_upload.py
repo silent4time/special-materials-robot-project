@@ -40,6 +40,7 @@ class UploadOutcome:
     session: dict | None = None
     inbound_report: dict | None = None
     unit_alert: dict | None = None
+    missing_alert: dict | None = None
 
 
 def process_upload(
@@ -156,6 +157,7 @@ def process_upload(
     new_kept = int(result.kept_row_count)
     merge_note = ""
     stock_note = ""
+    stock_info: dict = {}
     source_guard_error = ""
     skipped_note = ""
     # t221u: «📥 موجودی انبار» (stock update) vs authorized full منبع اصلی upload.
@@ -325,13 +327,22 @@ def process_upload(
             )
         except Exception:  # noqa: BLE001
             logger.exception("unit mismatch check failed")
+    missing_alert = None
+    if is_stock_upload and (stock_info or {}).get("missing"):
+        try:
+            from services.unit_mismatch import check_missing_stock
+
+            missing_alert = check_missing_stock(db, raw_path=Path(result.raw_path), items=stock_info["missing"],
+                                                file_label="به‌روزرسانی موجودی انبار", actor=actor_fa)
+        except Exception:  # noqa: BLE001
+            logger.exception("missing-stock alarm failed")
     if pending == "product_inventory":
         log_activity(db, user, "upload_product_inventory")
     elif pending == "monthly_consumption":
         log_activity(db, user, "upload_monthly_consumption")
     return UploadOutcome(
         ok=True, kind="ok", pending=pending, session=session, inbound_report=inbound_report,
-        unit_alert=unit_alert,
+        unit_alert=unit_alert, missing_alert=missing_alert,
         text=(
             f"✅ فایل «{label}» دریافت شد.\n"
             f"از {result.raw_row_count} ردیف خام، {new_kept} ردیف نگه داشته شد."

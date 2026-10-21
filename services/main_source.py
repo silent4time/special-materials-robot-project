@@ -901,6 +901,17 @@ def merge_stock_update(
     if added_rows:
         out = pd.concat([out, pd.DataFrame(added_rows, columns=out.columns)], ignore_index=True)
     info["missing_kept"] = sum(1 for k in pos if k not in seen)
+    # rows of منبع اصلی absent from this stock file — kept unchanged; listed for the alarm
+    info["missing"] = [
+        {
+            "کد ۴ رقمی": _norm_code4(old.at[i, "category_code"]) if "category_code" in old.columns else "",
+            "آیدی": _cell_str(old.at[i, "id"]),
+            "شرح": _cell_str(old.at[i, "product_name"]) if "product_name" in old.columns else "",
+            "موجودی قبلی": old.at[i, "quantity"] if "quantity" in old.columns else None,
+            "واحد": _cell_str(old.at[i, "unit"]) if "unit" in old.columns else "",
+        }
+        for k, i in pos.items() if k not in seen
+    ]
     return out.reset_index(drop=True), info
 
 

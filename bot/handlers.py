@@ -1586,6 +1586,10 @@ class BotApp:
             from services.unit_mismatch import send_alert
 
             send_alert(self.client, self.db, out.unit_alert, uploader=str(user["bale_user_id"]))
+        if out.missing_alert:
+            from services.unit_mismatch import send_alert as _send
+
+            _send(self.client, self.db, out.missing_alert, uploader=str(user["bale_user_id"]))
 
     # ---------- 📊 گزارش جامع (merged «گزارش کلی مواد» + «PDF کامل تحلیل») ----------
     def on_comprehensive_prompt(self, message: dict) -> None:

@@ -223,3 +223,81 @@ def send_alert(client: Any, db: Any, alert: dict, *, uploader: str | None, to_up
         except Exception:  # noqa: BLE001
             logger.warning("unit alert send failed")
     return sent
+
+
+# ---- stock upload: main-source IDs missing from the new file (stock kept unchanged) ----
+def _qty_fa(v: Any) -> str:
+    try:
+        f = float(v)
+        return _fa(int(f) if f == int(f) else round(f, 2))
+    except (TypeError, ValueError):
+        return "—"
+
+
+def missing_stock_text_fa(items: list[dict], *, file_label: str, actor: str = "", has_excel: bool = False) -> str:
+    lines = [
+        f"🚨 هشدار: {_fa(len(items))} قلم منبع اصلی در فایل «{file_label}» نبود" + (f" — {actor}" if actor else ""),
+        "موجودی این اقلام تغییر نکرد (همان موجودی قبلی ماند) و همچنان در گزارش‌ها حساب می‌شود. "
+        "اگر قلمی واقعاً حذف یا تمام شده، آن را در منبع اصلی اصلاح کنید.",
+        "(کد ۴ رقمی | آیدی | شرح | موجودی قبلی | واحد):",
+    ]
+    for r in items[:TEXT_ROWS]:
+        lines.append(f"• {r.get('کد ۴ رقمی') or '—'} | {r.get('آیدی') or '—'} | {str(r.get('شرح') or '')[:45]} | "
+                     f"{_qty_fa(r.get('موجودی قبلی'))} | {r.get('واحد') or '—'}")
+    if len(items) > TEXT_ROWS:
+        lines.append(f"… و {_fa(len(items) - TEXT_ROWS)} قلم دیگر" + (" (فهرست کامل در فایل اکسل پیوست)" if has_excel else ""))
+    return "\n".join(lines)
+
+
+def write_missing_excel(items: list[dict], out: Path) -> Path:
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "اقلام نبوده در فایل"
+    ws.sheet_view.rightToLeft = True
+    cols = ["ردیف", "کد ۴ رقمی", "آیدی", "شرح", "موجودی قبلی", "واحد"]
+    ws.append(cols)
+    for n, r in enumerate(items, 1):
+        ws.append([n] + [r.get(c) for c in cols[1:]])
+    thin = Side(style="thin")
+    for row in ws.iter_rows():
+        for c in row:
+            c.font = Font(name="Tahoma", size=10, bold=c.row == 1)
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+            if c.row == 1:
+                c.fill = PatternFill("solid", fgColor="F8CBAD")
+    for letter, w in zip("ABCDEF", (6, 11, 18, 50, 14, 10)):
+        ws.column_dimensions[letter].width = w
+    out.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(out)
+    return out
+
+
+def check_missing_stock(db: Any, *, raw_path: Path, items: list[dict], file_label: str, actor: str = "") -> dict | None:
+    """Alert dict for main-source IDs absent from a stock upload (new ones only per file)."""
+    if not items:
+        return None
+    try:
+        key = SEEN_KEY + _file_hash(Path(raw_path))
+        seen = set(json.loads(db.get_setting(key) or "[]"))
+        new = [r for r in items if f"gone|{r.get('آیدی')}" not in seen]
+        db.set_setting(key, json.dumps(sorted(seen | {f"gone|{r.get('آیدی')}" for r in new}), ensure_ascii=False))
+    except Exception:  # noqa: BLE001
+        new = items
+    if not new:
+        return None
+    new = sorted(new, key=lambda r: (str(r.get("کد ۴ رقمی")), str(r.get("آیدی"))))
+    xlsx = None
+    if len(new) > EXCEL_THRESHOLD:
+        try:
+            from config import REPORT_DIR
+            from services.file_names import fa_stem, unique_dir
+
+            xlsx = write_missing_excel(new, unique_dir(REPORT_DIR, "stock_missing") / f"{fa_stem('اقلام نبوده در فایل موجودی')}.xlsx")
+        except Exception:  # noqa: BLE001
+            logger.exception("missing-stock excel failed")
+    return {"text": missing_stock_text_fa(new, file_label=file_label, actor=actor, has_excel=bool(xlsx)),
+            "xlsx": str(xlsx) if xlsx else None, "items": new}
