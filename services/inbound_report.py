@@ -198,11 +198,14 @@ def compute_inbound(
         if not key or key in rej_keys:
             continue
         rej_keys.add(key)
+        rm = meta.get(key)
         res.rejected.append(
             {
-                COL_CODE: _norm_code4(r.get("category_code")) or "—",
+                COL_CODE: _norm_code4(r.get("category_code"))
+                or (_text(rm.get("category_code")) if rm is not None else "") or "—",
                 COL_ID: _text(r.get("id")),
-                "شرح کالا": _text(r.get("product_name")) or "—",
+                "شرح کالا": _text(r.get("product_name"))
+                or (_text(rm.get("product_name")) if rm is not None else "") or "—",
                 "موجودی": _num(_qty(r.get("quantity"))),
                 "دلیل": _text(r.get("reason")),
             }
@@ -212,7 +215,10 @@ def compute_inbound(
         key = row["_key"]
         if key in rej_keys:
             continue
-        code = row["category_code"]
+        m = meta.get(key)
+        # v1.3.0: a stock file row matched only by ID (blank/merged «کد دسته») takes the
+        # 4-digit code from منبع اصلی
+        code = row["category_code"] or (_text(m.get("category_code")) if m is not None else "")
         if code == SURPLUS_CATEGORY_CODE:
             res.n_excluded_1800 += 1
             continue
@@ -235,10 +241,9 @@ def compute_inbound(
                 res.n_zero_new += 1
                 continue
             kind, inbound, prev = TYPE_NEW_ID, new_q, None
-        m = meta.get(key)
         def pick(col: str) -> str:
-            val = (m.get(col) if m is not None else "") or row.get(col) or ""
-            return str(val)
+            # منبع اصلی first, then the stock file; NaN/None never print as «nan»
+            return (_text(m.get(col)) if m is not None else "") or _text(row.get(col))
         keyword = pick("keyword") or pick("product_name") or "—"
         res.lines.append(
             {
@@ -267,7 +272,23 @@ def compute_inbound(
     for i, r in enumerate(res.rejected, 1):
         r[COL_ROW] = i
 
-    labels = category_labels or {}
+    labels = dict(category_labels or {})
+    # v1.3.0: «شرح دسته» never blank — category_codes.label, else the code's
+    # keywords in منبع اصلی (unique, in order)
+    kw_by_code: dict[str, list[str]] = {}
+    for _k, mr in meta.items():
+        c4 = _text(mr.get("category_code"))
+        kw = _text(mr.get("keyword")) or _text(mr.get("product_name"))
+        if c4 and kw and kw not in kw_by_code.setdefault(c4, []):
+            kw_by_code[c4].append(kw)
+    for r in res.lines:
+        c4 = str(r[COL_CODE])
+        kw = str(r.get(COL_KEYWORD) or "")
+        if c4 and kw and kw != "—" and kw not in kw_by_code.setdefault(c4, []):
+            kw_by_code[c4].append(kw)
+    for c4, kws in kw_by_code.items():
+        if not str(labels.get(c4) or "").strip() and kws:
+            labels[c4] = "، ".join(kws[:4])
     by_code: dict[str, dict[str, Any]] = {}
     for r in res.lines:
         agg = by_code.setdefault(
@@ -285,7 +306,7 @@ def compute_inbound(
             {
                 COL_ROW: i,
                 COL_CODE: code,
-                "شرح دسته": labels.get(code, ""),
+                "شرح دسته": str(labels.get(code) or "").strip() or "—",
                 "تعداد افزایش": agg["تعداد افزایش"],
                 "تعداد شناسه جدید": agg["تعداد شناسه جدید"],
                 "تعداد کل اقلام": agg["تعداد افزایش"] + agg["تعداد شناسه جدید"],
@@ -585,8 +606,21 @@ def _summary_rows_with_ids(report: dict[str, Any]) -> list[dict[str, Any]]:
     by_code: dict[str, list[str]] = {}
     for ln in report.get("lines") or []:
         by_code.setdefault(str(ln.get(COL_CODE) or "").strip(), []).append(str(ln.get(COL_ID) or "").strip())
-    return [dict(r, _ids=by_code.get(str(r.get(COL_CODE) or "").strip(), []))
-            for r in report.get("summary") or []]
+    kws: dict[str, list[str]] = {}
+    for ln in report.get("lines") or []:
+        kw = str(ln.get(COL_KEYWORD) or "").strip()
+        lst = kws.setdefault(str(ln.get(COL_CODE) or "").strip(), [])
+        if kw and kw != "—" and kw not in lst:
+            lst.append(kw)
+    out = []
+    for r in report.get("summary") or []:
+        code = str(r.get(COL_CODE) or "").strip()
+        row = dict(r, _ids=by_code.get(code, []))
+        if str(row.get("شرح دسته") or "").strip() in ("", "—"):
+            # older stored reports: category label was blank → the code's keywords
+            row["شرح دسته"] = "، ".join(kws.get(code, [])[:4]) or "—"
+        out.append(row)
+    return out
 
 
 def report_sections(report: dict[str, Any]) -> list[dict[str, Any]]:

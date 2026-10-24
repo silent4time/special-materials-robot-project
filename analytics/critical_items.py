@@ -448,14 +448,26 @@ def _pick_description(
     live = candidates.loc[candidates["_prio"] != float(NO_PRIORITY)]
     pool = live if not live.empty else candidates
     pool = pool.sort_values(by=["_prio"], kind="stable")
+    def _s(v) -> str:
+        t = "" if v is None else str(v).strip()
+        return "" if t.lower() in ("nan", "none", "nat") else t
+
     row = pool.iloc[0]
-    keyword = str(row.get("keyword") or "").strip()
-    product = str(row.get("product_name") or "").strip()
+    keyword = _s(row.get("keyword"))
+    product = _s(row.get("product_name"))
     desc = keyword if keyword else _short_desc(product)
-    if not desc:
-        desc = _short_desc(product) or "—"
-    unit = str(row.get("unit") or "").strip()
-    return desc, unit
+    unit = _s(row.get("unit"))
+    if not desc or not unit:
+        # v1.3.0: the chosen row has no keyword/name (e.g. stock-update row matched by ID)
+        # → any other row of the group that has one; never «nan» / blank
+        for _, other in work.sort_values(by=["_prio"], kind="stable").iterrows():
+            if not desc:
+                desc = _s(other.get("keyword")) or _short_desc(_s(other.get("product_name")))
+            if not unit:
+                unit = _s(other.get("unit"))
+            if desc and unit:
+                break
+    return desc or "—", unit
 
 
 def drop_priority_zero_rows(inventory_df: pd.DataFrame) -> pd.DataFrame:

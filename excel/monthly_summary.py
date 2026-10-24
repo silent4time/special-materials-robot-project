@@ -560,6 +560,18 @@ def build_summary_sheet_rows(data: MonthlySummaryData) -> list[SummarySheetRow]:
             subtotal_vals = _empty9()
             subtotal_vals[2] = float(group["مقدار"].sum())
             subtotal_vals[8] = f"جمع {desc}"
+            # v1.3.0: subtotal rows carry the group's code / ID too (never blank cells)
+            for ci, col in ((0, "کد دسته بندی"), (1, "کد کالا")):
+                if col in group.columns:
+                    vals = [str(v).strip() for v in group[col].tolist()
+                            if str(v).strip() and str(v).strip().lower() != "nan"]
+                    uniq = list(dict.fromkeys(vals))
+                    if uniq:
+                        subtotal_vals[ci] = uniq[0] if len(uniq) == 1 else "، ".join(uniq[:3])
+            if not group.empty and "واحد" in group.columns:
+                units = list(dict.fromkeys(str(u) for u in group["واحد"].tolist() if str(u).strip()))
+                if len(units) == 1:
+                    subtotal_vals[7] = units[0]
             rows.append(
                 SummarySheetRow(
                     kind="subtotal",
