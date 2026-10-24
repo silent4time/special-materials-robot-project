@@ -226,7 +226,10 @@ def test_critical_live_copy() -> None:
         check(notes[0] == HORIZON_NOTE, f"live {ws.title}: horizon note first ({notes[0]})")
         check(str(notes[1] or "").startswith("تاریخ گزارش:") and "تاندیش" in str(notes[1]),
               f"live {ws.title}: date/basis note ({notes[1]})")
-        check(all(v is None for v in notes[2:]), f"live {ws.title}: rest of the notes block blank {notes[2:]}")
+        # v1.3.1: third fixed note = rated items per section.
+        check(str(notes[2] or "").startswith(("اقلام دارای نرخ مصرف", "⚠️")),
+              f"live {ws.title}: section rates note ({notes[2]})")
+        check(all(v is None for v in notes[3:]), f"live {ws.title}: rest of the notes block blank {notes[2:]}")
         _ = critical_item_count(df)
     from pypdf import PdfReader
 

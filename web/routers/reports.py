@@ -188,7 +188,8 @@ async def critical_items_pdf(
     if not err and path is None:
         err = (
             f"قلم بحرانیِ «{SEGMENT_LABEL_FA[segment]}» "
-            f"({res.reno_label}) با کسری (نیاز مثبت) در افق ۳/۶ ماه یافت نشد."
+            f"({res.reno_label}) با کسری (نیاز مثبت) در افق ۳/۶ ماه یافت نشد. "
+            f"{res.rates_lines.get(segment, '')}"
         )
     if err or not path:
         return RedirectResponse(

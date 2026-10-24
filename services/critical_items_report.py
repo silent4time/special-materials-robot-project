@@ -74,6 +74,8 @@ class CriticalItemsResult:
     reno_mode: str = RENO_WITH
     rates_hint: bool = False
     rates_note: str = ""
+    # v1.3.1: per segment «نرخ‌دار: بیلت N، اسلب M …» (shows missing rates).
+    rates_lines: dict[str, str] = field(default_factory=dict)
     audit: dict[str, list[str]] = field(default_factory=dict)
     # template sheets (rows + fixed notes, no user notes) — the draft/approve
     # workflow (services.critical_report_archive) re-renders files from these.
@@ -312,6 +314,67 @@ def template_sheet_name(counts: TundishMonthCounts, segment: str) -> str:
     return f"{ym} {SEGMENT_FILE_SUFFIX[segment]}"
 
 
+_SECTION_RATE_LABELS = (
+    ("billet", "بیلت", ("billet_renovation", "billet_patching")),
+    ("slab", "اسلب", ("slab_renovation", "slab_patching")),
+    ("bloom", "بلوم", ("bloom_renovation", "bloom_patching")),
+    ("casting_floor", "سطح ریخته‌گری", ("casting_floor",)),
+)
+
+
+def section_rate_counts(inv: pd.DataFrame | None, segment: str,
+                        reno_mode: str = RENO_WITH) -> dict[str, int]:
+    """{billet|slab|bloom|casting_floor: number of 4-digit codes with a rate > 0} in a
+    segment, after the same preparation as the report (1800/priority 0 dropped,
+    section attribution). Only the rate columns active in ``reno_mode`` count."""
+    from analytics.critical_items import active_rate_cols, prepare_code_rates
+
+    out = {k: 0 for k, _l, _c in _SECTION_RATE_LABELS}
+    try:
+        prep = prepare_code_rates(inv, segment=segment)
+    except Exception:  # noqa: BLE001
+        prep = None
+    if not prep:
+        return out
+    active = set(active_rate_cols(reno_mode))
+    for info in prep[0].values():
+        rates = info.get("rates") or {}
+        for key, _lab, cols in _SECTION_RATE_LABELS:
+            if any(c in active and float(rates.get(c) or 0) > 0 for c in cols):
+                out[key] += 1
+    return out
+
+
+def section_rates_line(inv: pd.DataFrame | None, segment: str, counts: TundishMonthCounts | None,
+                       reno_mode: str = RENO_WITH) -> str:
+    """«اقلام نرخ‌دار (پیمانکار): اسلب ۱۲ قلم، بیلت ۰ قلم ⚠️ …» — makes a section with
+    no rates (rates import not applied) or with 0 tundish visible in the header."""
+    from analytics.critical_items import filter_inventory_segment
+
+    try:
+        seg_df = filter_inventory_segment(inv, segment)
+    except Exception:  # noqa: BLE001
+        seg_df = None
+    if seg_df is None or seg_df.empty:
+        return (f"⚠️ در منبع اصلی هیچ قلمی با تأمین‌کنندهٔ «{SEGMENT_LABEL_FA[segment]}» "
+                "ثبت نشده (ستون شرکت/پیمانکار را بررسی کنید).")
+    rc = section_rate_counts(inv, segment, reno_mode)
+    tc = {"billet": getattr(counts, "count_billet", 0), "slab": getattr(counts, "count_slab", 0),
+          "bloom": getattr(counts, "count_bloom", 0)}
+    parts = []
+    for key, lab, _c in _SECTION_RATE_LABELS:
+        n = rc[key]
+        txt = f"{lab} {n} قلم"
+        if key in tc:
+            by_rule = (segment, key) in {(SEGMENT_CONTRACTOR, "billet"), (SEGMENT_COMPANY, "bloom")}
+            if n == 0 and tc[key] and not by_rule:
+                txt += " ⚠️بدون نرخ"
+            elif n and not tc[key]:
+                txt += " (تعداد تاندیش ۰ → بدون نیاز)"
+        parts.append(txt)
+    return f"اقلام دارای نرخ مصرف ({SEGMENT_LABEL_FA[segment]}): " + "، ".join(parts) + "."
+
+
 def template_sheet(
     counts: TundishMonthCounts,
     segment: str,
@@ -319,9 +382,10 @@ def template_sheet(
     reno_mode: str,
     audit: dict[str, list[str]] | None = None,
     user_notes: str | None = None,
+    rates_line: str | None = None,
 ) -> dict[str, Any]:
     sec = _segment_table_section(segment, df if df is not None else pd.DataFrame(), reno_mode)
-    fixed = fixed_notes(counts)
+    fixed = fixed_notes(counts) + ([rates_line] if rates_line else [])
     return {
         "segment": segment,
         "name": template_sheet_name(counts, segment),
@@ -427,6 +491,7 @@ def generate_critical_items_files(
         res.error = "منبع اصلی یافت نشد."
         return res
     res.frames = build_critical_items_segments(inv, counts, reno_mode)
+    res.rates_lines = {seg: section_rates_line(inv, seg, counts, reno_mode) for seg in SEGMENTS}
     res.audit = {"missing": [], "mixed": []}
     for seg in SEGMENTS:
         a = origin_audit(inv, seg)
@@ -437,6 +502,7 @@ def generate_critical_items_files(
             "قلمی با کسری (نیاز مثبت) در افق ۳ ماه (داخلی) / ۶ ماه (وارداتی) "
             f"({RENO_LABEL_FA[reno_mode]}) یافت نشد. {horizon_header_note(counts)}"
         )
+        res.error += "\n" + "\n".join(res.rates_lines.values())
         from services.rates_import import presence_message_fa
 
         res.rates_hint = True
@@ -455,7 +521,8 @@ def generate_critical_items_files(
     for seg in SEGMENTS:
         res.titles[seg] = report_title(counts, seg, reno_mode)
         res.sheets.append(template_sheet(counts, seg, res.frames[seg], reno_mode, res.audit,
-                                         user_notes=user_notes))
+                                         user_notes=user_notes,
+                                         rates_line=res.rates_lines.get(seg)))
     res.xlsx, res.pdfs = render_critical_files(
         res.sheets, out_dir=out_dir, prefix=prefix, user_notes=user_notes,
         letterhead_path=letterhead_path,
@@ -476,7 +543,9 @@ def critical_items_bot_lines(res: CriticalItemsResult, top: int = BOT_TOP_ROWS) 
                      (SEGMENT_CONTRACTOR, "پیمانکار (گزارش جداگانه)")):
         df = res.frames.get(seg)
         n = res.row_count(seg)
-        lines.append(f"• {tag}: {n} قلم" + ("" if n else " — قلمی با نیاز مثبت نبود"))
+        lines.append(f"• {tag}: {n} قلم" + ("" if n else " — قلمی با نیاز مثبت نبود (PDF جداگانه ندارد)"))
+        if res.rates_lines.get(seg):
+            lines.append(f"  {res.rates_lines[seg]}")
         if df is None or df.empty:
             continue
         shown = 0
