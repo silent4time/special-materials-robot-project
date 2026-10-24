@@ -45,6 +45,8 @@ BOT_TO_WEB = {
     "📄 دانلود اکسل منبع اصلی": "/settings/main-source/download.xlsx",
     "📋 کدهای دسته": "/settings/main-source",
     "📦 جایگزینی کامل منبع اصلی": "/settings/main-source/upload",
+    "📥 ورود نرخ‌های مصرف": "/settings/main-source/rates/review",
+    "⚠️ تأیید پاک شدن نرخ‌ها": "/settings/main-source/upload",
     "➕ افزودن رکورد": "/settings/main-source/add",
     "✏️ ویرایش رکورد": "/settings/main-source/edit",
     "➕ افزودن کد دسته": "/settings/main-source/categories/add",

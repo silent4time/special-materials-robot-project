@@ -130,8 +130,9 @@ def main() -> int:
 
     # 4) refuse when rates would be wiped (full upload path); live unchanged
     wiped = old.copy()
-    for c in ms.SOURCE_RATE_COLS:
-        wiped[c] = None
+    for c in ms.ALL_RATE_COLS:
+        if c in wiped.columns:
+            wiped[c] = None
     assert ms.rates_wiped(old, wiped) and not ms.rates_wiped(old, old)
 
     # 5) add-record approval flow (bot)

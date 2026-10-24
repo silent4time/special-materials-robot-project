@@ -4,7 +4,11 @@
 <div class="card">
   <h1>🚨 {{ report.title }} — {% if is_draft %}📝 پیش‌نویس{% else %}✅ تأییدشده{% endif %} #{{ report.id }}</h1>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
-  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  {% if error %}<div class="alert err" style="white-space:pre-line">{{ error }}</div>
+  {% if "ورود نرخ‌های مصرف" in error %}<p>
+    {% if can(user, "main_source_edit") %}<a class="btn" href="/settings/main-source#rates-import">📥 ورود نرخ‌های مصرف</a>{% endif %}
+    {% if can(user, "main_source_edit") or can(user, "file_inputs") %}<a class="btn" href="/settings/main-source/download.xlsx">📄 دانلود منبع اصلی</a>{% endif %}
+  </p>{% endif %}{% endif %}
   <p class="muted">
     حالت: {{ report.reno_label }} | تاریخ گزارش: <bdi>{{ report.report_date }}</bdi> |
     شرکت: {{ report.company_count }} قلم | پیمانکار: {{ report.contractor_count }} قلم |
