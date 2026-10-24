@@ -149,9 +149,12 @@ def build_plan(source: pd.DataFrame | None, incoming: pd.DataFrame) -> Plan:
             continue
         rid = ms._norm_id(r.get("id")) if "id" in incoming.columns else ""
         rcode = _code(r.get("category_code")) if "category_code" in incoming.columns else ""
-        if not rcode and rid:
-            rcode = rid[:4]
-        rows.append((rid, rcode, str(r.get("product_name") or "").strip(), vals))
+        # v1.3.0: material IDs do NOT start with the 4-digit code (e.g. 378121641302R) —
+        # an unknown ID without a code stays unmatched instead of hitting a wrong category
+        name = str(r.get("product_name") or "").strip()
+        if name.lower() == "nan":
+            name = ""
+        rows.append((rid, rcode, name, vals))
     plan.file_rows = len(rows)
     targets: dict[int, dict[str, float]] = {}
     pending_code = []

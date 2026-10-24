@@ -882,8 +882,11 @@ def merge_stock_update(
         if iid in pos:
             i = pos[iid]
             out.at[i, "quantity"] = row.get("quantity")
-            if _blank(out.at[i, "product_name"]) and not _blank(row.get("product_name")):
-                out.at[i, "product_name"] = row.get("product_name")
+            # fill only BLANK descriptive cells from the stock file (never overwrite)
+            for col in ("product_name", "category_code", "unit"):
+                if col in out.columns and col in new.columns and _blank(out.at[i, col]) \
+                        and not _blank(row.get(col)):
+                    out.at[i, col] = _norm_code4(row.get(col)) if col == "category_code" else row.get(col)
             info["updated"] += 1
         else:
             rec = {c: (row.get(c) if c in new.columns else None) for c in out.columns}
