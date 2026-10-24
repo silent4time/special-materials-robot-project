@@ -80,6 +80,9 @@ async def reports_page(
         "message": request.query_params.get("msg"),
         "error": request.query_params.get("err"),
     }
+    _dl = request.query_params.get("daily_latest") or ""
+    ctx["daily_latest"] = _dl if _dl.startswith("/reports/daily") else ""
+    ctx["daily_latest_label"] = request.query_params.get("daily_latest_label") or ""
     ctx.update(_critical_context(db, request))
     from services import critical_report_archive as _cra
 
@@ -378,14 +381,50 @@ async def remaining_critical_xlsx(
     return FileResponse(path, media_type=_XLSX, filename=path.name)
 
 
+def _daily_period(request: Request, db: Database, user: dict, section: str, action: str):
+    """``period=current`` → calendar Jalali month (no data → message + link to the latest month
+    with data); ``period=month&y=&m=`` → that month; otherwise the «N روز اخیر» window."""
+    from services import data_months as dmo
+
+    q = request.query_params
+    period = (q.get("period") or "").strip()
+    if period == "current":
+        cur = dmo.resolve_current_month(db, user, "daily", section or None)
+        if cur["has_data"]:
+            return {"month": cur["ym"]}, None
+        msg = cur["message"].replace("\n", " ")
+        if cur.get("latest"):
+            y, m = cur["latest"]
+            link = f"{action}?period=month&y={y}&m={m}&section={quote(section or '')}&latest=1"
+            return {}, RedirectResponse(
+                f"/reports?err={quote(msg)}&daily_latest={quote(link)}&daily_latest_label="
+                f"{quote(cur['offer_label'])}#daily", status_code=303)
+        return {}, RedirectResponse(f"/reports?err={quote(msg)}#daily", status_code=303)
+    if period == "month":
+        try:
+            ym = (int(q.get("y") or 0), int(q.get("m") or 0))
+        except ValueError:
+            ym = (0, 0)
+        if not (1300 <= ym[0] <= 1500 and 1 <= ym[1] <= 12):
+            return {}, RedirectResponse(f"/reports?err={quote('ماه نامعتبر است.')}#daily", status_code=303)
+        note = (f"ماه جاری داده ندارد — آخرین ماه دارای داده: {dmo.month_name_fa(ym)}"
+                if q.get("latest") else "")
+        return {"month": ym, "basis_note": note}, None
+    return {}, None
+
+
 @router.get("/daily")
 async def daily_pdf(
+    request: Request,
     days: int = 30,
     section: str = "",
     user=Depends(require_feature(perm.REPORT_DAILY)),
     db: Database = Depends(get_db),
 ):
-    path, _x, err = report_svc.generate_daily_files(db, user, days=max(1, min(days, 365)), section=section)
+    kw, redirect = _daily_period(request, db, user, section, "/reports/daily")
+    if redirect:
+        return redirect
+    path, _x, err = report_svc.generate_daily_files(db, user, days=max(1, min(days, 365)), section=section, **kw)
     if err or not path:
         return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#daily", status_code=303)
     log_activity(db, user, "report_daily")
@@ -394,12 +433,16 @@ async def daily_pdf(
 
 @router.get("/daily.xlsx")
 async def daily_xlsx(
+    request: Request,
     days: int = 30,
     section: str = "",
     user=Depends(require_feature(perm.REPORT_DAILY)),
     db: Database = Depends(get_db),
 ):
-    _p, path, err = report_svc.generate_daily_files(db, user, days=max(1, min(days, 365)), section=section)
+    kw, redirect = _daily_period(request, db, user, section, "/reports/daily.xlsx")
+    if redirect:
+        return redirect
+    _p, path, err = report_svc.generate_daily_files(db, user, days=max(1, min(days, 365)), section=section, **kw)
     if err or not path:
         return RedirectResponse(f"/reports?err={quote(err or 'خطا')}#daily", status_code=303)
     log_activity(db, user, "report_daily")
@@ -568,7 +611,15 @@ def _period(request: Request, db: Database, user: dict | None = None):
     section = (q.get("section") or "").strip().lower() or None
     note = ""
     preset = (q.get("preset") or "").strip()
-    if preset or not (q.get("from_year") or q.get("from_month")):
+    if preset == "current":
+        # «ماه جاری» = calendar month (bug 1405/08/02); no data → clear message, latest month offered
+        from services import data_months as dmo
+
+        cur = dmo.resolve_current_month(db, user, "period", section)
+        if not cur["has_data"]:
+            return None, cur["message"].replace("\n", " ")
+        start_ym = end_ym = cur["ym"]
+    elif preset or not (q.get("from_year") or q.get("from_month")):
         # T14b: preset / no range → latest N months THAT HAVE DATA
         from services import data_months as dmo
 

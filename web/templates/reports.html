@@ -31,8 +31,10 @@
 <div class="card" id="daily">
   <h2>📈 مصرف روزانه مواد</h2>
   <p class="muted">همان گزارش ربات: میانگین مصرف روزانهٔ هر ماده/تاندیش از موجودی روزانه سایت و مصرف ماهیانه.</p>
+  {% if daily_latest %}<p class="muted">📅 <a href="{{ daily_latest }}">گزارش آخرین ماه دارای داده: {{ daily_latest_label }}</a></p>{% endif %}
   <form method="get" action="/reports/daily" class="form-grid">
-    <label>بازه (روز)<input type="number" name="days" min="1" max="365" value="30"></label>
+    <label>بازه<select name="period"><option value="current">ماه جاری (ماه تقویمی امروز)</option><option value="days">N روز اخیر</option></select></label>
+    <label>تعداد روز (برای «N روز اخیر»)<input type="number" name="days" min="1" max="365" value="30"></label>
     <label>بخش<select name="section"><option value="">همه بخش‌ها</option><option value="slab">اسلب</option><option value="bloom">بلوم</option><option value="billet">بیلت</option></select></label>
     <div class="report-actions">
       <button type="submit" class="btn">PDF</button>

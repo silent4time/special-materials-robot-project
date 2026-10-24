@@ -378,7 +378,8 @@ def generate_critical_items_files(
 
 
 def generate_daily_files(
-    db: Database, user: dict[str, Any], *, days: int = 30, section: str = ""
+    db: Database, user: dict[str, Any], *, days: int = 30, section: str = "",
+    month: tuple[int, int] | None = None, basis_note: str = "",
 ) -> tuple[Path | None, Path | None, str | None]:
     """«📈 مصرف روزانه مواد» — same data/columns/basis as the bot (_run_daily_report)."""
     from services import comprehensive_report as comprehensive_svc
@@ -386,10 +387,19 @@ def generate_daily_files(
     frames = comprehensive_svc.section_frames(load_frames(db, user), section or None)
     if frames.get("tank_consumption") is None and frames.get("monthly_consumption") is None:
         return None, None, "داده‌ای نیست: ابتدا موجودی روزانه سایت یا فایل مصرف ماهیانه را ثبت کنید."
-    end = date.today()
-    start = end - timedelta(days=max(0, days - 1))
+    if month:
+        # one Jalali month (web «ماه جاری» / latest month with data) — same as the bot
+        from bot.jalali import format_month_year_range, month_year_to_gregorian_bounds
+
+        start, end = month_year_to_gregorian_bounds(tuple(month), tuple(month))
+        range_label = format_month_year_range(tuple(month), tuple(month))
+        if basis_note:
+            range_label = f"{range_label} ({basis_note})"
+    else:
+        end = date.today()
+        start = end - timedelta(days=max(0, days - 1))
+        range_label = f"{days} روز اخیر"
     rates = daily_rates(frames.get("tank_consumption"), frames.get("monthly_consumption"), start=start, end=end)
-    range_label = f"{days} روز اخیر"
     sec_label = comprehensive_svc.section_label(section or None)
     if rates is None or rates.empty:
         return None, None, f"در بازهٔ {range_label} داده‌ای برای این گزارش نیست."
