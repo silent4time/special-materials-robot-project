@@ -310,6 +310,50 @@ def _cell_style(size: float, *, bold: bool = False) -> ParagraphStyle:
     )
 
 
+def apply_dark_contrast(table: Any, cmds: list) -> list:
+    """Owner rule (1405/08/02): text on a dark cell background must be light.
+
+    Table cells are Paragraphs, whose colour comes from their own style (a TEXTCOLOR
+    command does not reach them), so every Paragraph inside a dark BACKGROUND range is
+    re-styled with a white text colour. Returns ``cmds`` (+ TEXTCOLOR for plain strings).
+    """
+    from copy import copy as _copy
+
+    from excel.contrast import is_dark
+
+    data = getattr(table, "_cellvalues", None) or []
+    nrows = len(data)
+    ncols = max((len(r) for r in data), default=0)
+    extra: list = []
+    for c in list(cmds):
+        if not c or c[0] != "BACKGROUND" or len(c) < 4:
+            continue
+        col = c[3]
+        try:
+            hx = col.hexval()[2:] if hasattr(col, "hexval") else str(col)
+        except Exception:  # noqa: BLE001
+            continue
+        if not is_dark(hx):
+            continue
+        (c0, r0), (c1, r1) = c[1], c[2]
+        c0, c1 = (c0 % ncols if ncols else 0), (c1 % ncols if ncols else 0)
+        r0, r1 = (r0 % nrows if nrows else 0), (r1 % nrows if nrows else 0)
+        extra.append(("TEXTCOLOR", (c0, r0), (c1, r1), colors.white))
+        for r in range(min(r0, r1), max(r0, r1) + 1):
+            for k in range(min(c0, c1), max(c0, c1) + 1):
+                cell = data[r][k] if k < len(data[r]) else None
+                if isinstance(cell, Paragraph) and not getattr(cell, "_dark_fixed", False):
+                    st = _copy(cell.style)
+                    st.name = f"{st.name}_light"
+                    st.textColor = colors.white
+                    cell.style = st
+                    cell._dark_fixed = True
+                    # Paragraph caches fragments with the old colour → rebuild them
+                    cell.__init__(cell.text, st, getattr(cell, "bulletText", None))
+                    cell._dark_fixed = True
+    return list(cmds) + extra
+
+
 def build_rtl_table(
     header_texts: list[str] | None,
     rows_texts: list[list[str]],
@@ -402,7 +446,7 @@ def build_rtl_table(
             cmds.append(
                 ("BACKGROUND", (0, bi + off), (-1, bi + off), colors.HexColor(alert_color))
             )
-    table.setStyle(TableStyle(cmds))
+    table.setStyle(TableStyle(apply_dark_contrast(table, cmds)))
     return table
 
 
@@ -656,7 +700,9 @@ HEADER_FA = {
 
 
 def _df_cell_text(val: Any, col: str) -> str:
-    from services.units import is_unit_column, unit_fa
+    from services.units import display_code, is_unit_column, unit_fa
+
+    val = display_code(col, val)
 
     if is_unit_column(col):
         return unit_fa(val)
@@ -1071,7 +1117,7 @@ def generate_monthly_summary_pdf(
                 "check",
             }:
                 style_cmds.append(("FONTNAME", (0, i), (-1, i), FONT_BOLD))
-        table.setStyle(TableStyle(style_cmds))
+        table.setStyle(TableStyle(apply_dark_contrast(table, style_cmds)))
         story.append(table)
         story.append(Spacer(1, 0.45 * cm))
 
@@ -1118,8 +1164,9 @@ SIMPLE_HEADER_FA = {
 def _format_simple_cell(val: Any, col: str | None = None) -> str:
     if val is None:
         return ""
-    from services.units import is_unit_column, unit_fa
+    from services.units import display_code, is_unit_column, unit_fa
 
+    val = display_code(col, val)
     if is_unit_column(col):
         return unit_fa(val)
     if isinstance(val, float):
@@ -1127,7 +1174,10 @@ def _format_simple_cell(val: Any, col: str | None = None) -> str:
             return ""
         if val == float("inf"):
             return "∞"
-        return f"{val:g}" if abs(val) >= 0.01 or val == 0 else f"{val:.4f}"
+        if val == 0 or abs(val) >= 0.01:
+            # never scientific / 6-significant-digit rounding (f"{216695.5:g}" → 216696)
+            return f"{round(val, 4):.4f}".rstrip("0").rstrip(".") or "0"
+        return f"{val:.4f}"
     if col in {"date", "start", "end", "entry_date"} and val not in ("", None):
         try:
             return format_date(val)

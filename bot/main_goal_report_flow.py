@@ -15,6 +15,7 @@ Shared compute lives in ``services.main_goal_report`` / ``services.main_goal_his
 """
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -614,7 +615,7 @@ class MainGoalReportFlow(ProductionStatsMixin):
         p["period_text"] = text
         p["await"] = "scn_section"
         horizon = mgh.parse_horizon_months(text)
-        hz = f" (≈ {horizon:g} ماه)" if horizon else " (طول بازه تشخیص نشد؛ فقط برای مقایسه با ظرفیت لازم است)"
+        hz = f" (≈ {_fmtn(horizon)} ماه)" if horizon else " (طول بازه تشخیص نشد؛ فقط برای مقایسه با ظرفیت لازم است)"
         self._reply(
             message,
             f"بازه: {text}{hz}\n\n"

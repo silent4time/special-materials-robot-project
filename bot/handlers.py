@@ -1,6 +1,7 @@
 """Message/command handlers — request-driven three-file upload + RBAC + tundish analytics."""
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 import logging
 import re
 import shutil
@@ -114,6 +115,17 @@ def _utc_iso() -> str:
 
 from bot.help_text import HELP_TEXT, help_text_for  # noqa: E402  (re-exported)
 
+
+
+def _fmt_exact(v) -> str:
+    """Return quantities are never rounded: full value, no trailing zeros."""
+    try:
+        f = float(v or 0)
+    except (TypeError, ValueError):
+        return str(v)
+    if f == int(f):
+        return f"{int(f):,}"
+    return f"{f:,.10f}".rstrip("0").rstrip(".")
 
 class BotApp:
     def __init__(self, client: BaleClient, db: Database) -> None:
@@ -3349,7 +3361,8 @@ class BotApp:
             return
         pdf_rows = []
         for r in rows:
-            line = r.get("message_fa") or ""
+            from bot.activity import display_message
+            line = display_message(r)
             when = format_datetime(r.get("created_at"))
             pdf_rows.append({"زمان": when, "فعالیت": line})
         title = f"گزارش فعالیت کاربران — {range_label}"
@@ -3979,8 +3992,8 @@ class BotApp:
             title=title,
             subtitle=(
                 f"نرخ مصرف بر اساس {range_label}{rates_basis_suffix(rates, range_label)} | "
-                f"تعریف: پوشش > {cover_th:g} روز، یا موجودی بیش از نیاز "
-                f"{SURPLUS_FORECAST_DAYS:g} روز؛ مواد با موجودی ولی بدون مصرف = مازاد/بدون مصرف؛ "
+                f"تعریف: پوشش > {_fmtn(cover_th)} روز، یا موجودی بیش از نیاز "
+                f"{_fmtn(SURPLUS_FORECAST_DAYS)} روز؛ مواد با موجودی ولی بدون مصرف = مازاد/بدون مصرف؛ "
                 f"کد دسته ۱۸۰۰ به‌صورت خودکار اقلام مازاد محسوب می‌شود"
             ),
             columns=cols,
@@ -4167,7 +4180,7 @@ class BotApp:
             caption = (
                 f"{pdf_title}\n"
                 f"منبع: {source_label}\n"
-                f"جمع کل مصرفی: {data.grand_kg:g} کیلوگرم"
+                f"جمع کل مصرفی: {_fmtn(data.grand_kg)} کیلوگرم"
             )
             self.client.send_document(
                 self._chat_id(message),
@@ -4187,7 +4200,7 @@ class BotApp:
                 (
                     f"✅ خلاصه مصرف ماهیانه ارسال شد ({range_label}).\n"
                     f"ردیف‌های تجمیعی: {len(data.items)} | "
-                    f"جمع ماه‌ها: {month_sum:g} | جمع کل: {data.grand_kg:g} کیلوگرم"
+                    f"جمع ماه‌ها: {_fmtn(month_sum)} | جمع کل: {_fmtn(data.grand_kg)} کیلوگرم"
                 ),
                 kb.analytics_menu(user),
             )
@@ -4420,7 +4433,7 @@ class BotApp:
         item = items[idx]
         name = kb.item_display_name(item)
         cur = pending.get("values", {}).get(item["id"])
-        cur_note = f"\nمقدار فعلی: {float(cur):g}" if cur is not None else ""
+        cur_note = f"\nمقدار فعلی: {_fmtn(float(cur))}" if cur is not None else ""
         body = f"مقدار «{name}» را به‌صورت عدد بفرستید.{cur_note}"
         if prefix:
             body = f"{prefix.rstrip()}\n{body}"
@@ -4535,7 +4548,7 @@ class BotApp:
             user,
             pending,
             idx,
-            confirm_line=f"✓ {name}: {qty:g}",
+            confirm_line=f"✓ {name}: {_fmtn(qty)}",
             was_walk_prompt=was_walk,
         )
         return True
@@ -4654,7 +4667,7 @@ class BotApp:
                     {
                         "شناسه": iid,
                         "شرح": kb.item_display_name(it),
-                        "مقدار": f"{float(qty):g}",
+                        "مقدار": f"{_fmtn(float(qty))}",
                     }
                 )
             attachment = self._send_simple_pdf_report(
@@ -4676,7 +4689,7 @@ class BotApp:
             if values:
                 for iid, qty in values.items():
                     name = kb.item_display_name(id_to_item.get(iid) or {"id": iid, "name_desc": iid})
-                    lines.append(f"• {name}: {float(qty):g}")
+                    lines.append(f"• {name}: {_fmtn(float(qty))}")
             else:
                 lines.append("(هیچ مقداری ثبت نشد)")
             if err_block:
@@ -6364,7 +6377,7 @@ class BotApp:
 
         # edit_qty
         try:
-            qty = float(raw.replace(",", "."))
+            qty = float(raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩٫,", "01234567890123456789..")))
         except ValueError:
             self._reply(
                 message,
@@ -6439,7 +6452,7 @@ class BotApp:
                     "شرح": ln.get("item_name") or "—",
                     "موجودی سایت": f"{float(ln.get('site_qty') or 0):.2f}",
                     "مازاد": f"{float(ln.get('surplus_qty') or 0):.2f}",
-                    "برگشت": f"{float(ln.get('quantity') or 0):.2f}",
+                    "برگشت": _fmt_exact(ln.get('quantity')),
                     "واحد": unit,
                     "دلیل": ln.get("surplus_reason") or "—",
                 }
@@ -6621,7 +6634,7 @@ class BotApp:
             iid = ln.get("item_id") or "—"
             out.append(
                 f"• {ln.get('item_name')} (شناسه: {iid}): "
-                f"{float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
+                f"{_fmt_exact(ln.get('quantity'))} {unit}".rstrip()
             )
         out.append("")
         out.append("منبع اصلی با ledger مثبت افزایش یافت.")
@@ -6643,7 +6656,7 @@ class BotApp:
         for i, ln in enumerate(lines, 1):
             unit = unit_fa(ln.get("unit"))
             body.append(
-                f"{i}) {ln.get('item_name')}: {float(ln.get('quantity') or 0):.2f} {unit}".rstrip()
+                f"{i}) {ln.get('item_name')}: {_fmt_exact(ln.get('quantity'))} {unit}".rstrip()
             )
         body.append("")
         body.append("سپس مقدار جدید را بفرستید. ۰ = حذف از لیست.")
@@ -6725,13 +6738,13 @@ class BotApp:
             self._reply(
                 message,
                 f"مقدار برگشت برای «{ln.get('item_name')}» را بفرستید "
-                f"(فعلی: {float(ln.get('quantity') or 0):g} {unit}).\n"
+                f"(فعلی: {_fmt_exact(ln.get('quantity'))} {unit}).\n"
                 "۰ = حذف از لیست.",
                 kb.warehouse_return_edit_menu(),
             )
             return True
         try:
-            qty = float(raw.replace(",", "."))
+            qty = float(raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩٫,", "01234567890123456789..")))
         except ValueError:
             self._reply(
                 message,
@@ -6757,7 +6770,7 @@ class BotApp:
             lines[idx]["quantity"] = qty
             msg = (
                 f"مقدار «{lines[idx].get('item_name')}» به "
-                f"{qty:g} {unit_fa(unit_raw)} به‌روز شد.".replace("  ", " ")
+                f"{_fmt_exact(qty)} {unit_fa(unit_raw)} به‌روز شد.".replace("  ", " ")
             )
         pending["lines"] = lines
         pending["await"] = "review"

@@ -1,8 +1,10 @@
 """Build report PDFs + Excel for the web dashboard (reuses analytics + shared generators)."""
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 from services import user_errors
 
+from bot.activity import display_message as _act_disp
 import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -184,7 +186,7 @@ def generate_surplus_files(
     title = f"گزارش مواد مازاد — {range_label}"
     subtitle = (
         f"منبع موجودی: {rem_source} | نرخ مصرف بر اساس {range_label}{rates_basis_suffix(rates, range_label)} | "
-        f"تعریف: پوشش > {cover_th:g} روز؛ "
+        f"تعریف: پوشش > {_fmtn(cover_th)} روز؛ "
         f"کد دسته ۱۸۰۰ به‌صورت خودکار اقلام مازاد محسوب می‌شود"
     )
     rows = _df_rows(surplus, cols)
@@ -247,7 +249,7 @@ def generate_user_activity_files(
     if not rows:
         return None, None, "در این بازه فعالیتی ثبت نشده است."
     pdf_rows = [
-        {"زمان": format_datetime(r.get("created_at")), "فعالیت": r.get("message_fa") or ""}
+        {"زمان": format_datetime(r.get("created_at")), "فعالیت": _act_disp(r)}
         for r in rows
     ]
     range_label = f"{days} روز اخیر"
