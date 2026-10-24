@@ -708,6 +708,11 @@ def critical_items_menu() -> dict:
     return _kb([[BTN_CRITICAL_COUNTS, BTN_CRITICAL_REPORT], [BTN_CRITICAL_ARCHIVE]], "critical")
 
 
+def critical_counts_entry_menu() -> dict:
+    """Number entry of «📝 ثبت تعداد تاندیش ماهانه»: cancel + nav only (no repeated menu)."""
+    return _kb([[BTN_CANCEL]], "flow")
+
+
 # draft → notes → تأیید (services.critical_report_archive)
 CB_CRITICAL_DRAFT_PREFIX = "crd|"
 

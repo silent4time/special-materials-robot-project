@@ -232,6 +232,9 @@ class BotApp:
         return f"کاربر بدون نام ({uid})" if uid else "کاربر بدون نام"
 
     def _reply(self, message: dict, text: str, markup: dict | None = None) -> None:
+        note = getattr(self, "_reply_note", {}).pop(str(self._chat_id(message)), None)
+        if note:  # v1.3.0: «لغو شد…» + menu in ONE message (no repeated menu)
+            text = f"{note}\n\n{text}"
         markup = self._track_nav(message, markup)
         self.client.send_message(self._chat_id(message), text, reply_markup=markup)
 
@@ -341,6 +344,16 @@ class BotApp:
         if cur.get("key") == "flow":
             return cur.get("origin") or "main"
         return kb.MENU_PARENT.get(cur.get("key") or "main") or "main"
+
+    def _open_menu_noted(self, message: dict, user: dict, key: str, note: str) -> None:
+        """Open a menu whose first reply carries ``note`` on top (single message)."""
+        if not hasattr(self, "_reply_note"):
+            self._reply_note = {}
+        self._reply_note[str(self._chat_id(message))] = note
+        try:
+            self._open_menu(message, user, key)
+        finally:
+            self._reply_note.pop(str(self._chat_id(message)), None)
 
     def _open_menu(self, message: dict, user: dict, key: str) -> None:
         """Open a menu by nav key (permission checks live in each opener)."""
@@ -491,27 +504,17 @@ class BotApp:
             from bot.jalali import PERSIAN_MONTH_NAMES
 
             aw = cp.get("await")
-            if aw == "month":
-                cp["await"] = "year"
-                self._reply(
-                    message,
-                    "سال شمسی مورد نظر برای تعداد تاندیش را انتخاب کنید:",
-                    kb.year_picker_menu(year_choices_around()),
-                )
-                return True
-            if aw == "count_billet":
-                cp["await"] = "month"
-                self._reply(message, f"ماه گزارش برای سال {cp.get('year')} را انتخاب کنید:", kb.month_picker_menu())
-                return True
-            prev = {"count_bloom": ("count_billet", "بیلت"), "count_slab": ("count_bloom", "بلوم")}.get(aw)
-            if prev:
+            # v1.2.1+ order: اسلب ← بیلت ← بلوم (no year/month)
+            prev = {"count_billet": ("count_slab", "۱/۳ — تعداد تاندیش اسلب"),
+                    "count_bloom": ("count_billet", "۲/۳ — تعداد تاندیش بیلت")}.get(aw)
+            if prev and cp.get("mode") == "counts":
                 cp["await"] = prev[0]
-                name = PERSIAN_MONTH_NAMES.get(int(cp.get("month") or 0), "")
-                self._reply(
-                    message,
-                    f"تعداد تاندیش {prev[1]} در {name} {cp.get('year')} را بفرستید (عدد صحیح ≥ ۰):",
-                    kb.critical_items_menu(),
-                )
+                self._reply(message, f"{prev[1]} در ماه را بفرستید (عدد صحیح ≥ ۰):",
+                            kb.critical_counts_entry_menu())
+                return True
+            if aw in {"count_slab", "year", "month"} and cp.get("mode") == "counts":
+                self._clear_critical_pending(uid)
+                self._open_menu(message, user, "critical")
                 return True
             return False
         ap = self._analysis_pending.get(uid)
@@ -575,13 +578,12 @@ class BotApp:
             if self._expired_flow_notice(message, user):
                 return
             target = (self._nav.get(uid) or {}).get("origin") or (self._nav.get(uid) or {}).get("key") or "main"
-            self._reply(message, "عملیاتی برای انصراف نیست.")
-            self._open_menu(message, user, target if target != "flow" else "main")
+            self._open_menu_noted(message, user, target if target != "flow" else "main",
+                                  "عملیاتی برای انصراف نیست.")
             return
         target = self._nav_target_back(uid)
         self._clear_all_pending(uid)
-        self._reply(message, "لغو شد؛ چیزی ذخیره نشد.")
-        self._open_menu(message, user, target)
+        self._open_menu_noted(message, user, target, "لغو شد؛ چیزی ذخیره نشد.")
 
     def _user_or_deny(self, message: dict) -> dict | None:
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))
@@ -2848,7 +2850,7 @@ class BotApp:
             f"📝 تعداد تاندیش ماهانه — از امروز {y}/{m:02d}/{d:02d}\n"
             "گزارش اقلام بحرانی امروز با این اعداد (در ماه) و موجودی امروز محاسبه می‌شود.\n\n"
             f"۱/۳ — تعداد تاندیش اسلب در ماه را بفرستید (عدد صحیح ≥ ۰):{hint}",
-            kb.critical_items_menu(),
+            kb.critical_counts_entry_menu(),
         )
 
     def on_critical_report_start(self, message: dict) -> None:
@@ -2998,7 +3000,7 @@ class BotApp:
                 self._reply(
                     message,
                     f"لطفاً تعداد تاندیش {label} را به‌صورت عدد صحیح (≥ ۰) بفرستید.",
-                    kb.critical_items_menu(),
+                    kb.critical_counts_entry_menu(),
                 )
                 return True
             val = int(digits)
@@ -3007,13 +3009,13 @@ class BotApp:
                 pending["await"] = "count_billet"
                 self._critical_pending[uid] = pending
                 self._reply(message, "۲/۳ — تعداد تاندیش بیلت در ماه را بفرستید (عدد صحیح ≥ ۰):",
-                            kb.critical_items_menu())
+                            kb.critical_counts_entry_menu())
                 return True
             if await_kind == "count_billet":
                 pending["await"] = "count_bloom"
                 self._critical_pending[uid] = pending
                 self._reply(message, "۳/۳ — تعداد تاندیش بلوم در ماه را بفرستید (عدد صحیح ≥ ۰):",
-                            kb.critical_items_menu())
+                            kb.critical_counts_entry_menu())
                 return True
             # count_bloom — save (dated by entry date = today)
             from services.critical_items_report import save_today_counts
@@ -3252,7 +3254,7 @@ class BotApp:
                 f"توضیحات پیش‌نویس #{rid} را بنویسید و بفرستید (هر خط یک سطر بلوک «توضیحات»؛ "
                 f"حداکثر {cra.MAX_NOTE_LINES} سطر). متن تازه جایگزین متن قبلی می‌شود."
                 + (f"\nمتن فعلی:\n{current}" if current else ""),
-                kb.critical_items_menu(),
+                kb.critical_counts_entry_menu(),
             )
             return
         if action == "clr":
@@ -7308,12 +7310,26 @@ class BotApp:
 
             if notice:
                 self._reply(message, f"⏳ در حال ساخت {label}… نتیجه همین‌جا ارسال می‌شود.")
-            if self.bg.submit(uid, locked_job, self.handle_update, on_error):
+            if self.bg.submit(uid, locked_job, self._replay_update, on_error):
                 return True
         job()
         return True
 
-    def handle_update(self, update: dict) -> None:
+    def _replay_update(self, update: dict) -> None:
+        """Queued (parked behind a heavy job) update: already de-duplicated on arrival."""
+        self.handle_update(update, _replay=True)
+
+    def handle_update(self, update: dict, _replay: bool = False) -> None:
+        # v1.3.0: drop re-delivered updates (same update_id) → no duplicate replies
+        uid_ = update.get("update_id")
+        if uid_ is not None and not _replay:
+            seen = self.__dict__.setdefault("_seen_update_ids", {})
+            if uid_ in seen:
+                return
+            seen[uid_] = None
+            if len(seen) > 2000:
+                for k in list(seen)[:1000]:
+                    seen.pop(k, None)
         cq_data = str((update.get("callback_query") or {}).get("data") or "")
         # «🔐 دسترسی نقش‌ها» toggles are tiny, order-independent DB writes: never park them
         # behind the same user's running heavy report (a queued toggle waited for the whole report)

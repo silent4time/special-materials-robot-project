@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import os
 import time
 
 from bot.bale_api import BaleAPIError, BaleClient
@@ -48,6 +49,20 @@ def main() -> int:
         logger.error("BALE_BOT_TOKEN در فایل .env تنظیم نشده است.")
         return 1
     ensure_dirs()
+    # v1.3.0: single instance — two pollers on one token answer every button twice
+    import fcntl
+    from pathlib import Path as _P
+    _lock_path = _P(__file__).resolve().parent / "data" / "bot.lock"
+    _lock_path.parent.mkdir(parents=True, exist_ok=True)
+    _lock_fh = open(_lock_path, "w")  # noqa: SIM115 — held for process lifetime
+    try:
+        fcntl.flock(_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        logger.error("ربات از قبل در حال اجراست (data/bot.lock)؛ نمونهٔ دوم اجرا نمی‌شود.")
+        return 1
+    _lock_fh.write(str(os.getpid()))
+    _lock_fh.flush()
+    globals()["_BOT_LOCK_FH"] = _lock_fh
     from services import housekeeping
 
     housekeeping.run_all()
