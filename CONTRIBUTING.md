@@ -75,6 +75,11 @@
 ## «ماه جاری»
 «ماه جاری» همیشه ماه تقویمی جلالی است (`services.data_months.resolve_current_month`). آن را با «آخرین ماه دارای داده» جایگزین نکنید. اگر ماه داده نداشت، پیام بدهید و آخرین ماه دارای داده را پیشنهاد کنید (`kb.CB_MY_LATEST_PREFIX`). آزمون: `scripts/smoke_current_month.py`.
 
+## نرخ‌های مصرف (نسخهٔ 1.2.0)
+- ورود نرخ: `services/rates_import.py` (`plan_from_file` ← `apply_plan`). نوشتن فقط پس از تأیید کاربر انجام شود، همیشه با `backup_db(..., "pre_rates_import")`.
+- هر آپلود منبع اصلی از `rates_wiped` / `rate_losses` در `services/main_source.py` می‌گذرد (۷ ستون، کف ریخته‌گری هم). کاهش بخشی نرخ‌ها فقط با `allow_rate_loss=True` پذیرفته می‌شود.
+- آزمون: `scripts/smoke_rates_import.py`.
+
 ## ممیزی ۱۴۰۵/۰۸/۰۲ (نسخهٔ 1.1.0)
 - رنگ: زمینهٔ تیره ← متن روشن، به‌صورت عمومی بر اساس روشنایی. در Excel پیش از ذخیره `fix_workbook_contrast(wb)` و در PDF `apply_dark_contrast` اجرا شود.
 - اعداد در متن: هرگز `f"{x:g}"` به کار نرود. از `services.units.fmt_num` استفاده شود. مقدار کاربر (درخواست/برگشت) گرد نشود (`_fmt_exact`).
