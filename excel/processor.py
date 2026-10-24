@@ -1,6 +1,7 @@
 """Excel load, validate, row/column extract, and RBAC-aware filtering."""
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Collection, Iterable
@@ -575,6 +576,8 @@ def keep_only_detail_sheet(path: Path | str) -> list[str]:
         for name in removed:
             del wb[name]
         wb.active = 0
+        from excel.contrast import fix_workbook_contrast as _fwc
+        _fwc(wb)
         wb.save(path)
         return removed
     finally:
@@ -718,6 +721,8 @@ def _read_sheet_with_merged_fill(path: Path, sheet: str | int) -> pd.DataFrame |
         if not info["ranges"]:
             return None
         buf = BytesIO()
+        from excel.contrast import fix_workbook_contrast as _fwc
+        _fwc(wb)
         wb.save(buf)
         title = ws.title
     finally:
@@ -1142,7 +1147,7 @@ def _format_inventory_quantity(value: object) -> str:
         return "—"
     numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.notna(numeric):
-        return f"{float(numeric):g}"
+        return f"{_fmtn(float(numeric))}"
     return _display_inventory_value(value)
 
 

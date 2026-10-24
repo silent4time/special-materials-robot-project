@@ -995,6 +995,8 @@ def build_monthly_summary(
     from excel.table_style import mark_template_locked
 
     mark_template_locked(wb, "monthly_summary")
+    from excel.contrast import fix_workbook_contrast as _fwc
+    _fwc(wb)
     wb.save(excel_out)
     return data, excel_out
 

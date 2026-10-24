@@ -6,6 +6,7 @@ Only rows whose category_code is in the bot allowlist are included.
 """
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 from pathlib import Path
 from typing import Collection, Iterable
 
@@ -201,7 +202,7 @@ def format_inbound_list_fa(
         status = str(row.get("وضعیت") or "")
         lines.append(
             f"{code} | {desc} | {cat} | "
-            f"{float(prev_q):g} → {float(new_q):g} | {float(inbound_q):g} | {status}"
+            f"{_fmtn(float(prev_q))} → {_fmtn(float(new_q))} | {_fmtn(float(inbound_q))} | {status}"
         )
     omitted = max(0, len(inbound_df) - int(limit))
     if omitted:

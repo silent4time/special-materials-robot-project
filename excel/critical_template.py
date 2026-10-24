@@ -290,6 +290,8 @@ def write_critical_items_xlsx(sheets: list[dict[str, Any]], output_path: Path | 
     wb.active = 0
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    from excel.contrast import fix_workbook_contrast as _fwc
+    _fwc(wb)
     wb.save(out)
     return out
 
@@ -435,6 +437,6 @@ def write_critical_items_pdf(
         ]
     row_heights = [None] * (len(data) - len(row_heights)) + row_heights if notes else None
     tbl = Table(data, colWidths=vw, rowHeights=row_heights, repeatRows=2)
-    tbl.setStyle(TableStyle(style))
+    tbl.setStyle(TableStyle(g.apply_dark_contrast(tbl, style)))
     doc.build([tbl])
     return g.apply_letterhead(out, letterhead_path)
