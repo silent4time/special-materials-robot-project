@@ -167,33 +167,23 @@
     (داخلی ۳ ماه، وارداتی ۶ ماه)؛ «نیاز» = مصرف پیش‌بینی‌شده − موجودی، فقط اقلام با نیاز مثبت.
     نقش‌های مجاز: مالک، مدیر، کاردان مسئول.
   </p>
-  <p class="muted">ثبت دستی تعداد تاندیش ماهانه — فقط برای ماهی که لاگ توالی تاندیش ندارد استفاده می‌شود:</p>
+  <p class="muted">📝 ثبت تعداد تاندیش ماهانه — از امروز (بدون سال و ماه). گزارش امروز با این اعداد و موجودی امروز محاسبه می‌شود؛ اگر امروز ثبت نشود، میانگین لاگ توالی تاندیش ۳ ماه کامل گذشته مبناست.</p>
+  <p class="muted">{{ today_counts_line }}</p>
   <form method="post" action="/reports/critical-items/counts" class="form-grid">
-    <label>سال شمسی
-      <input type="number" name="jalali_year" min="1390" max="1500" required
-             value="{{ critical_year }}">
-    </label>
-    <label>ماه
-      <select name="jalali_month" required>
-        {% for num, name in month_names %}
-        <option value="{{ num }}" {% if num == critical_month %}selected{% endif %}>{{ name }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>تعداد تاندیش بیلت
-      <input type="number" name="count_billet" min="0" step="1" required
-             value="{{ counts.count_billet if counts else 0 }}">
-    </label>
-    <label>تعداد تاندیش بلوم
-      <input type="number" name="count_bloom" min="0" step="1" required
-             value="{{ counts.count_bloom if counts else 0 }}">
-    </label>
-    <label>تعداد تاندیش اسلب
+    <label>تعداد تاندیش اسلب در ماه
       <input type="number" name="count_slab" min="0" step="1" required
-             value="{{ counts.count_slab if counts else 0 }}">
+             value="{{ today_counts.slab if today_counts else 0 }}">
+    </label>
+    <label>تعداد تاندیش بیلت در ماه
+      <input type="number" name="count_billet" min="0" step="1" required
+             value="{{ today_counts.billet if today_counts else 0 }}">
+    </label>
+    <label>تعداد تاندیش بلوم در ماه
+      <input type="number" name="count_bloom" min="0" step="1" required
+             value="{{ today_counts.bloom if today_counts else 0 }}">
     </label>
     <div class="report-actions">
-      <button type="submit" class="btn">ذخیره تعداد تاندیش</button>
+      <button type="submit" class="btn">ذخیره تعداد تاندیش (از امروز)</button>
     </div>
   </form>
   <p class="muted" style="margin-top:.75rem">گزارش با تاریخ امروز و بدون انتخاب ماه تولید می‌شود — {{ basis_note }}</p>
@@ -235,14 +225,6 @@
   {% endif %}
   <p class="muted">تفکیک بر اساس ستون «تأمین‌کننده» منبع اصلی (شرکت/پیمانکار، از روی شناسه مواد)؛ گزارش اصلی فقط اقلام شرکت است و اقلام پیمانکار جدا می‌آید.
     «با نوسازی» = نرخ نوسازی + پچینگ (+ سطح ریخته‌گری)؛ «بدون نوسازی» = فقط پچینگ (+ سطح ریخته‌گری) — اقلامی که فقط نرخ نوسازی دارند حذف می‌شوند.</p>
-  {% if recent_counts %}
-  <p class="muted" style="margin-top:1rem">ثبت‌های اخیر:</p>
-  <ul class="muted">
-    {% for r in recent_counts %}
-    <li>{{ r.label }} — بیلت {{ r.count_billet }}، بلوم {{ r.count_bloom }}، اسلب {{ r.count_slab }}{% if r.exclude_from_basis %} — در مبنای اقلام بحرانی استفاده نمی‌شود{% if r.basis_note|clean_note %} — <bdi>{{ r.basis_note|clean_note }}</bdi>{% endif %}{% endif %}</li>
-    {% endfor %}
-  </ul>
-  {% endif %}
 </div>
 {% endif %}
 {% endblock %}
