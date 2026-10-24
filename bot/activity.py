@@ -89,6 +89,19 @@ ACTION_PHRASES: dict[str, str] = {
     "settings_stock_group": "گروه گزارش موجودی روزانه را تغییر داد",
     "user_add": "کاربر جدید دعوت کرد",
     "user_edit": "نقش کاربر را ویرایش کرد",
+    "add_category_code": "کد گروه کالا افزود",
+    "assistant_enabled": "دستیار هوشمند را فعال/غیرفعال کرد",
+    "download_main_source": "فایل منبع اصلی را دریافت کرد",
+    "download_primary_inventory": "فایل موجودی اولیه را دریافت کرد",
+    "list_categories_pdf": "PDF فهرست گروه‌های کالا را گرفت",
+    "report_critical_items_xlsx": "اکسل گزارش اقلام بحرانی را گرفت",
+    "report_monthly_summary_xlsx": "اکسل گزارش خلاصه مصرف ماهیانه را گرفت",
+    "report_remaining_xlsx": "اکسل گزارش اقلام بحرانی باقی‌مانده را گرفت",
+    "report_surplus_xlsx": "اکسل گزارش مازاد را گرفت",
+    "report_user_activity_xlsx": "اکسل گزارش فعالیت کاربران را گرفت",
+    "web_main_goal_store_consumption": "در وب فایل مصرف ماهانهٔ گزارش هدف اصلی را ثبت کرد",
+    "web_main_goal_store_production_xlsx": "در وب اکسل آمار تولید را ثبت کرد",
+    "web_main_goal_store_sequences": "در وب لاگ توالی تاندیش را ثبت کرد",
     "user_delete": "کاربر را حذف (غیرفعال) کرد",
 }
 
@@ -113,14 +126,19 @@ def resolve_display_name(user: dict | None, **details: Any) -> str:
 def format_action_phrase(action_key: str, **details: Any) -> str:
     """Build the action phrase portion (after name + id)."""
     template = ACTION_PHRASES.get(action_key)
+    if not template and action_key.endswith("_xlsx") and action_key[:-5] in ACTION_PHRASES:
+        template = ACTION_PHRASES[action_key[:-5]].replace(" را گرفت", " (اکسل) را گرفت")
     if not template:
-        return details.get("phrase") or action_key
+        return details.get("phrase") or "عملیات ثبت‌شده‌ای انجام داد"
     group = details.get("group") or details.get("tundish_group") or ""
     if "{group}" in template:
         short = TUNDISH_SHORT_FA.get(str(group), str(group) or "—")
         return template.format(group=short)
     try:
-        return template.format(**{k: v for k, v in details.items() if isinstance(v, (str, int, float))})
+        class _D(dict):
+            def __missing__(self, k):  # unknown detail → «—» instead of a raw {placeholder}
+                return "—"
+        return template.format_map(_D({k: v for k, v in details.items() if isinstance(v, (str, int, float))}))
     except (KeyError, ValueError):
         return template
 
@@ -161,3 +179,18 @@ def log_activity(db: Any, user: dict | None, action_key: str, **details: Any) ->
         )
     except Exception:  # noqa: BLE001
         logger.exception("log_activity failed action_key=%s", action_key)
+
+
+def display_message(row: dict) -> str:
+    """Stored line, re-rendered when it was logged before its key had a Persian phrase."""
+    msg = str(row.get("message_fa") or "")
+    key = str(row.get("action_key") or "")
+    if key and (msg.endswith(key) or "{" in msg):
+        details: dict = {}
+        try:
+            details = json.loads(row.get("details_json") or "{}") or {}
+        except Exception:  # noqa: BLE001
+            details = {}
+        name = str(row.get("display_name") or "بدون‌نام")
+        msg = format_activity_line(name, row.get("bale_user_id") or "", key, **details)
+    return msg

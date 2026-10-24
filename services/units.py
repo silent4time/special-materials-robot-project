@@ -70,3 +70,37 @@ def fmt_qty(qty: Any, unit: Any = None) -> str:
     if q == int(q):
         return f"{int(q):,}"
     return f"{q:,.2f}".rstrip("0").rstrip(".")
+
+
+# ---- internal source codes → Persian (display only) ----
+SOURCE_FA: dict[str, str] = {
+    "monthly": "مصرف ماهیانه",
+    "tank": "دادهٔ روزانه",
+    "manual": "ثبت دستی",
+    "sequence_log": "لاگ توالی تاندیش",
+}
+SOURCE_COLUMNS = frozenset({"source", "منبع"})
+
+
+def display_code(col: Any, val: Any) -> Any:
+    """Persian label for internal source codes in a «منبع» column; other values unchanged."""
+    if isinstance(val, str) and str(col or "").strip() in SOURCE_COLUMNS:
+        return SOURCE_FA.get(val.strip(), val)
+    return val
+
+
+def fmt_num(v: Any, decimals: int = 4) -> str:
+    """Plain number text: no scientific notation, no 6-significant-digit cut
+    (``f"{1234567.0:g}"`` → «1.23457e+06»); up to ``decimals`` decimals, zeros trimmed."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if f != f:
+        return ""
+    if f in (float("inf"), float("-inf")):
+        return "∞" if f > 0 else "-∞"
+    if f == int(f):
+        return str(int(f))
+    s = f"{f:.{decimals}f}".rstrip("0").rstrip(".")
+    return "0" if s in ("-0", "") else s
