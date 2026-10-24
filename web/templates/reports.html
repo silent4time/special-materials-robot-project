@@ -5,7 +5,11 @@
   <h1>گزارش‌های PDF و اکسل</h1>
   <p class="muted">فرمول‌ها و فایل‌های خروجی همان گزارش‌های ربات بله است (منطق مشترک؛ هر گزارش در هر دو محیط یک نتیجه می‌دهد).</p>
   {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
-  {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+  {% if error %}<div class="alert err" style="white-space:pre-line">{{ error }}</div>
+  {% if "ورود نرخ‌های مصرف" in error %}<p>
+    {% if can(user, "main_source_edit") %}<a class="btn" href="/settings/main-source#rates-import">📥 ورود نرخ‌های مصرف</a>{% endif %}
+    {% if can(user, "main_source_edit") or can(user, "file_inputs") %}<a class="btn" href="/settings/main-source/download.xlsx">📄 دانلود منبع اصلی</a>{% endif %}
+  </p>{% endif %}{% endif %}
   <p class="muted">
     موجودی روزانه سایت:
     {% if completeness.tank_consumption %}✅ Excel

@@ -56,6 +56,7 @@ def _main_source_context(
         "needs_approval": msa.needs_approval(user),
         "category_codes": db.list_category_codes(active_only=True),
         "can_edit": perm.can(user, perm.MAIN_SOURCE_EDIT),
+        "rates_review": None,
     }
 
 
@@ -257,11 +258,13 @@ async def main_source_upload(
     user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
     db: Database = Depends(get_db),
     file: UploadFile = File(...),
+    allow_rate_loss: str = Form(""),
 ):
     """«📦 جایگزینی کامل منبع اصلی» — same shared pipeline as the bot (services.file_upload)."""
     from web.routers.files import run_excel_upload
 
-    out = await run_excel_upload(db, user, file, "product_inventory", origin="main_source")
+    out = await run_excel_upload(db, user, file, "product_inventory", origin="main_source",
+                                 allow_rate_loss=bool(allow_rate_loss))
     return render(
         request,
         "settings_main_source.html",
@@ -506,3 +509,88 @@ async def permissions_reset(
     ok, msg = perm.reset_role(db, user, role)
     ctx = _perm_context(user, role, message=msg if ok else None, error=None if ok else msg)
     return render(request, "settings_permissions.html", ctx, status_code=200 if ok else 400)
+
+
+# ---- 📥 ورود نرخ‌های مصرف (v1.2.0) — same services.rates_import as the bot ----
+_RATES_PLAN = "rates_import_plan:"
+
+
+def _rates_dir(user: dict) -> Path:
+    from config import UPLOAD_DIR
+
+    d = UPLOAD_DIR / str(user["bale_user_id"]) / "rates_import"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@router.post("/main-source/rates/review")
+async def rates_import_review(
+    request: Request,
+    user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
+    db: Database = Depends(get_db),
+    file: UploadFile = File(...),
+):
+    import json
+
+    from services import rates_import as ri
+
+    name = (file.filename or "").strip()
+    if not name.lower().endswith(".xlsx"):
+        return render(request, "settings_main_source.html",
+                      _main_source_context(db, user, error="فقط فایل .xlsx پذیرفته می‌شود."), status_code=400)
+    dest = _rates_dir(user) / "incoming.xlsx"
+    with dest.open("wb") as fh:
+        shutil.copyfileobj(file.file, fh)
+    plan = ri.plan_from_file(db, user, dest)
+    if not plan.ok:
+        return render(request, "settings_main_source.html",
+                      _main_source_context(db, user, error=ri.summary_fa(plan)), status_code=400)
+    ri.review_xlsx(plan, _rates_dir(user) / "review.xlsx")
+    db.set_setting(_RATES_PLAN + str(user["bale_user_id"]), json.dumps(plan.to_dict(), ensure_ascii=False))
+    ctx = _main_source_context(db, user)
+    ctx["rates_review"] = {"text": ri.summary_fa(plan), "can_apply": bool(plan.fills or plan.conflicts),
+                           "conflicts": len(plan.conflicts)}
+    return render(request, "settings_main_source.html", ctx)
+
+
+@router.get("/main-source/rates/review.xlsx")
+async def rates_import_review_file(user=Depends(require_feature(perm.MAIN_SOURCE_EDIT))):
+    from fastapi.responses import FileResponse, RedirectResponse
+
+    path = _rates_dir(user) / "review.xlsx"
+    if not path.is_file():
+        return RedirectResponse("/settings/main-source", status_code=303)
+    return FileResponse(path, filename="بررسی ورود نرخ‌های مصرف.xlsx",
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@router.post("/main-source/rates/apply")
+async def rates_import_apply(
+    request: Request,
+    user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
+    db: Database = Depends(get_db),
+    mode: str = Form("keep"),
+):
+    import json
+
+    from services import rates_import as ri
+
+    key = _RATES_PLAN + str(user["bale_user_id"])
+    raw = db.get_setting(key)
+    db.clear_setting(key)
+    if mode == "cancel":
+        return render(request, "settings_main_source.html",
+                      _main_source_context(db, user, message="ورود نرخ‌ها لغو شد؛ منبع اصلی تغییری نکرد."))
+    if not raw:
+        return render(request, "settings_main_source.html",
+                      _main_source_context(db, user, error="بررسی منقضی شده؛ دوباره فایل را بفرستید."), status_code=400)
+    plan = ri.Plan.from_dict(json.loads(raw))
+    res = ri.apply_plan(db, user, plan, overwrite=(mode == "over"))
+    if not res.get("ok"):
+        return render(request, "settings_main_source.html",
+                      _main_source_context(db, user, error="⛔ " + str(res.get("error"))), status_code=400)
+    log_activity(db, user, "web_rates_import", filled=res["filled"], overwritten=res["overwritten"])
+    msg = (f"✅ نرخ‌های مصرف ذخیره شد: {res['filled']} خانهٔ خالی پر شد"
+           + (f"، {res['overwritten']} مغایرت جایگزین شد" if res["overwritten"] else "")
+           + ". پشتیبان پایگاه‌داده پیش از ذخیره گرفته شد.")
+    return render(request, "settings_main_source.html", _main_source_context(db, user, message=msg))

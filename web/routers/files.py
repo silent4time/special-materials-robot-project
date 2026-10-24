@@ -47,7 +47,8 @@ def actor_fa(user: dict) -> str:
     return f"{resolve_display_name(user)} ({user['bale_user_id']})"
 
 
-async def run_excel_upload(db: Database, user: dict, upload: UploadFile, pending: str, *, origin: str | None):
+async def run_excel_upload(db: Database, user: dict, upload: UploadFile, pending: str, *, origin: str | None,
+                           allow_rate_loss: bool = False):
     """Save the browser upload exactly where the bot saves Bale downloads, then run the shared pipeline."""
     name = (upload.filename or "").strip()
     if not name.lower().endswith(".xlsx"):
@@ -59,7 +60,7 @@ async def run_excel_upload(db: Database, user: dict, upload: UploadFile, pending
     with dest.open("wb") as fh:
         shutil.copyfileobj(upload.file, fh)
     return file_upload.process_upload(db, user, dest, pending, session=session, upload_origin=origin,
-                                      actor_fa=actor_fa(user))
+                                      actor_fa=actor_fa(user), allow_rate_loss=allow_rate_loss)
 
 
 def _page(request: Request, db: Database, user: dict, *, status_code: int = 200, **kw):

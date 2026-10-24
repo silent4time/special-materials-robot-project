@@ -37,8 +37,30 @@
   <p class="muted">شیت «ریز اطلاعات». شیت‌های دیگر نادیده گرفته می‌شوند. اگر ستون تازه‌ای نباشد، فیلدهای جدید خالی می‌مانند و محل استفادهٔ قبلی بر اساس شناسه حفظ می‌شود.</p>
   <form method="post" action="/settings/main-source/upload" enctype="multipart/form-data">
     <input type="file" name="file" accept=".xlsx,.xlsm" required>
+    <p><label><input type="checkbox" name="allow_rate_loss" value="1"> پاک شدن نرخ‌های مصرف موجود را تأیید می‌کنم (فقط اگر عمداً است)</label></p>
     <p style="margin-top:1rem"><button type="submit">آپلود و همسان‌سازی</button></p>
   </form>
+</div>
+
+<div class="card" id="rates-import">
+  <h2>📥 ورود نرخ‌های مصرف</h2>
+  <p class="muted">فایل نرخ مصرف (کد دسته، شناسه، شرح، واحد + ۷ ستون نرخ) یا فایل کامل منبع اصلی. تطبیق با شناسه و سپس کد ۴ رقمی. پیش از ذخیره بررسی نمایش داده می‌شود؛ تا تأیید نکنید چیزی ذخیره نمی‌شود و پیش از ذخیره از پایگاه‌داده پشتیبان گرفته می‌شود.</p>
+  {% if rates_review %}
+  <pre style="white-space:pre-wrap">{{ rates_review.text }}</pre>
+  <p><a href="/settings/main-source/rates/review.xlsx">⬇️ دانلود اکسل بررسی</a></p>
+  <form method="post" action="/settings/main-source/rates/apply" style="display:inline">
+    {% if rates_review.can_apply %}
+    <button type="submit" name="mode" value="keep">✅ ذخیره (مغایرت‌ها: حفظ مقدار فعلی)</button>
+    {% if rates_review.conflicts %}<button type="submit" name="mode" value="over">♻️ ذخیره با جایگزینی مغایرت‌ها</button>{% endif %}
+    {% endif %}
+    <button type="submit" name="mode" value="cancel">❌ انصراف</button>
+  </form>
+  {% else %}
+  <form method="post" action="/settings/main-source/rates/review" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".xlsx" required>
+    <p style="margin-top:1rem"><button type="submit">بررسی فایل</button></p>
+  </form>
+  {% endif %}
 </div>
 
 <div class="card">
