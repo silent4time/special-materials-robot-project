@@ -43,8 +43,9 @@ def _header_label(col: str, header_map: dict[str, str] | None) -> str:
 def _cell_value(val: Any, col: str | None = None) -> Any:
     if val is None:
         return ""
-    from services.units import is_unit_column, unit_fa
+    from services.units import display_code, is_unit_column, unit_fa
 
+    val = display_code(col, val)
     if is_unit_column(col):
         return unit_fa(val)  # display only — stored data keeps its code (NO/KG/…)
     try:
@@ -255,6 +256,8 @@ def generate_simple_report_xlsx(
     from excel.table_style import finalize_workbook
 
     finalize_workbook(wb)
+    from excel.contrast import fix_workbook_contrast as _fwc
+    _fwc(wb)
     wb.save(output_path)
     return output_path
 

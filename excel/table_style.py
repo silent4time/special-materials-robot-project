@@ -223,6 +223,8 @@ def style_workbook_path(
         ws = wb.active
     apply_product_table_style(ws, header_row=header_row)
     finalize_workbook(wb)
+    from excel.contrast import fix_workbook_contrast as _fwc
+    _fwc(wb)
     wb.save(path)
 
 
@@ -383,4 +385,6 @@ def finalize_path(path: Any) -> None:
     if template_locked_name(wb):
         return
     finalize_workbook(wb)
+    from excel.contrast import fix_workbook_contrast as _fwc
+    _fwc(wb)
     wb.save(path)

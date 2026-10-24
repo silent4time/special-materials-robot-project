@@ -151,6 +151,8 @@ def write_excel(rows: list[dict], missing: list[dict], out: Path) -> Path:
         for letter, w in zip("ABCDEFG", (6, 11, 18, 50, 15, 12, 11)):
             ws.column_dimensions[letter].width = w
     out.parent.mkdir(parents=True, exist_ok=True)
+    from excel.contrast import fix_workbook_contrast as _fwc
+    _fwc(wb)
     wb.save(out)
     return out
 
@@ -272,6 +274,8 @@ def write_missing_excel(items: list[dict], out: Path) -> Path:
     for letter, w in zip("ABCDEF", (6, 11, 18, 50, 14, 10)):
         ws.column_dimensions[letter].width = w
     out.parent.mkdir(parents=True, exist_ok=True)
+    from excel.contrast import fix_workbook_contrast as _fwc
+    _fwc(wb)
     wb.save(out)
     return out
 

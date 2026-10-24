@@ -1,6 +1,7 @@
 """Pure analytics for tundish (تاندیش) material consumption, inventory, and forecasts."""
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 import re
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -1062,9 +1063,9 @@ def surplus_materials(
                 pass
         else:
             if cover_d > cover_threshold:
-                flags.append(f"پوشش بالا (> {cover_threshold:g} روز)")
+                flags.append(f"پوشش بالا (> {_fmtn(cover_threshold)} روز)")
             if rem_q > need:
-                flags.append(f"بیش از نیاز {days:g} روز")
+                flags.append(f"بیش از نیاز {_fmtn(days)} روز")
         if flags:
             keep.append(True)
             reasons.append("؛ ".join(flags))
