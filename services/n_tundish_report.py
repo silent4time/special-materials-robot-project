@@ -96,6 +96,7 @@ class NTundishResult:
     error: str | None = None
     pdf: Path | None = None
     xlsx: Path | None = None
+    rates_hint: bool = False
 
     @property
     def title(self) -> str:
@@ -293,9 +294,12 @@ def build_rows(
             if isinstance(row[COL_SHORT], (int, float)) and row[COL_SHORT] > 0:
                 res.highlight_rows.append(idx)
     if not res.rows:
+        from services.rates_import import presence_message_fa
+
+        res.rates_hint = True
         res.error = (
-            f"برای {n} تاندیش {SECTIONS[section]} ({RENO_LABEL_FA[reno_mode]}) قلمی با نیاز مثبت "
-            "در منبع اصلی یافت نشد (نرخ‌های مصرف خالی‌اند)."
+            f"برای {n} تاندیش {SECTIONS[section]} ({RENO_LABEL_FA[reno_mode]}) قلمی با نیاز مثبت یافت نشد.\n"
+            + presence_message_fa(inventory_df, section, reno_mode)
         )
     return res
 
@@ -457,6 +461,7 @@ class MixResult:
     highlight_rows: list[int] = field(default_factory=list)
     extra_columns: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    rates_hint: bool = False
     error: str | None = None
     pdf: Path | None = None
     xlsx: Path | None = None
@@ -580,8 +585,13 @@ def build_mix_rows(
         if row[COL_SHORT] > 0:
             res.highlight_rows.append(idx)
     if not res.rows:
-        res.error = (f"برای {mix_label(mix)} تاندیش ({RENO_LABEL_FA[reno_mode]}) قلمی با نیاز مثبت "
-                     "در منبع اصلی یافت نشد (نرخ‌های مصرف خالی‌اند).")
+        from services.rates_import import presence_message_fa
+
+        res.rates_hint = True
+        res.error = (f"برای {mix_label(mix)} تاندیش ({RENO_LABEL_FA[reno_mode]}) قلمی با نیاز مثبت یافت نشد.\n"
+                     + "\n".join(presence_message_fa(inventory_df, sec, reno_mode).split("\n")[0]
+                                 for sec in MIX_ORDER if mix.get(sec))
+                     + "\nنرخ‌ها را با «📥 ورود نرخ‌های مصرف» از فایل وارد کنید یا در «📦 منبع اصلی» ویرایش کنید.")
     return res
 
 

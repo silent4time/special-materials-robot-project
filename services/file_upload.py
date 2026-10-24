@@ -52,6 +52,7 @@ def process_upload(
     session: dict,
     upload_origin: str | None,
     actor_fa: str,
+    allow_rate_loss: bool = False,
 ) -> UploadOutcome:
     """``dest`` = raw .xlsx already saved under UPLOAD_DIR/<uid>/<session>/<pending>.xlsx.
 
@@ -160,6 +161,8 @@ def process_upload(
     stock_info: dict = {}
     source_guard_error = ""
     skipped_note = ""
+    rate_note = ""
+    guard_kind = "guard"
     # t221u: «📥 موجودی انبار» (stock update) vs authorized full منبع اصلی upload.
     # Only stock updates feed the inbound report / move its baseline.
     full_source = (
@@ -206,6 +209,16 @@ def process_upload(
                 if main_source_svc.rates_wiped(old_df, merged):
                     source_guard_error = main_source_svc.RATES_WIPED_FA
                     raise RuntimeError("rates would be wiped")
+                losses = main_source_svc.rate_losses(old_df, merged)
+                if losses and not allow_rate_loss:
+                    source_guard_error = main_source_svc.rate_loss_note_fa(losses)
+                    guard_kind = "rate_loss"
+                    raise RuntimeError("rates would be partially wiped")
+                if losses:
+                    rate_note += f"\n⚠️ {len(losses)} خانهٔ نرخ مصرف با تأیید شما خالی شد."
+                if is_stock_upload and stock_info.get("added"):
+                    rate_note += main_source_svc.added_without_rates_note_fa(
+                        main_source_svc.added_without_rates(merged, stock_info["added"]))
             write_clean_excel(merged, result.clean_path, pending)
             result.kept_row_count = int(len(merged))
             merge_note = (
@@ -224,7 +237,8 @@ def process_upload(
                     except Exception:  # noqa: BLE001
                         logger.exception("could not restore منبع اصلی after refused upload")
                 db.set_pending_file_type(user["bale_user_id"], None)
-                return UploadOutcome(ok=False, kind="guard", pending=pending, text=(
+                return UploadOutcome(ok=False, kind=guard_kind if source_guard_error else "guard",
+                                     pending=pending, text=(
                     source_guard_error
                     or user_errors.error_fa("همسان‌سازی منبع اصلی ناموفق بود؛ چیزی ذخیره نشد", exc)))
             merge_note = "\n(" + user_errors.error_fa("همسان‌سازی انجام نشد", exc) + ")"
@@ -251,6 +265,11 @@ def process_upload(
         from services.catalog_sync import note_fa as _cat_note, sync_after_change
 
         catalog_note = _cat_note(sync_after_change(db, result.clean_path))
+        try:  # first upload included: warn when the saved منبع اصلی has no rates at all
+            rate_note += main_source_svc.no_rates_warning_fa(pd.read_excel(result.clean_path, engine="openpyxl"))
+        except Exception:  # noqa: BLE001
+            logger.warning("no-rates check failed")
+        catalog_note += rate_note
         if is_stock_upload and uploaded_stock_df is not None:
             try:
                 live_after = pd.read_excel(result.clean_path, engine="openpyxl")

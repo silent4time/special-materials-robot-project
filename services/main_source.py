@@ -916,24 +916,114 @@ def merge_stock_update(
     return out.reset_index(drop=True), info
 
 
+ALL_RATE_COLS: tuple[str, ...] = (*SOURCE_RATE_COLS, "casting_floor")
+
+
+def _rate_num(value: object) -> float | None:
+    v = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(v) or float(v) == 0:
+        return None
+    return float(v)
+
+
+def _any_rate(df: pd.DataFrame | None) -> bool:
+    if df is None or df.empty:
+        return False
+    cols = [c for c in ALL_RATE_COLS if c in df.columns]
+    if not cols:
+        return False
+    vals = df[cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+    return bool((vals != 0).any().any())
+
+
 def rates_wiped(old: pd.DataFrame | None, merged: pd.DataFrame | None) -> bool:
-    """True when old had any consumption rate filled and merged has none (refuse to save)."""
-    if old is None or old.empty:
+    """True when old had any consumption rate (7 cols incl. سطح ریخته گری) and merged has none."""
+    if not _any_rate(old):
         return False
-    cols = [c for c in SOURCE_RATE_COLS if c in old.columns]
-    if not cols or not old[cols].notna().any().any():
-        return False
-    if merged is None or merged.empty:
-        return True
-    mcols = [c for c in cols if c in merged.columns]
-    if not mcols:
-        return True
-    vals = merged[mcols].apply(pd.to_numeric, errors="coerce")
-    return not vals.notna().any().any()
+    return not _any_rate(merged)
+
+
+def rate_losses(old: pd.DataFrame | None, merged: pd.DataFrame | None) -> list[dict[str, Any]]:
+    """Partial wipe: (id, col) cells that had a rate in old and are blank/0 in merged."""
+    if old is None or old.empty or merged is None or merged.empty or "id" not in old.columns \
+            or "id" not in merged.columns:
+        return []
+    cols = [c for c in ALL_RATE_COLS if c in old.columns]
+    if not cols:
+        return []
+    m_idx = {}
+    for i, rid in enumerate(merged["id"].map(_norm_id)):
+        m_idx.setdefault(rid, i)
+    out: list[dict[str, Any]] = []
+    for _, row in old.iterrows():
+        rid = _norm_id(row.get("id"))
+        if not rid or rid not in m_idx:
+            continue
+        mrow = merged.iloc[m_idx[rid]]
+        for c in cols:
+            ov = _rate_num(row.get(c))
+            if ov is None:
+                continue
+            if c not in merged.columns or _rate_num(mrow.get(c)) is None:
+                out.append({"id": rid, "col": c, "old": ov,
+                            "name": _cell_str(row.get("product_name"))})
+    return out
+
+
+def rate_loss_note_fa(losses: list[dict[str, Any]], *, limit: int = 12) -> str:
+    from services.units import fmt_num
+
+    lines = [
+        f"⛔ ذخیره انجام نشد: با این فایل {len(losses)} خانهٔ نرخ مصرف که مقدار داشت خالی می‌شد "
+        "(پاک شدن بخشی از نرخ‌ها). منبع اصلی بدون تغییر ماند.",
+    ]
+    for x in losses[:limit]:
+        lines.append(f"• {x['id']} — {FIELD_LABELS_FA.get(x['col'], x['col'])}: {fmt_num(x['old'])} ← خالی")
+    if len(losses) > limit:
+        lines.append(f"… و {len(losses) - limit} خانهٔ دیگر")
+    lines.append("اگر عمداً است، «⚠️ تأیید پاک شدن نرخ‌ها» را بزنید و فایل را دوباره بفرستید "
+                 "(در وب: گزینهٔ «پاک شدن نرخ‌ها را تأیید می‌کنم»).")
+    return "\n".join(lines)
+
+
+NO_RATES_FA = (
+    "\n⚠️ هشدار: منبع اصلی ذخیره‌شده هیچ نرخ مصرفی ندارد (ستون‌های نوسازی/پچینگ اسلب، بلوم، بیلت "
+    "و سطح ریخته گری خالی یا ناموجودند). گزارش‌های «N تاندیش» و «اقلام بحرانی» بدون نرخ خالی می‌مانند. "
+    "نرخ‌ها را با «📥 ورود نرخ‌های مصرف» وارد کنید."
+)
+
+
+def no_rates_warning_fa(df: pd.DataFrame | None) -> str:
+    if df is None or df.empty:
+        return ""
+    return "" if _any_rate(df) else NO_RATES_FA
+
+
+def added_without_rates(df: pd.DataFrame | None, added: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if df is None or df.empty or not added or "id" not in df.columns:
+        return []
+    ids = {_norm_id(a.get("id")): a for a in added}
+    out = []
+    for _, row in df.iterrows():
+        rid = _norm_id(row.get("id"))
+        if rid in ids and not _any_rate(pd.DataFrame([row])):
+            out.append(ids[rid])
+    return out
+
+
+def added_without_rates_note_fa(items: list[dict[str, Any]], *, limit: int = 15) -> str:
+    if not items:
+        return ""
+    lines = [f"\n⚠️ {len(items)} شناسهٔ جدید بدون نرخ مصرف (در گزارش‌های نیاز صفر حساب می‌شوند):"]
+    for a in items[:limit]:
+        lines.append(f"• {a.get('id')} ({a.get('category_code')}) {a.get('product_name') or ''}".rstrip())
+    if len(items) > limit:
+        lines.append(f"… و {len(items) - limit} مورد دیگر")
+    return "\n".join(lines)
 
 
 RATES_WIPED_FA = (
-    "⛔ ذخیره انجام نشد: با این فایل، نرخ‌های مصرف منبع اصلی (نوسازی/پچینگ اسلب، بلوم، بیلت) "
+    "⛔ ذخیره انجام نشد: با این فایل، نرخ‌های مصرف منبع اصلی (نوسازی/پچینگ اسلب، بلوم، بیلت، سطح ریخته گری) "
     "همگی خالی می‌شدند. منبع اصلی بدون تغییر ماند. فایل را بررسی کنید یا با مدیر سیستم تماس بگیرید."
 )
 
