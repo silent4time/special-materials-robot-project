@@ -112,6 +112,53 @@ def report_date_parts(report_date: Any = None) -> tuple[int, int, int]:
     return int(report_date.year), int(report_date.month), int(report_date.day)
 
 
+TODAY_COUNTS_KEY = "critical_today_counts"
+
+
+def get_today_counts(db: Database) -> dict[str, Any] | None:
+    """Latest «تعداد تاندیش ماهانه از امروز» entry: billet/bloom/slab + entry_date (Jalali)."""
+    import json
+
+    raw = db.get_setting(TODAY_COUNTS_KEY)
+    if not raw:
+        return None
+    try:
+        d = json.loads(raw)
+        return {"billet": int(d["billet"]), "bloom": int(d["bloom"]), "slab": int(d["slab"]),
+                "entry_date": str(d["entry_date"]), "by": str(d.get("by") or "")}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def save_today_counts(db: Database, *, billet: int, bloom: int, slab: int,
+                      user: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Store today's monthly tundish counts (dated by ENTRY date, not a month)."""
+    import json
+
+    vals = [int(billet), int(bloom), int(slab)]
+    if any(v < 0 for v in vals):
+        raise ValueError("تعداد تاندیش باید عدد صحیح ≥ ۰ باشد.")
+    y, m, d = report_date_parts(None)
+    entry = {"billet": vals[0], "bloom": vals[1], "slab": vals[2],
+             "entry_date": f"{y}/{m:02d}/{d:02d}",
+             "by": str((user or {}).get("bale_user_id") or "")}
+    db.set_setting(TODAY_COUNTS_KEY, json.dumps(entry, ensure_ascii=False))
+    return entry
+
+
+def today_counts_line(db: Database) -> str:
+    """«آخرین ثبت دستی: 1405/08/02 — اسلب 70، بیلت 34، بلوم 0» (+ whether used today)."""
+    e = get_today_counts(db)
+    if not e:
+        return "ثبت دستی تعداد تاندیش برای امروز: ندارد (مبنا = میانگین لاگ توالی تاندیش ۳ ماه کامل گذشته)."
+    y, m, d = report_date_parts(None)
+    used = e["entry_date"] == f"{y}/{m:02d}/{d:02d}"
+    return (
+        f"آخرین ثبت دستی: {e['entry_date']} — اسلب {e['slab']}، بیلت {e['billet']}، بلوم {e['bloom']}"
+        + ("" if used else " (مربوط به امروز نیست؛ مبنای امروز = میانگین لاگ توالی تاندیش)")
+    )
+
+
 def critical_basis(db: Database, report_date: Any = None) -> TundishMonthCounts | None:
     """Tundish basis of a critical-items report generated on ``report_date`` (default today).
 
@@ -123,6 +170,14 @@ def critical_basis(db: Database, report_date: Any = None) -> TundishMonthCounts 
     all are skipped (header says how many months were averaged).
     """
     y, m, d = report_date_parts(report_date)
+    entry = get_today_counts(db)
+    if entry and entry["entry_date"] == f"{y}/{m:02d}/{d:02d}":
+        b, bl, s = entry["billet"], entry["bloom"], entry["slab"]
+        return TundishMonthCounts(
+            jalali_year=y, jalali_month=m, count_billet=b, count_bloom=bl, count_slab=s,
+            basis_months=((y, m, b, bl, s, SOURCE_MANUAL),),
+            report_date=f"{y}/{m:02d}/{d:02d}", manual_entry_date=entry["entry_date"],
+        )
     manual = {
         (int(r["jalali_year"]), int(r["jalali_month"])): r
         for r in db.list_monthly_tundish_counts(limit=240)
@@ -211,6 +266,10 @@ def _segment_table_section(segment: str, df: pd.DataFrame, reno_mode: str) -> di
 
 def fixed_notes(counts: TundishMonthCounts) -> list[str]:
     """The only printed notes: the horizon + the report date / tundish basis."""
+    if counts.manual_entry_date:
+        return [HORIZON_NOTE, f"تاریخ گزارش: {counts.report_date} — مبنا: از امروز، مصرف هر "
+                f"تاندیش (منبع اصلی) × تعداد تاندیش ماهانهٔ ثبت دستی ({basis_counts_text(counts)}؛ "
+                f"ثبت‌شده در {counts.manual_entry_date})؛ موجودی امروز."]
     basis = counts.basis_label()
     basis_txt = (
         f" — مبنا: مصرف هر تاندیش (منبع اصلی) × میانگین ماهانه تعداد تاندیش {basis} "

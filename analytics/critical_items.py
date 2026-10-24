@@ -184,6 +184,8 @@ class TundishMonthCounts:
     count_slab: float
     basis_months: tuple = ()
     report_date: str = ""
+    # v1.2.1: «تعداد تاندیش ماهانه از امروز» entered on this Jalali date (manual basis)
+    manual_entry_date: str = ""
 
     @property
     def total(self) -> float:
@@ -929,17 +931,24 @@ def basis_sources_text(counts: TundishMonthCounts) -> str:
 
 def horizon_header_note(counts: TundishMonthCounts) -> str:
     """Header note on every critical-items report (PDF, xlsx, bot, web)."""
+    since = f"از امروز {counts.report_date}: " if counts.report_date else ""
+    date_txt = f" تاریخ گزارش: {counts.report_date}." if counts.report_date else ""
+    if counts.manual_entry_date:
+        return (
+            f"{since}این جدول برای ۳ ماه آینده (اقلام داخلی) و ۶ ماه آینده (اقلام وارداتی) با "
+            f"تعداد تاندیش ماهانهٔ ثبت دستی ({basis_counts_text(counts)} در ماه؛ ثبت‌شده در "
+            f"{counts.manual_entry_date}) و موجودی امروز تهیه شده است.{date_txt}"
+        )
     n = len(counts.months())
     src = basis_sources_text(counts)
     src_txt = f"؛ منبع: {src}" if src else ""
     short = (
         f" — فقط {n} ماه از ۳ ماه کامل گذشته داده داشت" if n < BASIS_MONTHS else ""
     )
-    date_txt = f" تاریخ گزارش: {counts.report_date}." if counts.report_date else ""
     return (
-        "این جدول برای ۳ ماه آینده (اقلام داخلی) و ۶ ماه آینده (اقلام وارداتی) با توجه به "
+        f"{since}این جدول برای ۳ ماه آینده (اقلام داخلی) و ۶ ماه آینده (اقلام وارداتی) با توجه به "
         f"میانگین تعداد تاندیش {counts.basis_label()} ({basis_counts_text(counts)} در ماه"
-        f"{src_txt}{short}) تهیه شده است.{date_txt}"
+        f"{src_txt}{short}) و موجودی امروز تهیه شده است.{date_txt}"
     )
 
 

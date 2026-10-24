@@ -44,6 +44,8 @@ def _critical_context(db: Database, request: Request) -> dict:
     basis_note = horizon_header_note(basis) if basis is not None else (
         "برای ۳ ماه کامل گذشته نه لاگ توالی تاندیش هست و نه تعداد تاندیش ماهانه."
     )
+    from services.critical_items_report import get_today_counts, today_counts_line
+
     recent = []
     for r in db.list_monthly_tundish_counts(limit=6):
         recent.append(
@@ -60,6 +62,8 @@ def _critical_context(db: Database, request: Request) -> dict:
         "critical_reno": normalize_reno_mode(request.query_params.get("renovation") or "with"),
         "reno_modes": [(m, RENO_LABEL_FA[m]) for m in RENO_MODES],
         "counts": counts,
+        "today_counts": get_today_counts(db),
+        "today_counts_line": today_counts_line(db),
         "basis_note": basis_note,
         "recent_counts": recent,
         "month_names": [(n, PERSIAN_MONTH_NAMES[n]) for n in range(1, 13)],
@@ -142,42 +146,24 @@ async def inbound_xlsx(
 @router.post("/critical-items/counts")
 async def save_critical_counts(
     request: Request,
-    jalali_year: int = Form(...),
-    jalali_month: int = Form(...),
+    count_slab: int = Form(...),
     count_billet: int = Form(...),
     count_bloom: int = Form(...),
-    count_slab: int = Form(...),
     user=Depends(require_feature(perm.REPORT_CRITICAL)),
     db: Database = Depends(get_db),
 ):
+    """v1.2.1: monthly tundish counts «از امروز» — no year/month; dated by entry date."""
+    from services.critical_items_report import save_today_counts
+
     try:
-        db.upsert_monthly_tundish_counts(
-            jalali_year=jalali_year,
-            jalali_month=jalali_month,
-            count_billet=count_billet,
-            count_bloom=count_bloom,
-            count_slab=count_slab,
-            updated_by=user["bale_user_id"],
-        )
+        saved = save_today_counts(db, slab=count_slab, billet=count_billet, bloom=count_bloom,
+                                  user=user)
     except ValueError as exc:
-        return RedirectResponse(
-            f"/reports?err={quote(str(exc))}"
-            f"&jalali_year={jalali_year}&jalali_month={jalali_month}",
-            status_code=303,
-        )
-    log_activity(
-        db,
-        user,
-        "critical_tundish_counts_saved",
-        jalali_year=jalali_year,
-        jalali_month=jalali_month,
-    )
-    label = format_month_year(jalali_year, jalali_month, named=True)
-    return RedirectResponse(
-        f"/reports?msg={quote('تعداد تاندیش برای ' + label + ' ذخیره شد.')}"
-        f"&jalali_year={jalali_year}&jalali_month={jalali_month}",
-        status_code=303,
-    )
+        return RedirectResponse(f"/reports?err={quote(str(exc))}#critical", status_code=303)
+    log_activity(db, user, "critical_tundish_counts_saved", entry_date=saved["entry_date"],
+                 source="web")
+    msg = f"تعداد تاندیش ماهانه از امروز {saved['entry_date']} ذخیره شد."
+    return RedirectResponse(f"/reports?msg={quote(msg)}#critical", status_code=303)
 
 
 @router.get("/critical-items")

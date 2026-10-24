@@ -2802,18 +2802,9 @@ class BotApp:
         uid = str(user["bale_user_id"])
         self._clear_critical_pending(uid)
         self._clear_analysis_pending(uid)
-        latest = self.db.list_monthly_tundish_counts(limit=1)
-        extra = ""
-        if latest:
-            r = latest[0]
-            from bot.jalali import format_month_year
+        from services.critical_items_report import today_counts_line
 
-            label = format_month_year(int(r["jalali_year"]), int(r["jalali_month"]), named=True)
-            extra = (
-                f"\nآخرین ثبت دستی: {label} — بیلت {r['count_billet']}، "
-                f"بلوم {r['count_bloom']}، اسلب {r['count_slab']}"
-                + (" (در مبنا استفاده نمی‌شود)" if int(r.get("exclude_from_basis") or 0) else "")
-            )
+        extra = "\n" + today_counts_line(self.db)
         from analytics.critical_items import horizon_header_note
         from services.critical_items_report import critical_basis
 
@@ -2823,14 +2814,15 @@ class BotApp:
         self._reply(
             message,
             f"{kb.BTN_CRITICAL_ITEMS}\n"
-            "۱) (اختیاری) تعداد تاندیش بیلت/بلوم/اسلب ماه را ثبت کنید — فقط وقتی لاگ توالی تاندیش نیست\n"
+            "۱) (اختیاری) تعداد تاندیش ماهانهٔ اسلب/بیلت/بلوم را از امروز ثبت کنید (بدون سال و ماه)؛ "
+            "اگر امروز ثبت نشود، میانگین لاگ توالی تاندیش ۳ ماه کامل گذشته مبناست\n"
             "۲) گزارش را بگیرید (حالت «با نوسازی» یا «بدون نوسازی»): پیش‌نویس PDF اصلی (فقط اقلام شرکت)، "
             "PDF جداگانهٔ اقلام پیمانکار و اکسل دو شیتی، همه به شکل قالب «140506»\n"
             "۳) (اختیاری) توضیحات خودتان را بنویسید، بعد «تأیید» بزنید تا نسخهٔ نهایی ذخیره شود\n"
             f"۴) گزارش‌های تأییدشده همیشه از «{kb.BTN_CRITICAL_ARCHIVE}» (و وب) قابل دریافت‌اند\n"
-            "تاریخ گزارش = امروز؛ مبنا: مصرف هر تاندیش هر نوع (منبع اصلی) × میانگین تعداد تاندیش "
-            "۳ ماه کامل گذشته (لاگ توالی تاندیش، در نبود آن ثبت دستی)؛ نیاز = مصرف پیش‌بینی‌شده "
-            "در افق (اجناس داخلی ۳ ماه، اجناس وارداتی ۶ ماه) − موجودی؛ فقط اقلام با نیاز مثبت.\n"
+            "از امروز: مبنا = مصرف هر تاندیش هر نوع (منبع اصلی) × تعداد تاندیش ماهانهٔ ثبت امروز "
+            "(یا میانگین لاگ توالی تاندیش ۳ ماه کامل گذشته)؛ نیاز = مصرف پیش‌بینی‌شده از امروز "
+            "(اجناس داخلی ۳ ماه، اجناس وارداتی ۶ ماه) − موجودی امروز؛ فقط اقلام با نیاز مثبت.\n"
             "نقش‌های مجاز: مالک، مدیر، کاردان مسئول."
             f"{extra}",
             kb.critical_items_menu(),
@@ -2844,15 +2836,19 @@ class BotApp:
             return
         uid = str(user["bale_user_id"])
         self._clear_analysis_pending(uid)
-        self._critical_pending[uid] = {
-            "mode": "counts",
-            "await": "year",
-        }
-        years = year_choices_around()
+        from services.critical_items_report import get_today_counts, report_date_parts
+
+        y, m, d = report_date_parts(None)
+        self._critical_pending[uid] = {"mode": "counts", "await": "count_slab"}
+        e = get_today_counts(self.db)
+        hint = (f"\nآخرین ثبت ({e['entry_date']}): اسلب {e['slab']}، بیلت {e['billet']}، "
+                f"بلوم {e['bloom']}") if e else ""
         self._reply(
             message,
-            "سال شمسی مورد نظر برای تعداد تاندیش را انتخاب کنید:",
-            kb.year_picker_menu(years),
+            f"📝 تعداد تاندیش ماهانه — از امروز {y}/{m:02d}/{d:02d}\n"
+            "گزارش اقلام بحرانی امروز با این اعداد (در ماه) و موجودی امروز محاسبه می‌شود.\n\n"
+            f"۱/۳ — تعداد تاندیش اسلب در ماه را بفرستید (عدد صحیح ≥ ۰):{hint}",
+            kb.critical_items_menu(),
         )
 
     def on_critical_report_start(self, message: dict) -> None:
@@ -3007,61 +3003,38 @@ class BotApp:
                 return True
             val = int(digits)
             pending[await_kind] = val
+            if await_kind == "count_slab":
+                pending["await"] = "count_billet"
+                self._critical_pending[uid] = pending
+                self._reply(message, "۲/۳ — تعداد تاندیش بیلت در ماه را بفرستید (عدد صحیح ≥ ۰):",
+                            kb.critical_items_menu())
+                return True
             if await_kind == "count_billet":
                 pending["await"] = "count_bloom"
                 self._critical_pending[uid] = pending
-                self._reply(
-                    message,
-                    "تعداد تاندیش بلوم را بفرستید (عدد صحیح ≥ ۰):",
-                    kb.critical_items_menu(),
-                )
+                self._reply(message, "۳/۳ — تعداد تاندیش بلوم در ماه را بفرستید (عدد صحیح ≥ ۰):",
+                            kb.critical_items_menu())
                 return True
-            if await_kind == "count_bloom":
-                pending["await"] = "count_slab"
-                self._critical_pending[uid] = pending
-                self._reply(
-                    message,
-                    "تعداد تاندیش اسلب را بفرستید (عدد صحیح ≥ ۰):",
-                    kb.critical_items_menu(),
-                )
-                return True
-            # count_slab — save
-            year = int(pending["year"])
-            month = int(pending["month"])
-            billet = int(pending["count_billet"])
-            bloom = int(pending["count_bloom"])
-            slab = val
+            # count_bloom — save (dated by entry date = today)
+            from services.critical_items_report import save_today_counts
+
             try:
-                saved = self.db.upsert_monthly_tundish_counts(
-                    jalali_year=year,
-                    jalali_month=month,
-                    count_billet=billet,
-                    count_bloom=bloom,
-                    count_slab=slab,
-                    updated_by=user["bale_user_id"],
+                saved = save_today_counts(
+                    self.db, slab=int(pending["count_slab"]), billet=int(pending["count_billet"]),
+                    bloom=val, user=user,
                 )
             except ValueError as exc:
                 self._clear_critical_pending(uid)
                 self._reply(message, str(exc), kb.critical_items_menu())
                 return True
             self._clear_critical_pending(uid)
-            from bot.jalali import format_month_year
-
-            label = format_month_year(year, month, named=True)
-            log_activity(
-                self.db,
-                user,
-                "critical_tundish_counts_saved",
-                jalali_year=year,
-                jalali_month=month,
-            )
+            log_activity(self.db, user, "critical_tundish_counts_saved",
+                         entry_date=saved["entry_date"])
             self._reply(
                 message,
-                f"✅ تعداد تاندیش برای {label} ذخیره شد.\n"
-                f"بیلت: {saved.get('count_billet', billet)} | "
-                f"بلوم: {saved.get('count_bloom', bloom)} | "
-                f"اسلب: {saved.get('count_slab', slab)}\n"
-                "می‌توانید «تولید گزارش اقلام بحرانی» را بزنید.",
+                f"✅ تعداد تاندیش ماهانه از امروز {saved['entry_date']} ذخیره شد.\n"
+                f"اسلب: {saved['slab']} | بیلت: {saved['billet']} | بلوم: {saved['bloom']}\n"
+                f"اکنون «{kb.BTN_CRITICAL_REPORT}» را بزنید.",
                 kb.critical_items_menu(),
             )
             return True
