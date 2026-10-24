@@ -492,6 +492,16 @@ def generate_critical_items_files(
         return res
     res.frames = build_critical_items_segments(inv, counts, reno_mode)
     res.rates_lines = {seg: section_rates_line(inv, seg, counts, reno_mode) for seg in SEGMENTS}
+    from analytics.critical_items import BELOW_CP_LABEL
+
+    for seg in SEGMENTS:
+        df_s = res.frames.get(seg)
+        if df_s is not None and not df_s.empty and "below_threshold" in df_s.columns:
+            n_cp = int(df_s["کد و شرح کالا"].astype(str).str.contains(BELOW_CP_LABEL, regex=False).sum())
+            if n_cp:
+                res.rates_lines[seg] += (
+                    f" {n_cp} قلم «{BELOW_CP_LABEL}» (موجودی ≤ نقطه بحرانی) هم آمده؛ "
+                    "درخواست = بیشترِ نیاز و (نقطه بحرانی − موجودی).")
     res.audit = {"missing": [], "mixed": []}
     for seg in SEGMENTS:
         a = origin_audit(inv, seg)

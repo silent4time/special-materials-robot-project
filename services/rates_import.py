@@ -26,7 +26,18 @@ RATE_COLS: tuple[str, ...] = (
     "slab_renovation", "slab_patching", "bloom_renovation", "bloom_patching",
     "billet_renovation", "billet_patching", "casting_floor",
 )
-EXPORT_COLS: list[str] = ["category_code", "id", "product_name", "unit", *RATE_COLS]
+# v1.4.0: «سازنده» / «نقطه بحرانی» are also filled — only EMPTY cells, never overwritten.
+EXTRA_COLS: tuple[str, ...] = ("origin", "critical_point")
+EXPORT_COLS: list[str] = ["category_code", "id", "product_name", "unit", *RATE_COLS, *EXTRA_COLS]
+
+
+def _extra_val(col: str, v: Any) -> Any:
+    """Usable value of an extra column (None when blank)."""
+    if col == "critical_point":
+        n = _num(v)
+        return n if n is not None and n > 0 else None
+    text = "" if v is None else str(v).strip()
+    return None if text.lower() in {"", "nan", "none"} else text
 
 
 def _num(v: Any) -> float | None:
@@ -116,7 +127,7 @@ def read_rates_file(path: Path | str) -> pd.DataFrame:
             df = pd.read_excel(xl, sheet_name=sheet, header=hdr, dtype=object)
             df = _normalize_columns(df)
             cols = set(map(str, df.columns))
-            if ({"id", "category_code"} & cols) and (set(RATE_COLS) & cols):
+            if ({"id", "category_code"} & cols) and ((set(RATE_COLS) | set(EXTRA_COLS)) & cols):
                 return df
     raise ValueError("ستون شناسه/کد دسته و حداقل یک ستون نرخ مصرف در فایل پیدا نشد.")
 
@@ -128,7 +139,8 @@ def build_plan(source: pd.DataFrame | None, incoming: pd.DataFrame) -> Plan:
         return plan
     src = ms.ensure_inventory_columns(source.copy())
     rate_cols = [c for c in RATE_COLS if c in incoming.columns]
-    if not rate_cols:
+    extra_cols = [c for c in EXTRA_COLS if c in incoming.columns]
+    if not rate_cols and not extra_cols:
         plan.error = "هیچ ستون نرخ مصرفی در فایل نیست."
         return plan
     src_ids = src["id"].map(ms._norm_id)
@@ -145,6 +157,10 @@ def build_plan(source: pd.DataFrame | None, incoming: pd.DataFrame) -> Plan:
     for _, r in incoming.iterrows():
         vals = {c: _num(r.get(c)) for c in rate_cols}
         vals = {c: v for c, v in vals.items() if v is not None and v != 0}
+        for c in extra_cols:
+            ev = _extra_val(c, r.get(c))
+            if ev is not None:
+                vals[c] = ev
         if not vals:
             continue
         rid = ms._norm_id(r.get("id")) if "id" in incoming.columns else ""
@@ -179,6 +195,12 @@ def build_plan(source: pd.DataFrame | None, incoming: pd.DataFrame) -> Plan:
         base = {"id": ms._norm_id(row.get("id")), "code": _code(row.get("category_code")),
                 "name": str(row.get("product_name") or "").strip(), "row": int(idx)}
         for c, new in targets[idx].items():
+            if c in EXTRA_COLS:
+                if _extra_val(c, row.get(c)) is None:
+                    plan.fills.append({**base, "col": c, "new": new})
+                else:
+                    plan.same += 1  # filled already → kept (extras never overwrite)
+                continue
             old = _num(row.get(c))
             if old is None or old == 0:
                 plan.fills.append({**base, "col": c, "new": new})
@@ -280,7 +302,7 @@ def apply_plan(db: Any, user: dict, plan: Plan, *, overwrite: bool = False) -> d
         return {"ok": False, "error": f"پشتیبان‌گیری پیش از ذخیره ناموفق بود؛ چیزی ذخیره نشد ({exc})."}
     work = ms.ensure_inventory_columns(source.copy())
     ids = work["id"].map(ms._norm_id).tolist()
-    for c in RATE_COLS:
+    for c in (*RATE_COLS, *EXTRA_COLS):
         if c in work.columns:
             work[c] = work[c].astype(object)
     done = 0

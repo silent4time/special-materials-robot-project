@@ -107,6 +107,7 @@ def active_rate_cols(reno_mode: str = RENO_WITH) -> tuple[str, ...]:
 SHARED_POOLED = "pooled"
 SHARED_PER_CODE = "per_code"
 SHARED_NEED_LABEL = "نیاز مشترک گروه"
+BELOW_CP_LABEL = "زیر نقطه بحرانی"
 ROW_ITEM = "item"
 ROW_GROUP = "group"
 ROW_MEMBER = "member"
@@ -667,7 +668,12 @@ def build_critical_items_rows(
         horizon = HORIZON_MONTHS[okey]
         forecast = monthly * horizon
         shortage = max(0.0, forecast - stock)
-        if shortage <= 1e-9 and not include_covered:
+        # v1.4.0 (user rule 1405-08-02): stock ≤ نقطه بحرانی (filled, > 0) → always
+        # listed, request = max(نیاز, نقطه بحرانی − موجودی).
+        below_cp = bool(cp is not None and float(cp) > 0 and stock <= float(cp))
+        if below_cp:
+            shortage = max(shortage, float(cp) - stock)
+        if shortage <= 1e-9 and not include_covered and not below_cp:
             return None  # stock covers the horizon → not critical
         daily = monthly / float(days)
         days_cover = stock / daily if daily > 0 else 0.0
@@ -682,6 +688,7 @@ def build_critical_items_rows(
             "daily": daily,
             "days_cover": days_cover,
             "below": bool(cp is not None and stock <= float(cp)),
+            "below_cp": below_cp,
         }
 
     def _r(v: float) -> int | float:
@@ -694,6 +701,8 @@ def build_critical_items_rows(
         return int(math.ceil(float(v) - 1e-6)) if v > 0 else 0
 
     def _row(code: str, desc: str, unit: str, stock: float, m: dict[str, Any], cp, kind: str) -> dict[str, Any]:
+        if m.get("below_cp"):
+            desc = f"{desc} ({BELOW_CP_LABEL})"
         return {
             "کد چهاررقمی": code,
             "ردیف": 0,
@@ -1061,7 +1070,9 @@ def report_footer_notes(
         ),
         (
             f"«{COL_NEED}» = مصرف پیش‌بینی‌شده در افق − موجودی (اگر مثبت باشد). فقط اقلامی با "
-            "نیاز مثبت فهرست می‌شوند (داخلی: پوشش کمتر از ۹۰ روز، وارداتی: کمتر از ۱۸۰ روز)."
+            "نیاز مثبت فهرست می‌شوند (داخلی: پوشش کمتر از ۹۰ روز، وارداتی: کمتر از ۱۸۰ روز)، "
+            f"به‌علاوهٔ اقلامی که موجودی ≤ نقطه بحرانی (پر و بزرگ‌تر از ۰) دارند — «{BELOW_CP_LABEL}»؛ "
+            "برای این‌ها مقدار درخواست = بیشترِ نیاز و (نقطه بحرانی − موجودی)."
         ),
         reno_mode_note(reno_mode),
         (
