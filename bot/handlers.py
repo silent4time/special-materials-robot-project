@@ -143,6 +143,10 @@ class BotApp:
         self._nav: dict[str, dict[str, str]] = {}
         # «📦 جایگزینی کامل منبع اصلی» waiting for confirm
         self._full_replace_confirm: set[str] = set()
+        # «📥 ورود نرخ‌های مصرف»: uid -> {"await": "file"|"confirm", "plan": dict}
+        self._rates_import_pending: dict[str, dict[str, Any]] = {}
+        # «⚠️ تأیید پاک شدن نرخ‌ها»: next main-source upload may blank existing rates
+        self._allow_rate_loss: set[str] = set()
         # «🧮 نیاز مواد برای N تاندیش» steps
         self._n_tundish_pending: dict[str, dict[str, Any]] = {}
         # «❓ راهنمای تهیهٔ فایل»: last file kind the user is asked for
@@ -382,6 +386,7 @@ class BotApp:
                 uid in self._warehouse_ret_pending,
                 uid in self._critical_pending,
                 uid in self._full_replace_confirm,
+                uid in self._rates_import_pending,
                 uid in self._n_tundish_pending,
                 uid in self.tundish_report.pending,
                 uid in self.tundish_report.settings_pending,
@@ -408,6 +413,8 @@ class BotApp:
         self._main_source_pending.pop(uid, None)
         self._upload_return_menu.pop(uid, None)
         self._full_replace_confirm.discard(uid)
+        self._rates_import_pending.pop(uid, None)
+        self._allow_rate_loss.discard(uid)
         self._n_tundish_pending.pop(uid, None)
         self._file_guide_kind.pop(uid, None)
         try:
@@ -1510,6 +1517,10 @@ class BotApp:
         if self._backup_restore_pending.pop(uid, None) is not None:
             self._reply(message, "بازگردانی لغو شد.", kb.backup_menu(user))
             return
+        self._allow_rate_loss.discard(uid)
+        if self._rates_import_pending.pop(uid, None) is not None:
+            self._reply(message, "ورود نرخ‌ها لغو شد؛ منبع اصلی تغییری نکرد.", kb.main_source_file_menu(user))
+            return
         # short message + the menu the flow started from (no full status dump)
         if had_main_source:
             self._upload_return_menu.pop(uid, None)
@@ -1577,11 +1588,16 @@ class BotApp:
             self._reply(message, user_errors.error_fa("دانلود فایل از بله ناموفق بود", exc))
             return
 
+        allow_loss = str(user["bale_user_id"]) in self._allow_rate_loss
         out = file_upload.process_upload(
             self.db, user, dest, pending, session=session, upload_origin=upload_origin,
-            actor_fa=self._format_actor(user),
+            actor_fa=self._format_actor(user), allow_rate_loss=allow_loss,
         )
+        self._allow_rate_loss.discard(str(user["bale_user_id"]))
         if not out.ok:
+            if out.kind == "rate_loss" and perm.can(user, perm.MAIN_SOURCE_EDIT):
+                self._reply(message, out.text, kb.rate_loss_menu())
+                return
             if out.kind in {"no_codes"} or (out.kind == "extract" and out.pending == "product_inventory"):
                 menu = self._keyboard_for_upload_return(user, default="main_source", consume=False)
             elif out.kind == "guard":
@@ -1766,6 +1782,8 @@ class BotApp:
             return
         if res.error:
             self._reply(message, res.error, kb.analytics_menu(user))
+            if res.rates_hint:
+                self._send_rates_hint(message, user)
             return
         chat = self._chat_id(message)
         for path, cap in ((res.pdf, res.title), (res.xlsx, f"نسخه اکسل — {res.title}")):
@@ -1793,6 +1811,8 @@ class BotApp:
             return
         if res.error:
             self._reply(message, res.error, kb.analytics_menu(user))
+            if res.rates_hint:
+                self._send_rates_hint(message, user)
             return
         chat = self._chat_id(message)
         for path, cap in ((res.pdf, res.title), (res.xlsx, f"نسخه اکسل — {res.title}")):
@@ -1835,6 +1855,134 @@ class BotApp:
             return
         self._full_replace_confirm.discard(uid)
         self.on_pick_file_type(message, "product_inventory", return_menu="main_source")
+
+    # ---------- 📥 ورود نرخ‌های مصرف (v1.2.0) ----------
+    def _send_rates_hint(self, message: dict, user: dict) -> None:
+        markup = kb.rates_hint_inline(user)
+        if not markup:
+            return
+        try:
+            self.client.send_message(self._chat_id(message), "راه‌های تکمیل نرخ‌ها:", reply_markup=markup)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("rates hint buttons failed: %s", exc)
+
+    def on_rates_import_start(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user, perm.MAIN_SOURCE_EDIT):
+            return
+        if not perm.can(user, perm.MAIN_SOURCE_EDIT):
+            self._reply(message, "ورود نرخ‌های مصرف برای نقش شما مجاز نیست.", kb.main_source_file_menu(user))
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_analysis_pending(uid)
+        self.db.set_pending_file_type(uid, None)
+        self._rates_import_pending[uid] = {"await": "file"}
+        self._reply(
+            message,
+            f"{kb.BTN_RATES_IMPORT}\n"
+            "فایل Excel نرخ‌ها را به‌صورت Document (.xlsx) بفرستید. دو قالب پذیرفته می‌شود:\n"
+            "• فایل نرخ مصرف (کد دسته، شناسه، شرح، واحد + ۷ ستون نرخ)\n"
+            "• فایل کامل منبع اصلی (خروجی «📄 دانلود اکسل منبع اصلی»)\n\n"
+            "تطبیق: اول با شناسه مواد، سپس با کد ۴ رقمی. پیش از ذخیره، خلاصهٔ بررسی و فایل اکسل آن "
+            "ارسال می‌شود و تا تأیید نکنید چیزی ذخیره نمی‌شود.\n"
+            f"اگر منصرف شدید، «{kb.BTN_CANCEL_PENDING}» را بزنید.",
+            kb.cancel_pending_menu(),
+        )
+
+    def on_rates_import_document(self, message: dict) -> bool:
+        from services import rates_import as ri
+
+        uid = str(self._uid(message))
+        pend = self._rates_import_pending.get(uid)
+        if not pend or pend.get("await") != "file":
+            return False
+        user = self._user_or_deny(message)
+        if not user or not perm.can(user, perm.MAIN_SOURCE_EDIT):
+            self._rates_import_pending.pop(uid, None)
+            return True
+        doc = message.get("document") or {}
+        name = (doc.get("file_name") or "").strip()
+        if not name.lower().endswith(".xlsx") or not doc.get("file_id"):
+            self._reply(message, "فقط فایل .xlsx پذیرفته می‌شود.", kb.cancel_pending_menu())
+            return True
+        dest = UPLOAD_DIR / uid / "rates_import" / "incoming.xlsx"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.client.download_file(doc["file_id"], dest)
+        except Exception as exc:  # noqa: BLE001
+            self._reply(message, user_errors.error_fa("دانلود فایل از بله ناموفق بود", exc), kb.cancel_pending_menu())
+            return True
+        plan = ri.plan_from_file(self.db, user, dest)
+        if not plan.ok:
+            self._reply(message, ri.summary_fa(plan) + "\nفایل دیگری بفرستید یا انصراف دهید.", kb.cancel_pending_menu())
+            return True
+        review = ri.review_xlsx(plan, dest.parent / "بررسی ورود نرخ‌های مصرف.xlsx")
+        try:
+            self.client.send_document(self._chat_id(message), review, caption="بررسی ورود نرخ‌های مصرف")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("send rates review failed: %s", exc)
+        if not plan.fills and not plan.conflicts:
+            self._rates_import_pending.pop(uid, None)
+            self._reply(message, ri.summary_fa(plan) + "\nچیزی برای ذخیره نیست.", kb.main_source_file_menu(user))
+            return True
+        self._rates_import_pending[uid] = {"await": "confirm", "plan": plan.to_dict()}
+        self.client.send_message(self._chat_id(message), ri.summary_fa(plan), reply_markup=kb.rates_review_inline())
+        return True
+
+    def _on_rates_callback(self, data: str, message: dict, user: dict, answer) -> None:
+        from services import rates_import as ri
+
+        uid = str(user["bale_user_id"])
+        act = data[len(kb.CB_RATES_PREFIX):]
+        if act == "start":
+            answer()
+            self.on_rates_import_start(message)
+            return
+        if act == "dl":
+            answer()
+            self.on_inv_download(message)
+            return
+        pend = self._rates_import_pending.get(uid)
+        if act == "x":
+            answer("لغو شد")
+            self._rates_import_pending.pop(uid, None)
+            self._reply(message, "ورود نرخ‌ها لغو شد؛ منبع اصلی تغییری نکرد.", kb.main_source_file_menu(user))
+            return
+        if act not in {"keep", "over"} or not pend or pend.get("await") != "confirm":
+            answer("این بررسی منقضی شده؛ دوباره فایل را بفرستید.", alert=True)
+            return
+        if not perm.can(user, perm.MAIN_SOURCE_EDIT):
+            answer("مجاز نیستید.", alert=True)
+            return
+        answer("در حال ذخیره…")
+        self._rates_import_pending.pop(uid, None)
+        plan = ri.Plan.from_dict(pend["plan"])
+        res = ri.apply_plan(self.db, user, plan, overwrite=(act == "over"))
+        if not res.get("ok"):
+            self._reply(message, "⛔ " + str(res.get("error")), kb.main_source_file_menu(user))
+            return
+        log_activity(self.db, user, "rates_import", filled=res["filled"], overwritten=res["overwritten"])
+        self._reply(
+            message,
+            f"✅ نرخ‌های مصرف ذخیره شد: {res['filled']} خانهٔ خالی پر شد"
+            + (f"، {res['overwritten']} مغایرت جایگزین شد" if res["overwritten"] else
+               f"، {len(plan.conflicts)} مغایرت با مقدار فعلی حفظ شد" if plan.conflicts else "")
+            + ".\nپشتیبان پایگاه‌داده پیش از ذخیره گرفته شد.",
+            kb.main_source_file_menu(user),
+        )
+
+    def on_rate_loss_ok(self, message: dict) -> None:
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user, perm.MAIN_SOURCE_EDIT):
+            return
+        uid = str(user["bale_user_id"])
+        self._allow_rate_loss.add(uid)
+        self.on_pick_file_type(message, "product_inventory", return_menu="main_source")
+        self._allow_rate_loss.add(uid)
 
     # ---------- ❓ راهنمای تهیهٔ فایل ----------
     def on_file_guide(self, message: dict) -> None:
@@ -1969,7 +2117,7 @@ class BotApp:
             f"• {kb.BTN_WAREHOUSE_STOCK} — Excel انبار؛ فقط شناسه‌های موجود به‌روز می‌شوند "
             "(شناسهٔ جدید فقط با کد ۴رقمی موجود و غیر ۱۸۰۰)\n"
             f"• {kb.BTN_MONTHLY} — Excel مصرف ماهیانه\n"
-            f"• {kb.BTN_MAIN_SOURCE_FILE} — جایگزینی کامل / دانلود / رکورد / کد دسته",
+            f"• {kb.BTN_MAIN_SOURCE_FILE} — جایگزینی کامل / دانلود / رکورد / کد دسته / {kb.BTN_RATES_IMPORT}",
             kb.upload_files_menu(user),
         )
 
@@ -3000,7 +3148,11 @@ class BotApp:
                     "قلمی با کسری (نیاز مثبت) در افق ۳ ماه (داخلی) / ۶ ماه (وارداتی) "
                     f"({reno_label}) یافت نشد.\n{res.header_note}"
                 )
+                if getattr(res, "rates_note", ""):
+                    text += "\n" + res.rates_note
             self._reply(message, text, menu)
+            if getattr(res, "rates_hint", False):
+                self._send_rates_hint(message, user)
             return
 
         if report is None:
@@ -4819,6 +4971,14 @@ class BotApp:
                 answer("شما در سیستم ثبت نشده‌اید.", alert=True)
                 return
             self._on_critical_draft_callback(data, message, user, answer)
+            return
+
+        if data.startswith(kb.CB_RATES_PREFIX):
+            user = ensure_registered(self.db, uid, self._display_name(message))
+            if not user:
+                answer("شما در سیستم ثبت نشده‌اید.", alert=True)
+                return
+            self._on_rates_callback(data, message, user, answer)
             return
 
         if data.startswith(kb.CB_CRITICAL_RENO_PREFIX):
@@ -6830,6 +6990,8 @@ class BotApp:
         if message.get("document"):
             if self.on_backup_restore_document(message):
                 return
+            if self.on_rates_import_document(message):
+                return
             if self.on_bot_settings_letterhead_document(message):
                 return
         if message.get("photo") or message.get("document"):
@@ -7105,6 +7267,8 @@ class BotApp:
             kb.BTN_INV_ADD_CATEGORY: self.on_add_category_prompt,
             kb.BTN_INV_LIST_CATEGORIES: self.on_list_categories,
             kb.BTN_MS_PENDING: self.on_main_source_pending_list,
+            kb.BTN_RATES_IMPORT: self.on_rates_import_start,
+            kb.BTN_RATE_LOSS_OK: self.on_rate_loss_ok,
             kb.BTN_INV_DOWNLOAD: self.on_inv_download,
             kb.BTN_WAREHOUSE_STOCK: lambda m: self.on_pick_file_type(m, "product_inventory", return_menu="upload"),
             kb.BTN_MONTHLY: lambda m: self.on_pick_file_type(m, "monthly_consumption", return_menu="upload"),

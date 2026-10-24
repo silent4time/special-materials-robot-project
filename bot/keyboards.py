@@ -615,6 +615,32 @@ file_entry_menu = upload_files_menu
 
 
 BTN_MS_PENDING = "📝 درخواست‌های در انتظار تأیید"
+BTN_RATES_IMPORT = "📥 ورود نرخ‌های مصرف"
+BTN_RATE_LOSS_OK = "⚠️ تأیید پاک شدن نرخ‌ها"
+CB_RATES_PREFIX = "ri|"
+
+
+def rates_review_inline() -> dict:
+    """Review of «📥 ورود نرخ‌های مصرف»: keep conflicts (default) / overwrite / cancel."""
+    return {"inline_keyboard": [
+        [{"text": "✅ ذخیره (مغایرت‌ها: حفظ مقدار فعلی)", "callback_data": f"{CB_RATES_PREFIX}keep"}],
+        [{"text": "♻️ ذخیره با جایگزینی مغایرت‌ها", "callback_data": f"{CB_RATES_PREFIX}over"}],
+        [{"text": "❌ انصراف", "callback_data": f"{CB_RATES_PREFIX}x"}],
+    ]}
+
+
+def rates_hint_inline(user: dict | None = None) -> dict | None:
+    """Under «نرخ ندارد» messages (N تاندیش / اقلام بحرانی): import rates + download منبع اصلی."""
+    row = []
+    if user is None or perm.can(user, perm.MAIN_SOURCE_EDIT):
+        row.append({"text": BTN_RATES_IMPORT, "callback_data": f"{CB_RATES_PREFIX}start"})
+    if user is None or perm.can_any(user, (perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT)):
+        row.append({"text": "📄 دانلود منبع اصلی", "callback_data": f"{CB_RATES_PREFIX}dl"})
+    return {"inline_keyboard": [row]} if row else None
+
+
+def rate_loss_menu() -> dict:
+    return _kb([[BTN_RATE_LOSS_OK]], "main_source")
 
 
 def main_source_file_menu(user: dict | None = None) -> dict:
@@ -627,6 +653,7 @@ def main_source_file_menu(user: dict | None = None) -> dict:
             [BTN_FULL_REPLACE, BTN_INV_DOWNLOAD],
             [BTN_INV_ADD_RECORD, BTN_INV_EDIT_RECORD],
             [BTN_INV_ADD_CATEGORY, BTN_INV_LIST_CATEGORIES],
+            [BTN_RATES_IMPORT],
         ]
         if user is not None and user.get("role") in perm.ADMINS:
             rows.append([BTN_MS_PENDING])
@@ -1336,6 +1363,8 @@ def _button_features() -> dict[str, tuple[str, ...]]:
         BTN_FULL_REPLACE: (P.MAIN_SOURCE_EDIT,),
         BTN_INV_ADD_RECORD: (P.MAIN_SOURCE_EDIT,),
         BTN_MS_PENDING: (P.MAIN_SOURCE_EDIT,),
+        BTN_RATES_IMPORT: (P.MAIN_SOURCE_EDIT,),
+        BTN_RATE_LOSS_OK: (P.MAIN_SOURCE_EDIT,),
         BTN_INV_EDIT_RECORD: (P.MAIN_SOURCE_EDIT,),
         BTN_INV_ADD_CATEGORY: (P.MAIN_SOURCE_EDIT,),
         BTN_USERS: (P.USERS,),

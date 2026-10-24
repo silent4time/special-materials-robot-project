@@ -72,6 +72,8 @@ class CriticalItemsResult:
     titles: dict[str, str] = field(default_factory=dict)
     error: str | None = None
     reno_mode: str = RENO_WITH
+    rates_hint: bool = False
+    rates_note: str = ""
     audit: dict[str, list[str]] = field(default_factory=dict)
     # template sheets (rows + fixed notes, no user notes) — the draft/approve
     # workflow (services.critical_report_archive) re-renders files from these.
@@ -376,6 +378,11 @@ def generate_critical_items_files(
             "قلمی با کسری (نیاز مثبت) در افق ۳ ماه (داخلی) / ۶ ماه (وارداتی) "
             f"({RENO_LABEL_FA[reno_mode]}) یافت نشد. {horizon_header_note(counts)}"
         )
+        from services.rates_import import presence_message_fa
+
+        res.rates_hint = True
+        res.rates_note = presence_message_fa(inv)
+        res.error += "\n" + res.rates_note
         return res
 
     ensure_dirs()

@@ -92,6 +92,8 @@ ACTION_PHRASES: dict[str, str] = {
     "add_category_code": "کد گروه کالا افزود",
     "assistant_enabled": "دستیار هوشمند را فعال/غیرفعال کرد",
     "download_main_source": "فایل منبع اصلی را دریافت کرد",
+    "rates_import": "نرخ‌های مصرف را از فایل وارد کرد ({filled} خانه پر شد، {overwritten} مغایرت جایگزین شد)",
+    "web_rates_import": "نرخ‌های مصرف را از فایل وارد کرد — وب ({filled} خانه پر شد، {overwritten} مغایرت جایگزین شد)",
     "download_primary_inventory": "فایل موجودی اولیه را دریافت کرد",
     "list_categories_pdf": "PDF فهرست گروه‌های کالا را گرفت",
     "report_critical_items_xlsx": "اکسل گزارش اقلام بحرانی را گرفت",
