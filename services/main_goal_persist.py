@@ -6,6 +6,7 @@ a month has production + all three section consumptions.
 """
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 import json
 import re
 import shutil
@@ -225,7 +226,7 @@ def store_consumption_from_excel(
     if stats.tundish_count is None and (patch_count or renovate_count):
         stats.tundish_count = float(patch_count or 0) + float(renovate_count or 0)
         stats.notes.append(
-            f"تعداد تاندیش = پچ({patch_count or 0:g}) + نوسازی({renovate_count or 0:g})"
+            f"تعداد تاندیش = پچ({_fmtn(patch_count or 0)}) + نوسازی({_fmtn(renovate_count or 0)})"
         )
 
     mats = []
@@ -264,7 +265,7 @@ def store_consumption_from_excel(
         materials=mats,
     )
     sync_month_aggregate(db, period.key(), user=user, source=source, inventory=inventory)
-    tc = f"{stats.tundish_count:g}" if stats.tundish_count is not None else "—"
+    tc = f"{_fmtn(stats.tundish_count)}" if stats.tundish_count is not None else "—"
     verb = "جایگزین شد" if replaced else "ذخیره شد"
     return InputStoreOutcome(
         ok=True,
@@ -997,7 +998,7 @@ def scenario_range_report(
         sm = model.sections[sec]
         lines.append(
             f"• {mg.SECTION_LABEL_FA[sec]}: {sm.total_tons:,.0f} تن، "
-            f"تاندیش {round(sm.total_tundish, 1):g}" if sm.total_tundish else
+            f"تاندیش {_fmtn(round(sm.total_tundish, 1))}" if sm.total_tundish else
             f"• {mg.SECTION_LABEL_FA[sec]}: {sm.total_tons:,.0f} تن، تاندیش —"
         )
     lines += [f"⚠ {w}" for w in warns]
@@ -1112,8 +1113,8 @@ def store_sequences_from_excel(
         if period_key not in touched:
             touched.append(period_key)
         lines.append(
-            f"• {mg.SECTION_LABEL_FA[sec]} «{label}»: سکوئنس/تاندیش {n} | جمع ذوب {agg.get('melt_count') or 0:g} | "
-            f"تعویض شرود {agg.get('shroud_replacements') or 0:g} | نازل بیرونی {agg.get('nozzle_replacements') or 0:g}"
+            f"• {mg.SECTION_LABEL_FA[sec]} «{label}»: سکوئنس/تاندیش {n} | جمع ذوب {_fmtn(agg.get('melt_count') or 0)} | "
+            f"تعویض شرود {_fmtn(agg.get('shroud_replacements') or 0)} | نازل بیرونی {_fmtn(agg.get('nozzle_replacements') or 0)}"
         )
     for pk in touched:
         sync_month_aggregate(db, pk, user=user, source=source)
@@ -1226,7 +1227,7 @@ def _store_sequence_group(
         source_path=str(dest),
         source_filename=filename or path.name,
         notes_json=json.dumps(
-            [f"{n} سکوئنس، جمع ذوب {melt_sum:g}", *notes, f"از لاگ سکوئنس ({n} ردیف)"],
+            [f"{n} سکوئنس، جمع ذوب {_fmtn(melt_sum)}", *notes, f"از لاگ سکوئنس ({n} ردیف)"],
             ensure_ascii=False,
         ),
         missing_json=json.dumps([], ensure_ascii=False),

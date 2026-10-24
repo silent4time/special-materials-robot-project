@@ -6,6 +6,7 @@ Expected columns (Persian header row, sometimes 2-row header):
 """
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 from services import user_errors
 
 import re
@@ -277,7 +278,7 @@ def parse_sequence_excel(path: Path | str) -> SequenceParseResult:
         period_label=format_month_year(year, month, named=True),
         section=sec,
         rows=rows,
-        notes=[f"{len(rows)} سکوئنس، جمع ذوب {sum(r.melt_count or 0 for r in rows):g}"],
+        notes=[f"{len(rows)} سکوئنس، جمع ذوب {_fmtn(sum(r.melt_count or 0 for r in rows))}"],
     )
 
 

@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 import logging
 
 import json
@@ -191,7 +192,7 @@ class StoreOutcome:
             c = r.consumptions.get(sec)
             if not c:
                 continue
-            tc = f"{c.tundish_count:g}" if c.tundish_count is not None else "—"
+            tc = f"{_fmtn(c.tundish_count)}" if c.tundish_count is not None else "—"
             lines.append(f"{mg.SECTION_LABEL_FA[sec]}: تاندیش {tc}، اقلام مصرفی {len(c.materials)}")
         if r.warnings:
             lines.append("⚠ " + "؛ ".join(r.warnings[:4]))
@@ -875,7 +876,7 @@ def scenario_target(
     warns = model.warnings()
     note_lines = _base_notes(model) + notes
     if horizon:
-        note_lines.append(f"طول بازه ≈ {horizon:g} ماه؛ «نسبت به سابقه» = هدف ماهانه ÷ میانگین تناژ ماهانهٔ سابقه.")
+        note_lines.append(f"طول بازه ≈ {_fmtn(horizon)} ماه؛ «نسبت به سابقه» = هدف ماهانه ÷ میانگین تناژ ماهانهٔ سابقه.")
     else:
         note_lines.append("طول بازه تشخیص نشد؛ مقایسه با ظرفیت ماهانه انجام نشد (تاندیش و مواد فقط تابع تناژ است).")
     note_lines += warns

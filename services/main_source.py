@@ -5,6 +5,7 @@ in sync. Reports always read the latest cleaned extract via analytics.frames.
 """
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 import logging
 import shutil
 from pathlib import Path
@@ -620,7 +621,7 @@ def skipped_rows_note_fa(skipped: list[dict[str, Any]], *, limit: int = 15) -> s
     ]
     for r in skipped[:limit]:
         qty = r.get("quantity")
-        qty_txt = "" if qty is None or (isinstance(qty, float) and pd.isna(qty)) else f"، موجودی {qty:g}" if isinstance(qty, (int, float)) else f"، موجودی {qty}"
+        qty_txt = "" if qty is None or (isinstance(qty, float) and pd.isna(qty)) else f"، موجودی {_fmtn(qty)}" if isinstance(qty, (int, float)) else f"، موجودی {qty}"
         name = f" {r['product_name'][:40]}" if r.get("product_name") else ""
         lines.append(f"• {r['id']} (کد {r['category_code'] or '—'}){name}{qty_txt} — {r['reason']}")
     if len(skipped) > limit:
