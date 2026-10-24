@@ -449,6 +449,11 @@ def test_qa_fixes(tmp: Path) -> None:
         assert "Excel تاریخی" not in txt and kb.BTN_MY_3 in btns, txt
         send(preset)
         nd = len(client.docs)
+        _ik = [b for r in ((client.sent[-1][2] or {}).get("inline_keyboard") or []) for b in r]
+        if _ik and _ik[0]["callback_data"].startswith(kb.CB_MY_LATEST_PREFIX):
+            # «ماه جاری» has no data (calendar month) → tap the «latest month with data» offer
+            assert "هنوز داده‌ای ثبت نشده" in client.sent[-1][1], client.sent[-1][1]
+            app.handle_callback_query({"id": "cm", "data": _ik[0]["callback_data"], "from": {"id": int(uid)}, "message": {"chat": {"id": int(uid)}, "message_id": 1}})
         txt, _ = send(kb.BTN_SEC_ALL)
         assert "انجام نشد" not in txt and "کد پیگیری" not in txt, txt
         assert len(client.docs) == nd + 2 or "دادهٔ موجود" in txt, txt

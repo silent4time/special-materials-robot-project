@@ -358,6 +358,9 @@ def test_shared_core() -> None:
     send(kb.BTN_ANALYTICS); send(kb.BTN_COMPREHENSIVE)
     nd = len(client.docs)
     send(kb.BTN_MY_CURRENT)
+    _ik = [b for r in ((client.sent[-1][2] or {}).get("inline_keyboard") or []) for b in r]
+    if _ik and _ik[0]["callback_data"].startswith(kb.CB_MY_LATEST_PREFIX):  # calendar month without data
+        app.handle_callback_query({"id": "cm", "data": _ik[0]["callback_data"], "from": {"id": int(uid)}, "message": {"chat": {"id": int(uid)}, "message_id": 1}})
     if len(client.docs) == nd:  # section step
         send(next(iter(kb.SECTION_STEP_BUTTONS)))
     bot_docs = [Path(p) for _c, p in client.docs[nd:]]
@@ -452,7 +455,7 @@ def test_background() -> None:
     try:
         send(uid, kb.BTN_ANALYTICS); send(uid, kb.BTN_COMPREHENSIVE)
         t0 = time.monotonic()
-        send(uid, kb.BTN_MY_CURRENT)
+        send(uid, kb.BTN_MY_3)  # data-based preset (calendar «ماه جاری» may have no data)
         if not app.bg.busy(uid):  # section step first
             send(uid, next(iter(kb.SECTION_STEP_BUTTONS)))
         assert time.monotonic() - t0 < 2 and app.bg.busy(uid), "polling thread must not block"
@@ -477,7 +480,7 @@ def test_background() -> None:
         assert home and max(home) > max(docs), ("queued HOME must run after the job", mine[-5:])
         # background failure → tracking code to the user, app keeps working
         cr.generate_files = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("bg secret"))
-        send(uid, kb.BTN_ANALYTICS); send(uid, kb.BTN_COMPREHENSIVE); send(uid, kb.BTN_MY_CURRENT)
+        send(uid, kb.BTN_ANALYTICS); send(uid, kb.BTN_COMPREHENSIVE); send(uid, kb.BTN_MY_3)
         if not app.bg.busy(uid):
             send(uid, next(iter(kb.SECTION_STEP_BUTTONS)))
         for _ in range(100):
