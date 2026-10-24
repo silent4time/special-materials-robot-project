@@ -3475,6 +3475,24 @@ class BotApp:
                     kb.year_picker_menu(years),
                 )
                 return True
+            if preset == "current" and mode != "user_activity":
+                # «ماه جاری» = CALENDAR Jalali month (bug 1405/08/02: was «latest month with data»)
+                from services import data_months as dmo
+
+                try:
+                    cur = dmo.resolve_current_month(self.db, user, mode)
+                except Exception:  # noqa: BLE001
+                    logger.exception("current-month resolve failed")
+                    from bot.jalali import jalali_today as _jt
+                    cur = {"ym": (_jt().year, _jt().month), "has_data": True}
+                self._clear_analysis_pending(uid)
+                if not cur.get("has_data"):
+                    markup = (kb.latest_month_offer_inline(mode, cur["latest"], cur["offer_label"])
+                              if cur.get("latest") else kb.analytics_menu(user))
+                    self._reply(message, cur["message"], markup)
+                    return True
+                self._run_month_ranged_report(message, user, mode, cur["ym"], cur["ym"])
+                return True
             if preset in {"current", "3m", "ytd", "6m", "12m"}:
                 try:
                     start_ym, end_ym = resolve_month_year_preset(preset if preset in {"current", "3m", "ytd"} else "3m")
@@ -4736,6 +4754,26 @@ class BotApp:
                 answer("شما در سیستم ثبت نشده‌اید.", alert=True)
                 return
             self._on_role_perm_callback(data, message, user, answer)
+            return
+
+        if data.startswith(kb.CB_MY_LATEST_PREFIX):
+            user = ensure_registered(self.db, uid, self._display_name(message))
+            if not user:
+                answer("شما در سیستم ثبت نشده‌اید.", alert=True)
+                return
+            try:
+                _m, y, mo = data[len(kb.CB_MY_LATEST_PREFIX):].split("|")
+                ym = (int(y), int(mo))
+            except ValueError:
+                answer("درخواست نامعتبر است.", alert=True)
+                return
+            answer()
+            if self._deny_technician(message, user, *perm.REPORT_FEATURES):
+                return
+            from services import data_months as dmo
+
+            note = f"ماه جاری داده ندارد — آخرین ماه دارای داده: {dmo.month_name_fa(ym)}"
+            self._run_month_ranged_report(message, user, _m, ym, ym, basis_note=note)
             return
 
         if data.startswith(kb.CB_MG_PICK_PREFIX):

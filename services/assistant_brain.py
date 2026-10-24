@@ -1190,8 +1190,16 @@ def exec_consumption(ctx: _Ctx, it: Intent) -> Answer:
         from bot.jalali import month_year_to_gregorian_bounds
         from services import data_months as dmo
 
-        got = dmo.resolve_preset_by_data((p or {}).get("preset") or "current",
-                                         dmo.report_months(ctx.db, None, "period", sec))
+        pr = (p or {}).get("preset") or "current"
+        got = None
+        if pr == "current":
+            # «ماه جاری» = calendar month; no data → say so + use the latest month with data
+            cur = dmo.resolve_current_month(ctx.db, None, "period", sec)
+            ym = cur["ym"] if cur["has_data"] else cur.get("latest")
+            if ym:
+                got = (ym, ym, [ym], "" if cur["has_data"] else cur["message"].replace("\n", " "))
+        else:
+            got = dmo.resolve_preset_by_data(pr, dmo.report_months(ctx.db, None, "period", sec))
         if got:
             s_ym, e_ym, _used, note = got
             s_g, e_g = month_year_to_gregorian_bounds(s_ym, e_ym)

@@ -120,3 +120,86 @@ def resolve_preset_by_data(
     req = PRESET_LABEL.get(preset) or f"{str(preset).rstrip('m')} ماه اخیر"
     note = basis_label_fa(used, req).replace("فقط ماه‌های دارای داده", "آخرین ماه‌های دارای داده")
     return used[0], used[-1], used, note
+
+
+# ---------------------------------------------------------------- «ماه جاری» = calendar month
+# Bug 1405/08/02: «ماه جاری» used to be resolved as «the latest month that HAS data»
+# (resolve_preset_by_data, T14b) — so in مهر it returned شهریور (the uploaded monthly
+# file ended there). «ماه جاری» is now ALWAYS the calendar Jalali month of today; when it
+# has no data the user is told so and offered the latest month with data (+ covered days).
+
+def _fa(x: Any) -> str:
+    return str(x).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+
+
+def month_name_fa(ym: tuple[int, int]) -> str:
+    from bot.jalali import PERSIAN_MONTH_NAMES
+
+    return f"{PERSIAN_MONTH_NAMES.get(int(ym[1]), ym[1])} {_fa(int(ym[0]))}"
+
+
+def month_coverage(
+    db: Any, user: dict | None, mode: str, ym: tuple[int, int], section: str | None = None
+) -> tuple[int, jdatetime.date | None]:
+    """(covered days, last covered date) of month ``ym`` for report ``mode``."""
+    from analytics.tundish import _jalali_ym_from_row
+
+    last: jdatetime.date | None = None
+    mf = monthly_frame(db, user)
+    if mf is not None and not mf.empty and "date" in mf.columns:
+        months_col = mf["month"] if "month" in mf.columns else [None] * len(mf)
+        for d, m in zip(mf["date"], months_col):
+            if _jalali_ym_from_row(d, m) != tuple(ym):
+                continue
+            digits = "".join(ch for ch in str(d) if ch.isdigit())
+            try:
+                cand = jdatetime.date(int(ym[0]), int(ym[1]), int(digits[6:8]))
+            except (TypeError, ValueError):
+                continue
+            if last is None or cand > last:
+                last = cand
+    if mode == "period":
+        try:
+            from services import period_select as ps
+
+            n, upto = ps.coverage(int(ym[0]), int(ym[1]), ps.latest_data_date(db))
+            cand = upto or jdatetime.date(int(ym[0]), int(ym[1]), ps.month_days(int(ym[0]), int(ym[1])))
+            if n and (last is None or cand > last):
+                last = cand
+        except Exception:  # noqa: BLE001
+            pass
+    if last is None:
+        from services import period_select as ps
+
+        return ps.month_days(int(ym[0]), int(ym[1])), None
+    return last.day, last
+
+
+def resolve_current_month(
+    db: Any, user: dict | None, mode: str, section: str | None = None,
+    today: jdatetime.date | None = None,
+) -> dict:
+    """«ماه جاری» → the CALENDAR month. Returns
+    ``{"ym", "has_data", "latest", "latest_days", "latest_upto", "message"}``; ``message``
+    is the Persian no-data text (empty when the current month has data)."""
+    from bot.jalali import jalali_today
+
+    t = today or jalali_today()
+    ym = (t.year, t.month)
+    months = [m for m in report_months(db, user, mode, section) if m <= ym]
+    out: dict = {"ym": ym, "has_data": ym in months, "latest": None, "latest_days": 0,
+                 "latest_upto": None, "message": ""}
+    if out["has_data"]:
+        return out
+    msg = f"برای ماه جاری ({month_name_fa(ym)}) هنوز داده‌ای ثبت نشده است."
+    if months:
+        lt = months[-1]
+        days, upto = month_coverage(db, user, mode, lt, section)
+        out.update(latest=lt, latest_days=days, latest_upto=upto)
+        upto_s = f"، تا {_fa(upto.strftime('%Y/%m/%d'))}" if upto else ""
+        msg += f"\nآخرین ماه دارای داده: {month_name_fa(lt)} ({_fa(days)} روز{upto_s})."
+        out["offer_label"] = f"{month_name_fa(lt)} ({_fa(days)} روز{upto_s})"
+    else:
+        msg += "\nهیچ ماهی برای این گزارش داده ندارد."
+    out["message"] = msg
+    return out

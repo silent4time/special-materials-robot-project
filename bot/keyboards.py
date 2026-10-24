@@ -1366,3 +1366,14 @@ def _button_features() -> dict[str, tuple[str, ...]]:
 # handlers.handle_message before any flow sees the text (bot "handlers also check").
 BUTTON_FEATURE: dict[str, tuple[str, ...]] = _button_features()
 
+
+
+# «ماه جاری» without data → offer the latest month that has data (inline)
+CB_MY_LATEST_PREFIX = "mylt|"
+
+
+def latest_month_offer_inline(mode: str, ym: tuple[int, int], label: str) -> dict:
+    return {"inline_keyboard": [[{
+        "text": f"📅 گزارش آخرین ماه دارای داده: {label}",
+        "callback_data": f"{CB_MY_LATEST_PREFIX}{mode}|{int(ym[0])}|{int(ym[1])}",
+    }]]}
