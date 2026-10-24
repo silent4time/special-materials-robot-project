@@ -15,6 +15,7 @@ Read-only: never writes the DB or the source files.
 """
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 from pathlib import Path
 from typing import Any
 
@@ -166,12 +167,12 @@ def attach_empirical(res, emp: dict[str, Any]) -> None:
         "همان نرخ‌های اقلام بحرانی و نیاز N تاندیش.",
         f"ستون‌های «حواله انبار هر تاندیش» فقط برای مقایسه‌اند: حوالهٔ خالص (درخواستی − برگشتی) فایل "
         f"«{emp.get('source')}» در {months_label(emp['months'])} بر اساس سفارش کار ÷ تعداد تاندیش همان "
-        f"نوع در لاگ توالی تاندیش (بیلت {c.get('billet', 0):g}، بلوم {c.get('bloom', 0):g}، "
-        f"اسلب {c.get('slab', 0):g})؛ واحد = واحد منبع اصلی (کیلوگرم = مقدار × ضریب).",
+        f"نوع در لاگ توالی تاندیش (بیلت {_fmtn(c.get('billet', 0))}، بلوم {_fmtn(c.get('bloom', 0))}، "
+        f"اسلب {_fmtn(c.get('slab', 0))})؛ واحد = واحد منبع اصلی (کیلوگرم = مقدار × ضریب).",
         f"ردیف‌های حواله بدون سفارش کار اسلب/بلوم/بیلت (کنار گذاشته شد): {emp.get('unknown_rows', 0)}. "
         "حواله برای هر کد چهاررقمی است و شرکت/پیمانکار را از هم جدا نمی‌کند.",
     ]
     if lacking:
         res.notes.append("بدون حواله در این دوره (فقط نرخ منبع اصلی): " + "، ".join(lacking) + ".")
     if float(c.get("bloom") or 0) < 5:
-        res.notes.append(f"تاندیش بلوم در این دوره فقط {c.get('bloom', 0):g} عدد بود؛ نرخ تجربی بلوم قابل اتکا نیست.")
+        res.notes.append(f"تاندیش بلوم در این دوره فقط {_fmtn(c.get('bloom', 0))} عدد بود؛ نرخ تجربی بلوم قابل اتکا نیست.")

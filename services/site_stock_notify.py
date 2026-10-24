@@ -6,6 +6,7 @@ stays intact.
 """
 from __future__ import annotations
 
+from services.units import fmt_num as _fmtn
 import logging
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -67,7 +68,7 @@ def build_site_stock_report_text(
         f"تعداد اقلام: {int(saved)} از {int(items_total)}",
     ]
     if values:
-        lines.append(f"مجموع مقادیر: {total_qty:g}")
+        lines.append(f"مجموع مقادیر: {_fmtn(total_qty)}")
 
     if include_item_lines and values and len(values) <= max_item_lines:
         lines.append("")
@@ -77,7 +78,7 @@ def build_site_stock_report_text(
             it = id_to_item.get(iid) or {"id": iid, "name_desc": iid}
             name = str(it.get("name_desc") or it.get("id") or iid).strip() or str(iid)
             try:
-                qty_s = f"{float(qty):g}"
+                qty_s = f"{_fmtn(float(qty))}"
             except (TypeError, ValueError):
                 qty_s = str(qty)
             lines.append(f"• {name}: {qty_s}")
