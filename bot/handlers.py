@@ -128,6 +128,9 @@ def _fmt_exact(v) -> str:
     return f"{f:,.10f}".rstrip("0").rstrip(".")
 
 class BotApp:
+    # tests of pre-v1.5.0 flows may set "all" (send every file, no format step)
+    auto_output_format: str | None = None
+
     def __init__(self, client: BaleClient, db: Database) -> None:
         self.client = client
         self.db = db
@@ -149,6 +152,9 @@ class BotApp:
         self._allow_rate_loss: set[str] = set()
         # «🧮 نیاز مواد برای N تاندیش» steps
         self._n_tundish_pending: dict[str, dict[str, Any]] = {}
+        # v1.5.0: built report files awaiting «خروجی PDF»/«خروجی اکسل»; stock-report steps
+        self._format_pending: dict[str, dict[str, Any]] = {}
+        self._stock_report_pending: dict[str, dict[str, Any]] = {}
         # «❓ راهنمای تهیهٔ فایل»: last file kind the user is asked for
         self._file_guide_kind: dict[str, str] = {}
         # درخواست مواد: Persian basis line of the last built list (shown in review)
@@ -401,6 +407,8 @@ class BotApp:
                 uid in self._full_replace_confirm,
                 uid in self._rates_import_pending,
                 uid in self._n_tundish_pending,
+                uid in self._format_pending,
+                uid in self._stock_report_pending,
                 uid in self.tundish_report.pending,
                 uid in self.tundish_report.settings_pending,
                 uid in self.main_goal_report.pending,
@@ -429,6 +437,8 @@ class BotApp:
         self._rates_import_pending.pop(uid, None)
         self._allow_rate_loss.discard(uid)
         self._n_tundish_pending.pop(uid, None)
+        self._format_pending.pop(uid, None)
+        self._stock_report_pending.pop(uid, None)
         self._file_guide_kind.pop(uid, None)
         try:
             self.db.set_pending_file_type(uid, None)
@@ -1611,7 +1621,7 @@ class BotApp:
         reply_menu = self._keyboard_for_upload_return(user, default="upload")
         self._reply(message, out.text + "\n\n" + self._status_text(out.session, user), reply_menu)
         if out.inbound_report and out.inbound_report.get("id"):
-            self._send_inbound_report_files(message, out.inbound_report)
+            self._send_inbound_report_files(message, out.inbound_report, user, reply_menu)
         if out.unit_alert:
             from services.unit_mismatch import send_alert
 
@@ -1787,13 +1797,10 @@ class BotApp:
             if res.rates_hint:
                 self._send_rates_hint(message, user)
             return
-        chat = self._chat_id(message)
-        for path, cap in ((res.pdf, res.title), (res.xlsx, f"نسخه اکسل — {res.title}")):
-            try:
-                self.client.send_document(chat, path, caption=cap)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("send n_tundish file failed: %s", exc)
-        self._reply(message, res.bot_text(), kb.analytics_menu(user))
+        self._deliver_files(
+            message, user, [("pdf", res.pdf, res.title), ("xlsx", res.xlsx, f"نسخه اکسل — {res.title}")],
+            done_text=res.bot_text(), done_markup=kb.analytics_menu(user),
+        )
         log_activity(self.db, user, "report_n_tundish", section=section, n=n, renovation=mode)
 
     @heavy("گزارش نیاز ترکیب تاندیش", notice=False)
@@ -1816,14 +1823,180 @@ class BotApp:
             if res.rates_hint:
                 self._send_rates_hint(message, user)
             return
+        self._deliver_files(
+            message, user, [("pdf", res.pdf, res.title), ("xlsx", res.xlsx, f"نسخه اکسل — {res.title}")],
+            done_text=res.bot_text(), done_markup=kb.analytics_menu(user),
+        )
+        log_activity(self.db, user, "report_n_tundish_mix", mix=nt.mix_label(mix), renovation=mode)
+
+    # ---------- v1.5.0: one output format per report («خروجی PDF» / «خروجی اکسل») ----------
+    def _deliver_files(
+        self,
+        message: dict,
+        user: dict | None,
+        items: list[tuple[str, Any, str]],
+        *,
+        done_text: str | None = None,
+        done_markup: dict | None = None,
+        after=None,
+    ) -> bool:
+        """``items`` = [(kind 'pdf'|'xlsx', path, caption)], already built. When both kinds
+        exist the user first picks «خروجی PDF» or «خروجی اکسل» and only that kind is sent
+        (files are kept, nothing is rebuilt); otherwise the files go out right away.
+        ``done_text``/``done_markup`` and ``after()`` follow the sent files."""
+        files = [(k, Path(p), c) for k, p, c in items if p and Path(p).is_file()]
+        if not files:
+            return False
+        kinds = {k for k, _p, _c in files}
+        auto = self.auto_output_format  # legacy smoke tests only ("all"); production = None
+        if auto:
+            self._send_chosen_files(message, files, None if auto == "all" else auto, done_text, done_markup, after)
+            return True
+        if user is not None and len(kinds) > 1:
+            uid = str(user["bale_user_id"])
+            self._format_pending[uid] = {
+                "files": files, "done_text": done_text, "done_markup": done_markup, "after": after,
+                "message": message,
+            }
+            self._reply(
+                message,
+                f"✅ گزارش آماده است. قالب خروجی را انتخاب کنید:\n• {kb.BTN_OUT_PDF}\n• {kb.BTN_OUT_XLSX}",
+                kb.output_format_menu(),
+            )
+            return True
+        self._send_chosen_files(message, files, None, done_text, done_markup, after)
+        return True
+
+    def _send_chosen_files(self, message: dict, files, kind: str | None, done_text, done_markup, after) -> None:
         chat = self._chat_id(message)
-        for path, cap in ((res.pdf, res.title), (res.xlsx, f"نسخه اکسل — {res.title}")):
+        for k, path, cap in files:
+            if kind is not None and k != kind:
+                continue
             try:
                 self.client.send_document(chat, path, caption=cap)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("send n_tundish mix file failed: %s", exc)
-        self._reply(message, res.bot_text(), kb.analytics_menu(user))
-        log_activity(self.db, user, "report_n_tundish_mix", mix=nt.mix_label(mix), renovation=mode)
+                logger.warning("send report file failed (%s): %s", path, exc)
+        if done_text:
+            self._reply(message, done_text, done_markup)
+        if after is not None:
+            try:
+                after()
+            except Exception:  # noqa: BLE001
+                logger.exception("after-send step failed")
+
+    def on_output_format_text(self, message: dict, text: str) -> bool:
+        kind = {kb.BTN_OUT_PDF: "pdf", kb.BTN_OUT_XLSX: "xlsx"}.get(text)
+        uid = str(self._uid(message))
+        pend = self._format_pending.get(uid)
+        if kind is None:
+            return False
+        if not pend:
+            user = self._user_or_deny(message)
+            if user:
+                self._reply(message, "گزارشی در انتظار انتخاب قالب نیست؛ گزارش را دوباره بسازید.",
+                            kb.analytics_menu(user))
+            return True
+        self._format_pending.pop(uid, None)
+        self._send_chosen_files(message, pend["files"], kind, pend.get("done_text"),
+                                pend.get("done_markup"), pend.get("after"))
+        return True
+
+    # ---------- v1.5.0: 📦 گزارش موجودی انبار (mode → segment → format) ----------
+    def on_stock_report_start(self, message: dict) -> None:
+        from services import warehouse_stock_report as wsr
+
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        if self._deny_technician(message, user, perm.REPORT_STOCK):
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_all_pending(uid)
+        self._stock_report_pending[uid] = {"await": "mode"}
+        _jy, _jm, _cut, label = wsr.prev_month_cutoff()
+        self._reply(
+            message,
+            f"{kb.BTN_STOCK_REPORT}\nمرحلهٔ ۱ از ۳ — مبنای موجودی را انتخاب کنید:\n"
+            f"• {kb.BTN_STOCK_TODAY}: آخرین موجودی (منبع اصلی + حواله/برگشت به انبار)\n"
+            f"• {kb.BTN_STOCK_MONTH_END}: آخرین موجودی ثبت‌شده تا {label}",
+            kb.stock_report_mode_menu(),
+        )
+
+    def on_stock_report_text(self, message: dict, text: str) -> bool:
+        from services import warehouse_stock_report as wsr
+
+        uid = str(self._uid(message))
+        p = self._stock_report_pending.get(uid)
+        if not p:
+            return False
+        step = p.get("await")
+        if step == "mode":
+            mode = {kb.BTN_STOCK_TODAY: wsr.MODE_TODAY, kb.BTN_STOCK_MONTH_END: wsr.MODE_MONTH_END}.get(text)
+            if not mode:
+                self._reply(message, f"«{kb.BTN_STOCK_TODAY}» یا «{kb.BTN_STOCK_MONTH_END}» را انتخاب کنید.",
+                            kb.stock_report_mode_menu())
+                return True
+            if mode == wsr.MODE_MONTH_END:
+                err = wsr.month_end_unavailable(self.db)
+                if err:
+                    self._stock_report_pending.pop(uid, None)
+                    user = self._user_or_deny(message)
+                    self._reply(message, "⚠️ " + err, kb.analytics_menu(user) if user else None)
+                    return True
+            p.update({"mode": mode, "await": "segment"})
+            self._reply(
+                message,
+                f"مرحلهٔ ۲ از ۳ — {wsr.MODE_LABEL_FA[mode]}: کدام اقلام؟\n"
+                "(پیمانکار = شناسه‌هایی که کاراکتر ۵ تا ۸ آن‌ها «0000» است؛ بقیه = شرکت)",
+                kb.stock_report_segment_menu(),
+            )
+            return True
+        if step == "segment":
+            seg = {kb.BTN_SEG_CONTRACTOR: wsr.SEGMENT_CONTRACTOR, kb.BTN_SEG_COMPANY: wsr.SEGMENT_COMPANY,
+                   kb.BTN_SEG_BOTH: wsr.SEG_BOTH}.get(text)
+            if not seg:
+                self._reply(message, "یکی از گزینه‌های اقلام پیمانکار / اقلام شرکت / هر دو را انتخاب کنید.",
+                            kb.stock_report_segment_menu())
+                return True
+            p.update({"segment": seg, "await": "format"})
+            self._reply(message, "مرحلهٔ ۳ از ۳ — قالب خروجی را انتخاب کنید:", kb.output_format_menu())
+            return True
+        if step == "format":
+            fmt = {kb.BTN_OUT_PDF: "pdf", kb.BTN_OUT_XLSX: "xlsx"}.get(text)
+            if not fmt:
+                self._reply(message, f"«{kb.BTN_OUT_PDF}» یا «{kb.BTN_OUT_XLSX}» را انتخاب کنید.",
+                            kb.output_format_menu())
+                return True
+            self._stock_report_pending.pop(uid, None)
+            self._run_stock_report(message, p["mode"], p["segment"], fmt)
+            return True
+        self._stock_report_pending.pop(uid, None)
+        return False
+
+    @heavy("گزارش موجودی انبار", notice=False)
+    def _run_stock_report(self, message: dict, mode: str, segment: str, fmt: str) -> None:
+        from services import warehouse_stock_report as wsr
+
+        user = self._user_or_deny(message)
+        if not user:
+            return
+        self._reply(message, "در حال ساخت گزارش موجودی انبار…")
+        try:
+            rep = wsr.build(self.db, user, mode, segment)
+            if rep.error:
+                self._reply(message, "⚠️ " + rep.error, kb.analytics_menu(user))
+                return
+            path = wsr.write_file(rep, fmt, letterhead_path=self._letterhead_path())
+            cap = f"{rep.title}\n{wsr.SEGMENT_LABEL_FA[segment]}"
+            if fmt == "xlsx":
+                cap = "نسخه اکسل — " + cap
+            self.client.send_document(self._chat_id(message), path, caption=cap)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("warehouse stock report failed")
+            self._reply(message, user_errors.error_fa("خطا در ساخت گزارش موجودی انبار", exc), kb.analytics_menu(user))
+            return
+        self._reply(message, rep.bot_text(), kb.analytics_menu(user))
+        log_activity(self.db, user, "report_warehouse_stock", mode=mode, segment=segment, fmt=fmt)
 
     # ---------- 📦 جایگزینی کامل منبع اصلی (warning + confirm) ----------
     def on_full_replace_start(self, message: dict) -> None:
@@ -3133,16 +3306,19 @@ class BotApp:
         if report is None:
             self._reply(message, "خطا در ذخیرهٔ پیش‌نویس اقلام بحرانی.", menu)
             return
-        if not self._send_critical_report_files(message, report, menu):
-            return
         from services.critical_items_report import critical_items_bot_lines
 
         label = res.counts.report_date if res.counts is not None else ""
         lines = [f"پیش‌نویس گزارش اقلام بحرانی #{report['id']} (تاریخ گزارش {label}) — حالت «{reno_label}» ارسال شد.",
                  res.header_note]
         lines.extend(critical_items_bot_lines(res))
-        self._reply(message, "\n".join(lines), menu)
-        self._ask_critical_draft_action(message, report)
+
+        def _after_files() -> None:
+            self._reply(message, "\n".join(lines), menu)
+            self._ask_critical_draft_action(message, report)
+
+        if not self._send_critical_report_files(message, report, menu, user=user, after=_after_files):
+            return
         log_activity(self.db, user, "report_critical_items_draft", report_id=int(report["id"]),
                      renovation=reno_mode)
         if res.pdfs.get(SEGMENT_COMPANY):
@@ -3151,25 +3327,30 @@ class BotApp:
             log_activity(self.db, user, "report_critical_items_contractor", renovation=reno_mode)
 
     # ---------- اقلام بحرانی: draft → توضیحات → تأیید → بایگانی ----------
-    def _send_critical_report_files(self, message: dict, report: dict, menu: dict | None = None) -> bool:
-        """Company PDF, contractor PDF, xlsx of a draft or approved report."""
+    def _send_critical_report_files(self, message: dict, report: dict, menu: dict | None = None, *,
+                                    user: dict | None = None, after=None) -> bool:
+        """Company PDF + contractor PDF, or the xlsx (user's choice, v1.5.0), of a draft or
+        approved report; ``after`` runs once the chosen files are sent."""
         from services import critical_report_archive as cra
 
-        chat_id = self._chat_id(message)
         final = report["status"] == cra.STATUS_APPROVED
         tag = "✅ نسخهٔ تأییدشده" if final else "📝 پیش‌نویس"
         try:
             files = cra.report_files(self.db, report, letterhead_path=self._letterhead_path())
+            items = []
             for kind, cap in (("company", "گزارش اصلی — اقلام شرکت"),
                               ("contractor", "گزارش جداگانه — اقلام پیمانکار"),
                               ("xlsx", "نسخه اکسل — شیت «شرکت» و شیت «پیمانکار»")):
                 path = files.get(kind)
                 if path is None:
                     continue
-                self.client.send_document(
-                    chat_id, path,
-                    caption=f"{tag} #{report['id']} — {cap}\n{report.get('title') or ''} ({report['reno_label']})",
-                )
+                items.append((
+                    "xlsx" if kind == "xlsx" else "pdf", path,
+                    f"{tag} #{report['id']} — {cap}\n{report.get('title') or ''} ({report['reno_label']})",
+                ))
+            if user is None:
+                user = self._user_or_deny(message)
+            self._deliver_files(message, user, items, after=after)
         except Exception as exc:  # noqa: BLE001
             logger.exception("critical items send failed")
             self._reply(message, user_errors.error_fa("خطا در ارسال گزارش اقلام بحرانی", exc),
@@ -3234,7 +3415,7 @@ class BotApp:
                 answer("این گزارش هنوز تأیید نشده است.", alert=True)
                 return
             answer(f"ارسال گزارش #{rid}")
-            if self._send_critical_report_files(message, report):
+            if self._send_critical_report_files(message, report, user=user):
                 log_activity(self.db, user, "report_critical_items_archive", report_id=rid)
             return
         if report["status"] != cra.STATUS_DRAFT:
@@ -3242,8 +3423,8 @@ class BotApp:
             return
         if action == "open":
             answer()
-            self._send_critical_report_files(message, report)
-            self._ask_critical_draft_action(message, report)
+            self._send_critical_report_files(
+                message, report, user=user, after=lambda: self._ask_critical_draft_action(message, report))
             return
         if action == "notes":
             self._critical_pending[uid] = {"mode": "draft", "await": "draft_notes", "report_id": rid}
@@ -3280,13 +3461,15 @@ class BotApp:
             if err:
                 self._reply(message, err, kb.critical_items_menu())
                 return
-            if self._send_critical_report_files(message, report):
-                self._reply(
+            self._send_critical_report_files(
+                message, report, user=user,
+                after=lambda: self._reply(
                     message,
                     f"✅ گزارش اقلام بحرانی #{rid} تأیید و ذخیره شد. از «{kb.BTN_CRITICAL_ARCHIVE}» "
                     "(ربات) یا بخش گزارش‌های وب همیشه قابل دریافت است.",
                     kb.critical_items_menu(),
-                )
+                ),
+            )
             log_activity(self.db, user, "report_critical_items_approved", report_id=rid)
             return
         answer()
@@ -3303,8 +3486,8 @@ class BotApp:
             return
         log_activity(self.db, user, "report_critical_items_notes", report_id=rid)
         self._reply(message, f"توضیحات پیش‌نویس #{rid} ثبت شد؛ پیش‌نویس به‌روز:", kb.critical_items_menu())
-        self._send_critical_report_files(message, report)
-        self._ask_critical_draft_action(message, report)
+        self._send_critical_report_files(
+            message, report, user=user, after=lambda: self._ask_critical_draft_action(message, report))
 
     def on_remaining_critical(self, message: dict) -> None:
         user = self._user_or_deny(message)
@@ -3353,25 +3536,25 @@ class BotApp:
             [inbound_svc.history_button_label(h) for h in others]
         )
         self._reply(message, inbound_svc.summary_text_fa(report), menu)
-        self._send_inbound_report_files(message, report)
+        self._send_inbound_report_files(message, report, user, menu)
         log_activity(self.db, user, "report_inbound", report_id=int(report["id"]))
 
-    def _send_inbound_report_files(self, message: dict, report: dict) -> None:
-        """PDF (A4 portrait + letterhead) + XLSX of a stored inbound report."""
+    def _send_inbound_report_files(self, message: dict, report: dict, user: dict | None = None,
+                                   done_markup: dict | None = None) -> None:
+        """PDF (A4 portrait + letterhead) or XLSX (user's choice, v1.5.0) of a stored inbound report."""
         try:
             pdf_path, xlsx_path = inbound_svc.build_report_files(self.db, report)
         except Exception as exc:  # noqa: BLE001
             logger.exception("inbound report files failed")
             self._reply(message, user_errors.error_fa("خطا در تولید فایل گزارش اقلام ورودی", exc))
             return
-        for path, cap in (
-            (pdf_path, inbound_svc.caption_fa(report)),
-            (xlsx_path, inbound_svc.caption_fa(report, excel=True)),
-        ):
-            try:
-                self.client.send_document(self._chat_id(message), path, caption=cap)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("send inbound file failed (%s): %s", path, exc)
+        self._deliver_files(
+            message, user,
+            [("pdf", pdf_path, inbound_svc.caption_fa(report)),
+             ("xlsx", xlsx_path, inbound_svc.caption_fa(report, excel=True))],
+            done_text="✅ گزارش اقلام ورودی ارسال شد." if (done_markup is not None and not self.auto_output_format) else None,
+            done_markup=done_markup,
+        )
 
     @staticmethod
     def _inbound_history_id(text: str) -> int | None:
@@ -3805,7 +3988,9 @@ class BotApp:
         also_excel: bool = True,
         material: dict[str, Any] | None = None,
     ) -> Path | None:
-        """Build a simple RTL PDF under REPORT_DIR and sendDocument to the user.
+        """Build a simple RTL PDF (+ sibling .xlsx) under REPORT_DIR and deliver via
+        ``_deliver_files``: since v1.5.0 the user first picks «خروجی PDF» or «خروجی اکسل»
+        and only that file is sent. Returns the PDF path.
 
         ``material`` (or a section's ``"material"`` key) = materials table → the shared
         base columns of ``services.material_columns`` lead the PDF/Excel header.
@@ -3841,17 +4026,12 @@ class BotApp:
                 letterhead_path=self._letterhead_path(),
                 material=material,
             )
-            self.client.send_document(
-                self._chat_id(message),
-                pdf_path,
-                caption=caption or title,
-            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("simple pdf report failed: %s", title)
             self._reply(message, user_errors.error_fa("خطا در تولید PDF گزارش", exc), markup)
             return None
 
-        excel_ok = False
+        items: list[tuple[str, Path, str]] = [("pdf", pdf_path, caption or title)]
         if also_excel:
             try:
                 xlsx_path = pdf_path.with_suffix(".xlsx")
@@ -3866,23 +4046,20 @@ class BotApp:
                     filename_stem=filename_stem,
                     material=material,
                 )
-                self.client.send_document(
-                    self._chat_id(message),
-                    xlsx_path,
-                    caption=f"نسخه اکسل — {title}",
-                )
-                excel_ok = True
+                items.append(("xlsx", xlsx_path, f"نسخه اکسل — {title}"))
             except Exception as exc:  # noqa: BLE001
                 logger.exception("simple excel report failed after PDF: %s", title)
                 logger.warning("excel companion failed for %s: %s", title, exc)
 
-        if reply_ok is not None:
-            ok_msg = reply_ok
-        elif excel_ok:
-            ok_msg = "گزارش PDF و اکسل ارسال شد."
-        else:
-            ok_msg = "گزارش PDF ارسال شد."
-        self._reply(message, ok_msg, markup)
+        # v1.5.0: PDF + Excel → «خروجی PDF»/«خروجی اکسل» first; only the chosen file is sent
+        ok_msg = reply_ok if reply_ok is not None else "✅ گزارش ارسال شد."
+        user_for_choice = log_user or self.db.get_user(self._uid(message))
+        try:
+            self._deliver_files(message, user_for_choice, items, done_text=ok_msg, done_markup=markup)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("simple report send failed: %s", title)
+            self._reply(message, user_errors.error_fa("خطا در ارسال گزارش", exc), markup)
+            return None
         if log_user and log_action:
             log_activity(self.db, log_user, log_action)
         return pdf_path
@@ -4175,13 +4352,10 @@ class BotApp:
         if res.error:
             self._reply(message, res.error, kb.analytics_menu(user))
             return
-        chat = self._chat_id(message)
-        for path, cap in ((res.pdf, res.title), (res.xlsx, f"نسخه اکسل — {res.title}")):
-            try:
-                self.client.send_document(chat, path, caption=cap)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("send period file failed: %s", exc)
-        self._reply(message, res.bot_text(), kb.analytics_menu(user))
+        self._deliver_files(
+            message, user, [("pdf", res.pdf, res.title), ("xlsx", res.xlsx, f"نسخه اکسل — {res.title}")],
+            done_text=res.bot_text(), done_markup=kb.analytics_menu(user),
+        )
         log_activity(self.db, user, "report_period")
 
     @heavy("گزارش جامع", notice=False)
@@ -4212,18 +4386,11 @@ class BotApp:
                 str(res.pdf),
                 {k: int(metas[k]["visible_rows"]) for k in metas},
             )
-            self.client.send_document(
-                self._chat_id(message), res.pdf, caption=f"{kb.BTN_COMPREHENSIVE} — {res.range_label}"
-            )
-            if res.xlsx:
-                self.client.send_document(
-                    self._chat_id(message), res.xlsx,
-                    caption=f"نسخه اکسل — {kb.BTN_COMPREHENSIVE} — {res.range_label}",
-                )
-            self._reply(
-                message,
-                "گزارش جامع (PDF و اکسل) ارسال شد." if res.xlsx else "PDF گزارش جامع ارسال شد.",
-                kb.analytics_menu(user),
+            self._deliver_files(
+                message, user,
+                [("pdf", res.pdf, f"{kb.BTN_COMPREHENSIVE} — {res.range_label}"),
+                 ("xlsx", res.xlsx, f"نسخه اکسل — {kb.BTN_COMPREHENSIVE} — {res.range_label}")],
+                done_text="✅ گزارش جامع ارسال شد.", done_markup=kb.analytics_menu(user),
             )
             log_activity(self.db, user, "report_comprehensive")
         except Exception as exc:  # noqa: BLE001
@@ -4309,27 +4476,16 @@ class BotApp:
                 f"منبع: {source_label}\n"
                 f"جمع کل مصرفی: {_fmtn(data.grand_kg)} کیلوگرم"
             )
-            self.client.send_document(
-                self._chat_id(message),
-                pdf_path,
-                caption=caption,
-            )
-            try:
-                self.client.send_document(
-                    self._chat_id(message),
-                    excel_path,
-                    caption=f"فایل اکسل «خلاصه مصرفی ماهیانه» — {range_label}",
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("monthly summary excel send failed: %s", exc)
-            self._reply(
-                message,
-                (
+            self._deliver_files(
+                message, user,
+                [("pdf", pdf_path, caption),
+                 ("xlsx", excel_path, f"فایل اکسل «خلاصه مصرفی ماهیانه» — {range_label}")],
+                done_text=(
                     f"✅ خلاصه مصرف ماهیانه ارسال شد ({range_label}).\n"
                     f"ردیف‌های تجمیعی: {len(data.items)} | "
                     f"جمع ماه‌ها: {_fmtn(month_sum)} | جمع کل: {_fmtn(data.grand_kg)} کیلوگرم"
                 ),
-                kb.analytics_menu(user),
+                done_markup=kb.analytics_menu(user),
             )
             log_activity(self.db, user, "report_monthly_summary")
         except ValueError as exc:
@@ -7051,6 +7207,11 @@ class BotApp:
         if rp_role:
             self.on_role_perm_pick(message, rp_role)
             return
+        # v1.5.0: 📦 گزارش موجودی انبار steps, then «خروجی PDF»/«خروجی اکسل» of a built report
+        if self.on_stock_report_text(message, text):
+            return
+        if self.on_output_format_text(message, text):
+            return
 
         # یادآورها — settings (owner/manager)
         if self.reminder_settings.handle_text(message, text):
@@ -7232,6 +7393,7 @@ class BotApp:
             kb.BTN_SURPLUS: self.on_surplus_report,
             kb.BTN_INBOUND: self.on_inbound_report,
             kb.BTN_MONTHLY_SUMMARY: self.on_monthly_summary,
+            kb.BTN_STOCK_REPORT: self.on_stock_report_start,
             # 📤 ورود فایل‌ها / 📦 منبع اصلی
             kb.BTN_UPLOAD_MENU: self.on_upload_menu,
             kb.BTN_MAIN_SOURCE_FILE: self.on_main_source_file_menu,
