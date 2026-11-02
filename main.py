@@ -109,7 +109,18 @@ def main() -> int:
         last_reminder_tick = 0.0
         last_housekeeping = time.monotonic()
         last_backup_tick = 0.0
+        last_update_tick = 0.0
         from services import backup as backup_svc
+        from services import updater as updater_svc
+        import threading
+
+        def _update_tick() -> None:
+            try:
+                from bot import keyboards as _kb
+
+                updater_svc.notify_tick(client, db, _kb.update_menu())
+            except Exception:  # noqa: BLE001
+                logger.exception("update check tick failed")
         while True:
             try:
                 updates = client.get_updates()
@@ -126,6 +137,10 @@ def main() -> int:
                         backup_svc.nightly_tick(client, db, paths=backup_svc.Paths(db=db.path))
                     except Exception:  # noqa: BLE001
                         logger.exception("nightly backup tick failed")
+                # ⬆️ v1.6.0: نسخهٔ جدید در GitHub Releases؟ (cached 6h; off the polling thread)
+                if time.monotonic() - last_update_tick >= 600:
+                    last_update_tick = time.monotonic()
+                    threading.Thread(target=_update_tick, daemon=True, name="update-check").start()
                 if time.monotonic() - last_housekeeping >= HOUSEKEEPING_SECONDS:
                     last_housekeeping = time.monotonic()
                     housekeeping.run_all()

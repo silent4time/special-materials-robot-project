@@ -263,3 +263,10 @@ def ensure_dirs() -> None:
     BOT_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# --- v1.6.0: auto-update from GitHub Releases --------------------------------
+UPDATE_REPO = os.getenv("NASOZ_UPDATE_REPO", "silent4time/special-materials-robot-project")
+# optional; only needed for private repos / rate limits. Never logged.
+UPDATE_GITHUB_TOKEN = os.getenv("NASOZ_GITHUB_TOKEN", "")
+UPDATE_ASSET = "nasoz-bot.zip"
+UPDATE_ASSET_SHA = "nasoz-bot.zip.sha256"
