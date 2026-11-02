@@ -508,6 +508,34 @@ async def monthly_summary_xlsx(
     return FileResponse(path, media_type=_XLSX, filename=path.name)
 
 
+# ---------------------------------------------------------------- 📦 گزارش موجودی انبار (v1.5.0)
+@router.get("/warehouse-stock")
+async def warehouse_stock(request: Request, user=Depends(require_feature(perm.REPORT_STOCK)),
+                          db: Database = Depends(get_db)):
+    """Same service as the bot: mode (today / month_end) × segment × format (pdf / xlsx)."""
+    from services import warehouse_stock_report as wsr
+    from web.services.reports import letterhead_path
+
+    q = request.query_params
+    mode = (q.get("mode") or wsr.MODE_TODAY).strip()
+    segment = (q.get("segment") or wsr.SEG_BOTH).strip()
+    fmt = (q.get("fmt") or "pdf").strip().lower()
+    if mode not in wsr.MODES or segment not in wsr.SEGMENT_CHOICES or fmt not in wsr.FORMATS:
+        return RedirectResponse(f"/reports?err={quote('گزینهٔ گزارش موجودی انبار نامعتبر است.')}#warehouse-stock",
+                                status_code=303)
+    try:
+        rep = wsr.build(db, user, mode, segment)
+        if rep.error:
+            return RedirectResponse(f"/reports?err={quote(rep.error)}#warehouse-stock", status_code=303)
+        path = wsr.write_file(rep, fmt, letterhead_path=letterhead_path(db))
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(
+            f"/reports?err={quote(user_errors.error_fa('خطا در ساخت گزارش موجودی انبار', exc))}#warehouse-stock",
+            status_code=303)
+    log_activity(db, user, "report_warehouse_stock", mode=mode, segment=segment, fmt=fmt)
+    return FileResponse(path, media_type=_XLSX if fmt == "xlsx" else "application/pdf", filename=path.name)
+
+
 # ---------------------------------------------------------------- 🧮 نیاز مواد برای N تاندیش
 def _n_tundish(request: Request, db: Database, user: dict):
     from services import n_tundish_report as nt

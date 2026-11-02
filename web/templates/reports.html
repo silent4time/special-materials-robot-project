@@ -76,6 +76,24 @@
 </div>
 {% endif %}
 
+{% if can(user, "report.stock") %}
+<div class="card" id="warehouse-stock">
+  <h2>📦 گزارش موجودی انبار</h2>
+  <p class="muted">همان گزارش ربات (سرویس مشترک): کد ۴ رقمی، آی‌دی کد، شرح محصول، موجودی (با واحد) و واژه.
+    «گزارش روز» = آخرین موجودی منبع اصلی (همراه با حواله/برگشت به انبار)؛ «موجودی پایان ماه گذشته» = آخرین موجودی
+    ثبت‌شده تا ساعت ۲۳:۵۹ آخرین روز ماه شمسی قبل (از بارگذاری‌های ذخیره‌شدهٔ موجودی انبار).
+    پیمانکار = شناسه‌هایی که کاراکتر ۵ تا ۸ آن‌ها «0000» است؛ بقیه = شرکت.</p>
+  <form method="get" action="/reports/warehouse-stock" class="form-grid">
+    <label>مبنا<select name="mode"><option value="today">گزارش روز</option><option value="month_end">موجودی پایان ماه گذشته</option></select></label>
+    <label>اقلام<select name="segment"><option value="contractor">اقلام پیمانکار</option><option value="company">اقلام شرکت</option><option value="both" selected>هر دو</option></select></label>
+    <div class="report-actions">
+      <button type="submit" class="btn" name="fmt" value="pdf">خروجی PDF</button>
+      <button type="submit" class="btn" name="fmt" value="xlsx">خروجی اکسل</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
 {% if can(user, "report.comprehensive") %}
 <div class="card" id="comprehensive">
   <h2>📊 گزارش جامع</h2>
