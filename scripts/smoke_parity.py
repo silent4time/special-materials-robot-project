@@ -37,6 +37,7 @@ BOT_TO_WEB = {
     "📦 گزارش مواد مازاد": "/reports/surplus",
     "📄 گزارش اقلام ورودی به انبار": "/reports/inbound/{report_id}.pdf",
     "📄 دریافت خلاصه مصرف ماهیانه": "/reports/monthly-summary",
+    "📦 گزارش موجودی انبار": "/reports/warehouse-stock",
     "📥 به‌روزرسانی موجودی انبار": "/files/stock",
     "📥 مصرف ماهیانه اقلام": "/files/monthly",
     "📤 گزارش جامع تاندیش در سکوئنس": "/reports/main-goal/inputs/sequence",

@@ -150,6 +150,7 @@ def test_services(tmp: Path) -> None:
 def test_bot_reports(tmp: Path) -> None:
     from bot import keyboards as kb
     from bot.handlers import BotApp
+    BotApp.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
 
     db = _db_copy(tmp)
     owner = next((u for u in db.list_users() if u.get("role") == "owner" and u.get("active")), None)
@@ -211,6 +212,7 @@ def test_bot_reports(tmp: Path) -> None:
 def test_aliases_and_removed(tmp: Path) -> None:
     from bot import keyboards as kb
     from bot.handlers import BotApp
+    BotApp.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     from db.models import Database
 
     db = Database(tmp / "alias.db")
@@ -241,6 +243,7 @@ def test_aliases_and_removed(tmp: Path) -> None:
 def test_nav(tmp: Path) -> None:
     from bot import keyboards as kb
     from bot.handlers import BotApp
+    BotApp.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     from db.models import Database
 
     db = Database(tmp / "nav.db")
@@ -356,6 +359,7 @@ def walk_role(app, client, catcher, uid: str, role: str, max_depth: int = 4) -> 
 def test_menu_walk(tmp: Path) -> None:
     from bot import keyboards as kb
     from bot.handlers import BotApp
+    BotApp.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     from db.models import Database
 
     db = Database(tmp / "walk.db")
@@ -427,6 +431,7 @@ def test_qa_fixes(tmp: Path) -> None:
 
     from bot import keyboards as kb
     from bot.handlers import BotApp
+    BotApp.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     from services import inbound_report as inbound_svc, main_goal_history as mgh
 
     db = _db_copy(tmp)
@@ -517,6 +522,7 @@ def test_qa2_fixes(tmp: Path) -> None:
     Persian file names, unit display, reports header, stock-group wording."""
     from bot import keyboards as kb
     from bot.handlers import BotApp
+    BotApp.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     from services import main_goal_history as mgh
     from services.file_names import fa_stem
     from services.units import unit_fa

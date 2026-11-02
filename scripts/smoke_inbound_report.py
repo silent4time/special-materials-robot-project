@@ -130,6 +130,7 @@ def main() -> int:
 
         client = FakeClient()
         app = handlers_mod.BotApp(client, db)
+        app.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
         msg = {"chat": {"id": 901}, "from": {"id": 901, "first_name": "مالک"}, "text": ""}
 
         def upload(file_id: str, path: Path, origin: str) -> None:
@@ -147,7 +148,7 @@ def main() -> int:
         assert db.count_stock_uploads() == 1
         r1 = svc.latest_report(db)
         assert r1 and not r1["has_baseline"] and r1["n_inbound"] == 0, r1
-        assert "اولین پایه" in client.msgs[-1], client.msgs[-1]
+        assert "اولین پایه" in [m for m in client.msgs if not m.startswith("✅ گزارش اقلام ورودی ارسال")][-1], [m for m in client.msgs if not m.startswith("✅ گزارش اقلام ورودی ارسال")][-1]
         assert len(sent_docs) == 2 and {p.suffix for p in sent_docs} == {".pdf", ".xlsx"}, sent_docs
         base_id = db.latest_stock_upload()["id"]
 
@@ -162,7 +163,7 @@ def main() -> int:
         upload("full", _xlsx(tmp / "full.xlsx", [
             (1203, A, "بتن 85 شرکت", "بتن 85bt", 500, 1, "شرکت", "Kg", "بیلت"),
         ]), "main_source")
-        assert "پایه «گزارش اقلام ورودی به انبار» تغییر نکرد" in client.msgs[-1], client.msgs[-1]
+        assert "پایه «گزارش اقلام ورودی به انبار» تغییر نکرد" in [m for m in client.msgs if not m.startswith("✅ گزارش اقلام ورودی ارسال")][-1], [m for m in client.msgs if not m.startswith("✅ گزارش اقلام ورودی ارسال")][-1]
         assert db.count_stock_uploads() == 1 and db.latest_stock_upload()["id"] == base_id
         assert len(sent_docs) == n_docs  # no inbound files for a full upload
         assert len(svc.list_reports(db)) == 1
@@ -202,7 +203,7 @@ def main() -> int:
         assert list(rep["lines"][0].keys()) and set(svc.INBOUND_COLUMNS) <= set(rep["lines"][0]), rep["lines"][0]
         summ = {r["کد دسته"]: r for r in rep["summary"]}
         assert summ["1203"]["تعداد کل اقلام"] == 4 and summ["1203"]["جمع مقدار ورودی"] == 43, summ
-        up_msg = client.msgs[-1]
+        up_msg = [m for m in client.msgs if not m.startswith("✅ گزارش اقلام ورودی ارسال")][-1]
         assert "📥 اقلام ورودی به انبار" in up_msg and "4 قلم" in up_msg and "⛔" in up_msg, up_msg
         # upload rules unchanged: rejected rows not added, new known-code id added
         live = set(load_primary_frame(db, bale_user_id="901")["id"].astype(str))

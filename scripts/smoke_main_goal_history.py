@@ -256,6 +256,7 @@ def test_bot_flow(tmp: Path) -> None:
     db.upsert_user("702", role="technician", display_name="تکنسین")
     client = FakeClient()
     app = BotApp(client, db)  # type: ignore[arg-type]
+    app.auto_output_format = "all"
 
     def send(uid: str, text: str):
         app.handle_message({"from": {"id": int(uid), "first_name": "x"}, "chat": {"id": int(uid)}, "text": text})
