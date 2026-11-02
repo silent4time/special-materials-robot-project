@@ -1005,7 +1005,25 @@ def bot_settings_menu(user: dict | None = None) -> dict:
     # دستیار هوشمند فقط برای مالک
     if perm.is_owner(user):
         labels.append(BTN_ASSISTANT)
+    # v1.6.0: درباره / به‌روزرسانی — مالک و مدیر (همانند پنل وب /about)
+    if user is None or (user.get("role") in ("owner", "manager")):
+        labels.append(BTN_ABOUT)
     return _kb(_pairs(labels), "settings")
+
+
+BTN_ABOUT = "ℹ️ درباره و به‌روزرسانی"
+BTN_UPDATE = "⬆️ به‌روزرسانی"
+BTN_UPDATE_CONFIRM = "✅ تأیید و نصب به‌روزرسانی"
+BTN_UPDATE_CHECK = "🔄 بررسی نسخهٔ جدید"
+
+
+def update_menu(available: bool = True) -> dict:
+    rows = [[BTN_UPDATE] if available else [], [BTN_UPDATE_CHECK]]
+    return _kb(rows, "update")
+
+
+def update_confirm_menu() -> dict:
+    return _kb([[BTN_UPDATE_CONFIRM], [BTN_UPDATE_CHECK]], "update")
 
 
 

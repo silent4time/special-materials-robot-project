@@ -141,6 +141,9 @@ def create_app() -> FastAPI:
     app.include_router(files_router.router)
     app.include_router(admin_router.router)
     app.include_router(assistant_router.router)
+    from web.routers import about as about_router
+
+    app.include_router(about_router.router)
 
     @app.get("/")
     async def root(request: Request):
@@ -163,6 +166,8 @@ def create_app() -> FastAPI:
             "shamsi": __import__("bot.jalali", fromlist=["format_date"]).format_date,
             "can": __import__("services.permissions", fromlist=["can"]).can,
             "assistant_on": lambda: get_db().get_setting("assistant_enabled") == "1",
+            "update_banner": __import__("web.routers.about", fromlist=["update_banner"]).update_banner,
+            "app_version": __import__("services.updater", fromlist=["current_version"]).current_version,
         }
     )
     get_db()  # schema + WAL on startup
