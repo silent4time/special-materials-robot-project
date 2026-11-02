@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}درباره و به‌روزرسانی{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>ℹ️ درباره و به‌روزرسانی</h1>
+  {% if message %}<div class="alert ok" style="white-space:pre-line">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err" style="white-space:pre-line">{{ error }}</div>{% endif %}
+  <table class="table">
+    <tr><th>نسخهٔ فعلی</th><td><strong>{{ info.current }}</strong></td></tr>
+    <tr><th>آخرین نسخهٔ منتشرشده</th><td>
+      {% if info.latest %}{{ info.latest }}{% if info.remote.html_url %} — <a href="{{ info.remote.html_url }}" target="_blank" rel="noopener">صفحهٔ ریلیز</a>{% endif %}
+      {% elif info.error %}⚠️ اتصال به GitHub ممکن نشد{% else %}—{% endif %}</td></tr>
+    <tr><th>وضعیت</th><td>{% if info.available %}🆕 نسخهٔ جدید آماده است{% else %}✅ به‌روز{% endif %}</td></tr>
+    {% if status_text %}<tr><th>آخرین به‌روزرسانی</th><td style="white-space:pre-line">{{ status_text }}</td></tr>{% endif %}
+  </table>
+  <form method="post" action="/about/check" style="display:inline"><button class="btn secondary" type="submit">🔄 بررسی نسخهٔ جدید</button></form>
+  {% if info.available %}
+  <form method="post" action="/about/update" style="display:inline"
+        onsubmit="return confirm('به‌روزرسانی به نسخهٔ {{ info.latest }}؟ پیش از نصب بک‌آپ گرفته می‌شود و در صورت خطا به نسخهٔ قبل برمی‌گردد.')">
+    <button class="btn" type="submit">⬆️ به‌روزرسانی</button></form>
+  {% endif %}
+  <p class="muted">پیش از نصب: بک‌آپ پایگاه داده و کد، حفظ .env و پوشهٔ data، اجرای تست‌ها و بازگشت خودکار در صورت خطا؛ سپس ری‌استارت ربات و پنل وب. فقط مالک و مدیر.</p>
+</div>
+{% if changelog %}
+<div class="card"><h2>📝 تغییرات نسخهٔ {{ info.latest }}</h2>{{ changelog }}</div>
+{% endif %}
+<div class="card"><h2>📝 تغییرات نسخهٔ فعلی ({{ info.current }})</h2>{{ current_changelog }}</div>
+{% endblock %}

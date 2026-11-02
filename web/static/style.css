@@ -247,3 +247,8 @@ td.actions form { display: inline; margin: 0; }
 .topbar-inner .nav { grid-area: nav; border-top: 1px solid #eef2f6; padding-top: .45rem; }
 .logout-form { display: inline; margin: 0; }
 td textarea { min-width: 200px; }
+
+/* v1.6.0 به‌روزرسانی */
+.alert.update-banner { background: #e3f2fd; color: #0d47a1; border: 1px solid #90caf9; display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+.changelog { line-height: 1.9; }
+.changelog ul { padding-right: 1.2rem; padding-left: 0; }

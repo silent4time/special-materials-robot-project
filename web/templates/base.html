@@ -31,6 +31,7 @@
       {% if can(user, "role_permissions") %}<a href="/settings/permissions">🔐 دسترسی نقش‌ها</a>{% endif %}
       {% if can(user, "reminders") %}<a href="/settings/reminders">🔔 یادآورها</a>{% endif %}
       {% if can(user, "user_activity") %}<a href="/reports/user-activity">📋 فعالیت کاربران</a>{% endif %}
+      {% if require_manager(user) %}<a href="/about">ℹ️ درباره</a>{% endif %}
     </nav>
     <div class="user-chip">
       {{ user.display_name or user.bale_user_id }}
@@ -43,6 +44,15 @@
 </header>
 {% endif %}
 <main class="wrap">
+  {% set _ub = update_banner(user) if user else None %}
+  {% if _ub %}
+  <div class="alert update-banner" role="status">
+    {% if _ub.kind == "new" %}🆕 نسخهٔ جدید ربات آماده است: <strong>{{ _ub.latest }}</strong> (نسخهٔ فعلی {{ _ub.current }})
+      <form method="post" action="/about/update" style="display:inline"><button class="btn" type="submit">⬆️ به‌روزرسانی</button></form>
+      <a href="/about">مشاهدهٔ تغییرات</a>
+    {% else %}{{ _ub.text }}{% endif %}
+  </div>
+  {% endif %}
   {% block content %}{% endblock %}
   <p class="footer-note">همان نقش‌ها و پایگاه‌دادهٔ ربات بله — پنل وب فرآیند جداست.</p>
 </main>
