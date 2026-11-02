@@ -326,6 +326,13 @@ UX ربات: `bot/tundish_report_flow.py`؛ وب: `/tundish-report` و `/tundish
 
 همهٔ گزارش‌های دیگری که PDF و اکسل دارند نیز پیش از ارسال قالب را می‌پرسند و فقط همان را می‌فرستند. اکسل‌ها با قلم **Vazirmatn** (از 1.5.0 به جای Tahoma)، راست‌به‌چپ و وسط‌چین‌اند؛ PDFها Vazirmatn جاسازی‌شده.
 
+## به‌روزرسانی خودکار (نسخهٔ 1.6.0)
+
+- ربات: «⚙️ تنظیمات ← ℹ️ درباره و به‌روزرسانی» و اعلان خودکار نسخهٔ جدید به مالک/مدیر با دکمهٔ «⬆️ به‌روزرسانی». وب: نوار اعلان + `/about`. فقط مالک و مدیر؛ هر دو از `services/updater.py`.
+- منبع: آخرین ریلیز منتشرشده (نه پیش‌نویس/پیش‌انتشار) در `silent4time/special-materials-robot-project` (`NASOZ_UPDATE_REPO`)؛ توکن اختیاری `NASOZ_GITHUB_TOKEN`. کش ۶ ساعت / ۱ ساعت پس از خطا. دستی: `.venv/bin/python -m services.updater check --force`.
+- نصب: بستهٔ `nasoz-bot.zip` + `nasoz-bot.zip.sha256` (یا zipball بدون چک‌سام) ← بک‌آپ DB و کد (`data/updates/rollback_*`) ← جایگزینی فایل‌ها (هرگز `.env`, `data/`, `uploads/`, `reports/`, `.venv`, `.git`) ← تست‌های smoke ← بازگشت خودکار در صورت خطا ← `systemd-run … systemctl restart nasoz-bot nasoz-web`. گزارش: `data/updates/update.log`.
+- انتشار نسخه: `VERSION` و `CHANGELOG.md` را به‌روز کنید، tag `vX.Y.Z` بزنید، `bash scripts/make_release.sh vX.Y.Z` و دو فایل `dist/nasoz-bot.zip` و `dist/nasoz-bot.zip.sha256` را به ریلیز (غیر پیش‌نویس) پیوست کنید؛ متن ریلیز = تغییرات فارسی.
+
 ## گزارش مواد مازاد
 
 تعریف عملیاتی (در متن UI فارسی هم آمده):
