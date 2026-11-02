@@ -4,11 +4,11 @@ Both copy a user-approved sample instead of the shared styler / base-columns rul
   • اقلام بحرانی ← templates/critical_items_template.xlsx (user's own sheet «140506»,
     2026-10-05): per sheet title bar B1 merged to the second-to-last column, header
     row 2 with the sample's per-column fills, «توضیحات» block at the bottom of the
-    SAME sheet (A/B merged, notes merged C..), Tahoma 10 bold, RTL, A4 landscape,
+    SAME sheet (A/B merged, notes merged C..), Vazirmatn 10 bold, RTL, A4 landscape,
     no frozen panes, no separate notes sheet.
   • خلاصه مصرفی ماهیانه ← templates/monthly_summary_approved_1405-07-04.xlsx
     (approved sample of 2026-09-26): same sheet, widths, fills, row heights, no
-    frozen header; only the font is Tahoma.
+    frozen header; only the font is Vazirmatn.
 Temp dirs only; the live DB is used read-only through a backup copy.
 """
 from __future__ import annotations
@@ -46,7 +46,7 @@ def _border_sig(c):
 
 
 def _font_sig(c):
-    return (c.font.name, float(c.font.sz or 0), bool(c.font.b))
+    return (float(c.font.sz or 0), bool(c.font.b))  # name: Vazirmatn (checked separately; sample = Tahoma)
 
 
 def check_critical_sheet(ws, tpl, *, n_rows: int, n_notes: int) -> None:
@@ -130,7 +130,7 @@ def check_critical_sheet(ws, tpl, *, n_rows: int, n_notes: int) -> None:
     for row in ws.iter_rows():
         for c in row:
             if c.value not in (None, ""):
-                check(c.font.name == "Tahoma", f"{name}!{c.coordinate}: font {c.font.name}")
+                check(c.font.name == "Vazirmatn", f"{name}!{c.coordinate}: font {c.font.name}")
 
 
 def test_critical_synthetic() -> None:
@@ -276,7 +276,7 @@ def test_monthly_summary() -> None:
     ref_h = {ref.row_dimensions[r].height for r in range(1, ref.max_row + 1) if ref.row_dimensions[r].height}
     check(heights <= ref_h, f"monthly row heights {heights - ref_h}")
     fonts = {c.font.name for row in ws.iter_rows() for c in row if c.value not in (None, "")}
-    check(fonts == {"Tahoma"}, f"monthly fonts {fonts}")
+    check(fonts == {"Vazirmatn"}, f"monthly fonts {fonts}")
     print("  monthly summary vs approved sample OK" if not FAILS else "  monthly summary FAIL")
 
 
@@ -397,7 +397,7 @@ def test_mix() -> None:
         bad += abs(exp - float(row[res.need_col])) > 0.6
     check(bad == 0, f"mix need = Σ rate × count ({bad} rows differ)")
     fonts = {c.font.name for row in ws.iter_rows() for c in row if c.value not in (None, "")}
-    check(fonts == {"Tahoma"}, f"mix fonts {fonts}")
+    check(fonts == {"Vazirmatn"}, f"mix fonts {fonts}")
     print("  mix 70/20/100 OK" if not FAILS else "  mix FAIL")
 
 

@@ -346,6 +346,7 @@ _REPORTS: list[tuple[str, str]] = [  # (pattern, keyboards attr)
     (r"پوشش کوتاه|کوتاه ?مدت", "BTN_REMAINING"),
     (r"بحرانی", "BTN_CRITICAL_ITEMS"),
     (r"\bn ?تاندیش|نیاز مواد", "BTN_N_TUNDISH"),
+    (r"گزارش موجودی انبار|موجودی پایان ماه", "BTN_STOCK_REPORT"),
     (r"مازاد", "BTN_SURPLUS"),
     (r"ورودی|اقلام ورودی", "BTN_INBOUND"),
     (r"خلاصه مصرف|ماهیانه|ماهانه", "BTN_MONTHLY_SUMMARY"),

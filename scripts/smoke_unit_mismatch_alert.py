@@ -3,7 +3,7 @@
 
 SH/No and KG/No mismatches + items missing from the main source are listed in a Persian
 warning to the uploader and every active owner/manager; the same file+item+unit pair is
-not re-alerted; >15 items → Tahoma/centered Excel; no data changed."""
+not re-alerted; >15 items → Vazirmatn/centered Excel; no data changed."""
 from __future__ import annotations
 
 import _smoke_env  # noqa: F401,E402
@@ -74,7 +74,7 @@ def main() -> int:
             "تعداد ردیف": 1} for i in range(16)]
     x = um.write_excel(big, [], SMOKE_TMP / "u.xlsx")
     ws = load_workbook(x).active
-    assert ws.max_row == 17 and ws["D2"].font.name == "Tahoma" and ws["D2"].alignment.horizontal == "center"
+    assert ws.max_row == 17 and ws["D2"].font.name == "Vazirmatn" and ws["D2"].alignment.horizontal == "center"
     assert ws.sheet_view.rightToLeft
     assert list(frame["unit"])[:1] == ["SH"]  # input untouched
     print("smoke_unit_mismatch_alert OK")

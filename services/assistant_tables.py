@@ -1,4 +1,4 @@
-"""جدول پاسخ‌های دستیار: متن جدولی برای بله، و PDF (Vazirmatn، راست‌به‌چپ) / اکسل (Tahoma) با همان
+"""جدول پاسخ‌های دستیار: متن جدولی برای بله، و PDF (Vazirmatn، راست‌به‌چپ) / اکسل (Vazirmatn) با همان
 سازندهٔ گزارش‌ها (``pdf.generator.generate_simple_report_pdf`` و ``excel.simple_report``).
 
 ``Answer.table`` = {"title", "subtitle", "stem", "sections": [{"title", "columns", "rows", ...}]}
