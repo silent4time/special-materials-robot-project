@@ -32,6 +32,7 @@ def _web_links() -> dict[str, str]:
         kb.BTN_SURPLUS: "/reports/surplus",
         kb.BTN_INBOUND: "/reports",
         kb.BTN_MONTHLY_SUMMARY: "/reports/monthly-summary",
+        kb.BTN_STOCK_REPORT: "/reports#warehouse-stock",
         kb.BTN_ANALYTICS: "/reports",
         kb.BTN_MAIN_GOAL: "/reports/main-goal",
         kb.BTN_SITE_STOCK: "/stock",

@@ -8,6 +8,7 @@ never re-alerted for the same file (file content hash).
 """
 from __future__ import annotations
 
+from excel.table_style import EXCEL_FONT as _EXCEL_FONT
 import hashlib
 import json
 import logging
@@ -143,7 +144,7 @@ def write_excel(rows: list[dict], missing: list[dict], out: Path) -> Path:
             ws.append([n] + [r.get(c) for c in cols[1:]])
         for row in ws.iter_rows():
             for c in row:
-                c.font = Font(name="Tahoma", size=10, bold=c.row == 1)
+                c.font = Font(name=_EXCEL_FONT, size=10, bold=c.row == 1)
                 c.alignment = center
                 c.border = border
                 if c.row == 1:
@@ -266,7 +267,7 @@ def write_missing_excel(items: list[dict], out: Path) -> Path:
     thin = Side(style="thin")
     for row in ws.iter_rows():
         for c in row:
-            c.font = Font(name="Tahoma", size=10, bold=c.row == 1)
+            c.font = Font(name=_EXCEL_FONT, size=10, bold=c.row == 1)
             c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
             if c.row == 1:

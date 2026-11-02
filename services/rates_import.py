@@ -84,7 +84,7 @@ def rows_with_rates(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def export_rates_xlsx(frame: pd.DataFrame, out: Path | str) -> Path:
-    """Tahoma / centered / dark header (shared table_style) export of rows with rates."""
+    """Vazirmatn / centered / dark header (shared table_style) export of rows with rates."""
     from excel.simple_report import export_dataframe_xlsx
 
     sub = rows_with_rates(frame)

@@ -48,6 +48,7 @@ REPORT_N_TUNDISH = "report.n_tundish"
 REPORT_SURPLUS = "report.surplus"
 REPORT_INBOUND = "report.inbound"
 REPORT_MONTHLY_SUMMARY = "report.monthly_summary"
+REPORT_STOCK = "report.stock"
 MAIN_GOAL = "main_goal"
 MAIN_GOAL_DELETE = "main_goal_delete"  # delete a stored month
 FILE_INPUTS = "file_inputs"  # «📤 ورود فایل‌ها» (stock update / monthly)
@@ -77,6 +78,7 @@ FEATURE_LABEL_FA: dict[str, str] = {
     REPORT_SURPLUS: "گزارش مواد مازاد",
     REPORT_INBOUND: "گزارش اقلام ورودی به انبار",
     REPORT_MONTHLY_SUMMARY: "خلاصه مصرف ماهیانه",
+    REPORT_STOCK: "گزارش موجودی انبار",
     MAIN_GOAL: "هدف اصلی",
     MAIN_GOAL_DELETE: "حذف ماه ذخیره‌شدهٔ هدف اصلی",
     FILE_INPUTS: "ورود فایل‌ها",
@@ -107,6 +109,7 @@ _DEFAULTS: dict[str, frozenset[str]] = {
     REPORT_SURPLUS: STAFF,
     REPORT_INBOUND: STAFF,
     REPORT_MONTHLY_SUMMARY: STAFF,
+    REPORT_STOCK: STAFF,
     MAIN_GOAL: STAFF,
     MAIN_GOAL_DELETE: ADMINS,
     FILE_INPUTS: STAFF,
@@ -124,7 +127,7 @@ _DEFAULTS: dict[str, frozenset[str]] = {
 
 REPORT_FEATURES = (
     REPORT_DAILY, REPORT_COMPREHENSIVE, REPORT_PERIOD, REPORT_SHORT_COVER, REPORT_CRITICAL,
-    REPORT_N_TUNDISH, REPORT_SURPLUS, REPORT_INBOUND, REPORT_MONTHLY_SUMMARY,
+    REPORT_N_TUNDISH, REPORT_SURPLUS, REPORT_INBOUND, REPORT_MONTHLY_SUMMARY, REPORT_STOCK,
 )
 SETTINGS_FEATURES = (
     USERS, USER_ACTIVITY, ROLE_PERMISSIONS, TUNDISH_REPORT_SETTINGS, REMINDERS, STOCK_GROUP, APPEARANCE, BACKUP,
