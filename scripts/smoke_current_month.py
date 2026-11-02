@@ -38,6 +38,7 @@ def main() -> None:
     uid = int((owner or {}).get("bale_user_id") or 1644670601)
     c = FakeClient()
     app = BotApp(c, db)
+    app.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
 
     def say(t: str) -> list:
         n = len(c.sent)

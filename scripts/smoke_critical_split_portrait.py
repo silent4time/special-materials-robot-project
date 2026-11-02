@@ -622,6 +622,8 @@ def test_inventory_upload_rules(tmp: Path) -> None:
 
     client = FakeClient()
     app = handlers_mod.BotApp(client, db)
+    app.auto_output_format = "all"
+    app.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     msg = {"chat": {"id": 901}, "from": {"id": 901, "first_name": "مالک"}, "text": ""}
     doc = dict(msg, document={"file_id": "f1", "file_name": "stock.xlsx"})
 
@@ -957,6 +959,8 @@ def test_bot_flow(tmp: Path) -> None:
 
     client = FakeClient()
     app = handlers_mod.BotApp(client, db)
+    app.auto_output_format = "all"
+    app.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     markups: list = []
     orig_send = client.send_message
 

@@ -9,4 +9,6 @@ Used by `pdf/generator.py` for all Persian/RTL PDF reports.
 2. **Tahoma** (system) — if Vazirmatn files are missing or fail to register.
 3. **DejaVuSans** (last resort) — `DejaVuSans.ttf` + `DejaVuSans-Bold.ttf` bundled for offline hosts without Tahoma.
 
+Excel (xlsx) outputs use the font name **Vazirmatn** too (since v1.5.0; was Tahoma) — `excel/table_style.EXCEL_FONT`.
+
 Ship Vazirmatn in this folder so `install.sh` / any server works offline without downloading fonts.

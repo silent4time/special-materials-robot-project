@@ -1,9 +1,9 @@
-"""Standing rule (1405/07/25): every xlsx the app writes is tidy and uses Tahoma.
+"""Standing rule (1405/07/25): every xlsx the app writes is tidy and uses Vazirmatn.
 
 Generates one file from each Excel writer (simple/analytics reports, DataFrame export =
 منبع اصلی download, clean extract = منبع اصلی storage, inbound, monthly summary, stock
 snapshot, assistant table) in a temp dir, then opens EVERY generated xlsx and asserts:
-Tahoma, center (horizontal + vertical), RTL, bordered + filled + frozen header.
+Vazirmatn, center (horizontal + vertical), RTL, bordered + filled + frozen header.
 Also checks that styling never changes the content of the منبع اصلی file (round-trip).
 Temp dirs only — never live data.
 """
@@ -29,7 +29,7 @@ def main() -> None:
     from excel.table_style import EXCEL_FONT
     from smoke_phase3 import check_xlsx
 
-    assert EXCEL_FONT == "Tahoma"
+    assert EXCEL_FONT == "Vazirmatn"
     src = TMP / "inv_src.xlsx"
     shutil.copy(ROOT / "samples" / "02_product_inventory.xlsx", src)
     from analytics.frames import PRIMARY_INVENTORY_TYPE
@@ -103,7 +103,7 @@ def main() -> None:
         for ws in wb.worksheets:
             assert ws.sheet_view.rightToLeft, f
     assert not bad, bad
-    print(f"  {len(files)} xlsx OK (Tahoma, centered, RTL, bordered/frozen header); منبع اصلی round-trip identical")
+    print(f"  {len(files)} xlsx OK (Vazirmatn, centered, RTL, bordered/frozen header); منبع اصلی round-trip identical")
     print("SMOKE_EXCEL_STYLE_OK")
 
 
