@@ -233,10 +233,23 @@ def check_xlsx(path: Path) -> list[str]:
 
 
 def pdf_fonts(path: Path) -> list[str]:
+    import shutil
     import subprocess
 
-    out = subprocess.run(["pdffonts", str(path)], capture_output=True, text=True).stdout
-    return [ln.split()[0].split("+")[-1] for ln in out.splitlines()[2:] if ln.strip()]
+    if shutil.which("pdffonts"):
+        out = subprocess.run(["pdffonts", str(path)], capture_output=True, text=True).stdout
+        return [ln.split()[0].split("+")[-1] for ln in out.splitlines()[2:] if ln.strip()]
+    # v1.6.0: hosts without poppler-utils (no system packages installed) → pypdf
+    from pypdf import PdfReader
+
+    names: list[str] = []
+    for page in PdfReader(str(path)).pages:
+        fonts = (page.get("/Resources") or {}).get("/Font") or {}
+        for ref in fonts.values():
+            base = str(ref.get_object().get("/BaseFont", "")).lstrip("/").split("+")[-1]
+            if base and base not in names:
+                names.append(base)
+    return names
 
 
 LETTERHEAD_FONTS: set[str] = set()
@@ -396,7 +409,15 @@ def test_shared_core() -> None:
     wp = TMP / "web_comp.pdf"
     wp.write_bytes(r.content)
     assert load_workbook(bot_x).sheetnames == load_workbook(wx).sheetnames, (load_workbook(bot_x).sheetnames, load_workbook(wx).sheetnames)
-    heads = lambda pdf: [ln for ln in subprocess.run(["pdftotext", "-layout", str(pdf), "-"], capture_output=True, text=True).stdout.splitlines() if ln.strip()][:3]
+    import shutil as _sh
+
+    def _pdf_text(pdf):
+        if _sh.which("pdftotext"):
+            return subprocess.run(["pdftotext", "-layout", str(pdf), "-"], capture_output=True, text=True).stdout
+        from pypdf import PdfReader  # v1.6.0: no poppler on the host
+        return PdfReader(str(pdf)).pages[0].extract_text() or ""
+
+    heads = lambda pdf: [ln for ln in _pdf_text(pdf).splitlines() if ln.strip()][:3]
     assert heads(bot_p)[:1] == heads(wp)[:1], (heads(bot_p), heads(wp))
     assert not check_xlsx(wx) and not check_pdf(wp)
     # technician: denied on web (default permissions)
