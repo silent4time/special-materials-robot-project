@@ -119,6 +119,7 @@ def test_errors_and_expiry() -> None:
     import smoke_phase1 as p1
     from bot import keyboards as kb
     from bot.handlers import BotApp
+    BotApp.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     from db.models import Database
     from services import user_errors
 
@@ -189,7 +190,7 @@ def check_xlsx(path: Path) -> list[str]:
 
     from excel.table_style import EXCEL_FONT, _first_table_row
 
-    assert EXCEL_FONT == "Tahoma", EXCEL_FONT
+    assert EXCEL_FONT == "Vazirmatn", EXCEL_FONT
 
     from excel.table_style import template_locked_name
 
@@ -197,7 +198,7 @@ def check_xlsx(path: Path) -> list[str]:
     wb = load_workbook(path)
     if template_locked_name(wb):
         # اقلام بحرانی / خلاصه مصرفی ماهیانه copy the user's sample cell by cell (own
-        # fills/alignment, no frozen header) — only RTL + Tahoma are checked here; the
+        # fills/alignment, no frozen header) — only RTL + Vazirmatn are checked here; the
         # layout itself is checked against the sample by smoke_template_reports.py.
         for ws in wb.worksheets:
             if not ws.sheet_view.rightToLeft:
@@ -261,6 +262,7 @@ def test_styling() -> None:
     sys.path.insert(0, str(ROOT / "scripts"))
     import smoke_phase1 as p1
     from bot.handlers import BotApp
+    BotApp.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     from pdf import generator as gen
 
     gen._register_fonts()
@@ -338,6 +340,7 @@ def test_shared_core() -> None:
     from analytics.frames import load_frames
     from bot import keyboards as kb
     from bot.handlers import BotApp
+    BotApp.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     from services import comprehensive_report as cr
 
     tmp = TMP / "core"
@@ -411,6 +414,7 @@ def test_background() -> None:
     import smoke_phase1 as p1
     from bot import keyboards as kb
     from bot.handlers import BotApp
+    BotApp.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     from services import comprehensive_report as cr
 
     tmp = TMP / "bg"

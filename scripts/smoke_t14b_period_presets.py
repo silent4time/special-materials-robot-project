@@ -59,6 +59,7 @@ def main() -> int:
     db.upsert_user("5101", "owner", display_name="مالک آزمون")
     c = C()
     app = BotApp(c, db)
+    app.auto_output_format = "all"  # v1.5.0: legacy assertions expect every file
     base = {"from": {"id": 5101, "first_name": "x"}, "chat": {"id": 5101}}
 
     def send(text=None, doc=False):

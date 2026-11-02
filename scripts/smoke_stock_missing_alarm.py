@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Smoke (temp DB only): a stock upload that lacks main-source IDs keeps their stock
 unchanged and raises a Persian alarm (کد ۴ رقمی | آیدی | شرح | موجودی قبلی | واحد) to the
-uploader + active owner/manager; no duplicate per file; >15 → Tahoma/centered Excel."""
+uploader + active owner/manager; no duplicate per file; >15 → Vazirmatn/centered Excel."""
 from __future__ import annotations
 
 import _smoke_env  # noqa: F401,E402
@@ -68,7 +68,7 @@ def main() -> int:
     b = um.check_missing_stock(db, raw_path=raw2, items=many, file_label="به‌روزرسانی موجودی انبار")
     assert b and b["xlsx"] and "فهرست کامل در فایل اکسل پیوست" in b["text"]
     ws = load_workbook(b["xlsx"]).active
-    assert ws.max_row == 17 and ws["D2"].font.name == "Tahoma" and ws["D2"].alignment.horizontal == "center"
+    assert ws.max_row == 17 and ws["D2"].font.name == "Vazirmatn" and ws["D2"].alignment.horizontal == "center"
     print("smoke_stock_missing_alarm OK")
     return 0
 

@@ -28,7 +28,7 @@ def _src() -> pd.DataFrame:
 
 def main() -> None:
     src = _src()
-    # export → re-import round trip (Tahoma/dark header handled by shared table_style)
+    # export → re-import round trip (Vazirmatn/dark header handled by shared table_style)
     with tempfile.TemporaryDirectory() as td:
         out = ri.export_rates_xlsx(src, Path(td) / "r.xlsx")
         back = ri.read_rates_file(out)
@@ -36,7 +36,7 @@ def main() -> None:
         from openpyxl import load_workbook
 
         c = load_workbook(out).active["A1"]
-        assert c.font.name == "Tahoma" and c.alignment.horizontal == "center"
+        assert c.font.name == "Vazirmatn" and c.alignment.horizontal == "center"
         incoming = pd.DataFrame({
             "category_code": ["1201", "1201", "1302", "9999"],
             "id": ["120100000001", "120100000002", "", ""],
