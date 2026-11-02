@@ -752,10 +752,12 @@ class MainGoalReportFlow(ProductionStatsMixin):
                 result, stem=stem, report_dir=unique_dir(REPORT_DIR, "main_goal"),
                 letterhead_path=self.app._letterhead_path()
             )
-            chat = self.app._chat_id(message)
-            self.app.client.send_document(chat, pdf_path, caption=result.title)
-            self.app.client.send_document(chat, xlsx_path, caption=f"نسخه اکسل — {result.title}")
-            self._reply(message, result.summary + "\n\nگزارش PDF و اکسل ارسال شد.", kb.main_goal_menu())
+            # v1.5.0: «خروجی PDF»/«خروجی اکسل» first; only the chosen file is sent
+            self.app._deliver_files(
+                message, user,
+                [("pdf", pdf_path, result.title), ("xlsx", xlsx_path, f"نسخه اکسل — {result.title}")],
+                done_text=result.summary + "\n\n✅ گزارش ارسال شد.", done_markup=kb.main_goal_menu(),
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("main_goal scenario export failed")
             self._reply(message, result.summary + "\n\n" + user_errors.error_fa("خطا در تولید PDF/اکسل", exc), kb.main_goal_menu())

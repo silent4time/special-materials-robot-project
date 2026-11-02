@@ -138,6 +138,15 @@ BTN_N_TUNDISH = "🧮 نیاز مواد برای N تاندیش"
 BTN_SURPLUS = "📦 گزارش مواد مازاد"
 BTN_INBOUND = "📄 گزارش اقلام ورودی به انبار"
 BTN_MONTHLY_SUMMARY = "📄 دریافت خلاصه مصرف ماهیانه"
+# v1.5.0: گزارش موجودی انبار (mode → segment → format) + one-format delivery of every report
+BTN_STOCK_REPORT = "📦 گزارش موجودی انبار"
+BTN_STOCK_TODAY = "📅 گزارش روز"
+BTN_STOCK_MONTH_END = "🗓 موجودی پایان ماه گذشته"
+BTN_SEG_CONTRACTOR = "👷 اقلام پیمانکار"
+BTN_SEG_COMPANY = "🏭 اقلام شرکت"
+BTN_SEG_BOTH = "🔀 هر دو"
+BTN_OUT_PDF = "📄 خروجی PDF"
+BTN_OUT_XLSX = "📊 خروجی اکسل"
 BTN_CRITICAL_COUNTS = "📝 ثبت تعداد تاندیش ماهانه"
 BTN_CRITICAL_REPORT = "📄 تولید گزارش اقلام بحرانی"
 BTN_CRITICAL_ARCHIVE = "🗂 گزارش‌های تأییدشده اقلام بحرانی"
@@ -695,6 +704,7 @@ def analytics_menu(user: dict | None = None) -> dict:
         (perm.REPORT_SURPLUS, BTN_SURPLUS),
         (perm.REPORT_INBOUND, BTN_INBOUND),
         (perm.REPORT_MONTHLY_SUMMARY, BTN_MONTHLY_SUMMARY),
+        (perm.REPORT_STOCK, BTN_STOCK_REPORT),
     ]
     labels = [lbl for feat, lbl in items if u is None or perm.can(u, feat)]
     return _kb(_pairs(labels), "reports")
@@ -771,6 +781,19 @@ def n_tundish_section_menu() -> dict:
 
 def n_tundish_count_menu() -> dict:
     return _kb([["۱", "۲", "۳", "۴"], ["۵", "۶", "۸", "۱۰"], [BTN_CANCEL]], "flow")
+
+
+def output_format_menu() -> dict:
+    """v1.5.0: «خروجی PDF» / «خروجی اکسل» before any report file is sent."""
+    return _kb([[BTN_OUT_PDF, BTN_OUT_XLSX], [BTN_CANCEL]], "flow")
+
+
+def stock_report_mode_menu() -> dict:
+    return _kb([[BTN_STOCK_TODAY, BTN_STOCK_MONTH_END], [BTN_CANCEL]], "flow")
+
+
+def stock_report_segment_menu() -> dict:
+    return _kb([[BTN_SEG_CONTRACTOR, BTN_SEG_COMPANY], [BTN_SEG_BOTH], [BTN_CANCEL]], "flow")
 
 
 def n_tundish_mode_menu() -> dict:
@@ -1358,6 +1381,7 @@ def _button_features() -> dict[str, tuple[str, ...]]:
         BTN_SURPLUS: (P.REPORT_SURPLUS,),
         BTN_INBOUND: (P.REPORT_INBOUND,),
         BTN_MONTHLY_SUMMARY: (P.REPORT_MONTHLY_SUMMARY,),
+        BTN_STOCK_REPORT: (P.REPORT_STOCK,),
         BTN_WAREHOUSE_STOCK: (P.FILE_INPUTS,),
         BTN_MONTHLY: (P.FILE_INPUTS,),
         BTN_SEQUENCE_REPORT: (P.FILE_INPUTS,),
