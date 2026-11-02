@@ -71,9 +71,9 @@ MONTH_SECTION_COLUMNS_FA = [
 
 # TEMPLATE-LOCKED (approved sample «خلاصه مصرفی ماهیانه», 2026-09-26 = 1405/07/04,
 # templates/monthly_summary_approved_1405-07-04.xlsx): layout/fills/widths/heights are
-# exactly the sample's; the only change is the font (sample: Calibri 11 → Tahoma 11,
+# exactly the sample's; the only change is the font (sample: Calibri 11 → Vazirmatn 11,
 # standing Excel rule). Never pass this workbook through excel.table_style.finalize_*.
-EXCEL_FONT_NAME = "Tahoma"
+from excel.table_style import EXCEL_FONT as EXCEL_FONT_NAME  # Vazirmatn (v1.5.0)
 EXCEL_FONT_SIZE = 11
 DATA_FONT = Font(name=EXCEL_FONT_NAME, size=EXCEL_FONT_SIZE)
 BOLD_FONT = Font(name=EXCEL_FONT_NAME, size=EXCEL_FONT_SIZE, bold=True)

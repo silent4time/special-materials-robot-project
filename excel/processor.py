@@ -985,7 +985,7 @@ def write_clean_excel(df: pd.DataFrame, path: Path | str, file_type: str) -> Non
     )
     cols = {str(c) for c in (df.columns if df is not None else [])}
     try:
-        # styling only (Tahoma, RTL, centered, header, widths) — values are untouched
+        # styling only (Vazirmatn, RTL, centered, header, widths) — values are untouched
         if cols & {"product_name", "usage_location", "material_name"}:
             from excel.table_style import style_workbook_path
 

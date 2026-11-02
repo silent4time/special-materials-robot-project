@@ -5,7 +5,7 @@ material base-columns rule (``services.material_columns``): its look is copied c
 by cell from the user's own sample workbook ``templates/critical_items_template.xlsx(.b64)``
 (single sheet, title bar in row 1 merged B..second-to-last column, header row 2,
 data rows, then a «توضیحات» block at the BOTTOM of the same sheet; per-column theme
-fills, medium/thin borders, Tahoma 10 bold, RTL, A4 landscape, no frozen panes).
+fills, medium/thin borders, Vazirmatn 10 bold (sample: Tahoma), RTL, A4 landscape, no frozen panes).
 
 The template workbook is LOADED at build time so its theme colours (accent tints)
 render exactly as in the sample; styles are copied from prototype cells, the
@@ -24,7 +24,7 @@ from openpyxl.styles import Border, Side
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 TEMPLATE_PATH = TEMPLATES_DIR / "critical_items_template.xlsx"
 TEMPLATE_SHEET = "140506"
-TEMPLATE_FONT = "Tahoma"  # the sample itself uses Tahoma 10 bold on every cell
+TEMPLATE_FONT = "Vazirmatn"  # sample uses Tahoma 10 bold; output font → Vazirmatn (v1.5.0)
 
 # report column → template column (A..G) whose style/width it takes.
 TEMPLATE_COLUMN_OF = {
@@ -284,7 +284,9 @@ def write_critical_items_xlsx(sheets: list[dict[str, Any]], output_path: Path | 
         ws = wb.create_sheet(name)
         _fill_sheet(wb, proto, ws, sheet)
     wb.remove(proto)
-    from excel.table_style import mark_template_locked
+    from excel.table_style import apply_excel_font, mark_template_locked
+
+    apply_excel_font(wb)  # v1.5.0: Vazirmatn (sample's Tahoma replaced; sizes/bold kept)
 
     mark_template_locked(wb, "critical_items")
     wb.active = 0

@@ -231,11 +231,27 @@ def style_workbook_path(
 # ---------------------------------------------------------------------------
 # Phase 3 item 20: one finalizer for EVERY Excel output (standing rule)
 # ---------------------------------------------------------------------------
-# Tahoma ships with every Windows/Office install; Vazirmatn may be missing on users' PCs
-# (PDFs keep the embedded Vazirmatn). Standing rule: every xlsx goes through finalize_*.
-EXCEL_FONT = "Tahoma"
+# v1.5.0 (user decision): every xlsx uses Vazirmatn, the same family as the PDFs
+# (Excel falls back to a system font on PCs without it). Standing rule: every xlsx goes
+# through finalize_* (or ``apply_excel_font`` for template-locked workbooks).
+EXCEL_FONT = "Vazirmatn"
 HEADER_FILL_HEX = "1F4E79"
 _THIN = None
+
+
+def apply_excel_font(wb) -> None:
+    """Font family → EXCEL_FONT on every styled cell (size/bold/colour kept). For
+    template-locked workbooks that skip ``finalize_worksheet``."""
+    from copy import copy
+
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                f = cell.font
+                if f is not None and f.name != EXCEL_FONT:
+                    nf = copy(f)
+                    nf.name = EXCEL_FONT
+                    cell.font = nf
 
 
 def _thin_border():
@@ -258,7 +274,7 @@ def _first_table_row(ws: Worksheet) -> int | None:
 
 
 def finalize_worksheet(ws: Worksheet) -> None:
-    """RTL, Tahoma everywhere, centered cells (horizontal + vertical), thin borders on the table,
+    """RTL, Vazirmatn everywhere, centered cells (horizontal + vertical), thin borders on the table,
     header fill when the writer set none, frozen header row, auto-fit widths for columns the
     writer left unsized. Existing fills/bold/colors/explicit widths are kept. Styling only:
     cell values are never changed."""
