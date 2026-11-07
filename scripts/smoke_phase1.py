@@ -8,7 +8,7 @@
   handler (never the generic fallback, never an exception) for
   owner / manager / responsible_officer / technician.
 
-Runs on a temp copy of data/bot.db (never the live DB) + a fresh temp DB.
+Uses an isolated synthetic fixture (scripts/synthetic_fixture.py), never data/bot.db.
 """
 from __future__ import annotations
 
@@ -67,17 +67,20 @@ def _btns(markup) -> list[str]:
 
 
 def _db_copy(tmp: Path):
-    from db.models import Database
+    """Isolated representative DB. Never opens data/bot.db or server secrets.
 
-    # file-level copy (db + wal + shm) — the live DB is never opened
-    live = ROOT / "data" / "bot.db"
+    When a local factory database is absent (no owner, empty site lists, no
+    consumption extract) the copy used to fail later assertions. Those runs
+    now get a synthetic fixture with the same shape the assertions require.
+    """
+    scripts = Path(__file__).resolve().parent
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    from synthetic_fixture import build_synthetic_db
+
     n = len(list(tmp.glob("bot_copy*.db")))
     dst = tmp / f"bot_copy{n}.db"
-    for suf in ("", "-wal", "-shm"):
-        src = Path(str(live) + suf)
-        if src.exists():
-            shutil.copy2(src, Path(str(dst) + suf))
-    return Database(dst)
+    return build_synthetic_db(dst)
 
 
 def test_services(tmp: Path) -> None:

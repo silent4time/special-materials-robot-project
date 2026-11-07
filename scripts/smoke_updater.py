@@ -195,7 +195,8 @@ def main() -> int:
         owner=True, checked=True,
     )
     assert "نسخهٔ جدیدتری نیست" in quiet and "github.com" not in quiet
-    assert up.creator_name() is None and "ثبت نشده است" in quiet
+    assert up.creator_name() == "واحد نسوز تاندیش فولاد خوزستان"
+    assert "واحد نسوز تاندیش فولاد خوزستان" in quiet and "ثبت نشده است" not in quiet
     assert "تاندیش اسلب" in quiet and up.current_version() in quiet
     assert "github.com" not in up.status_fa(
         {"state": "failed", "version": "1", "at": "t", "message": "see https://github.com/x/y token ghp_SECRET"}
@@ -230,7 +231,8 @@ def main() -> int:
     assert kb.BTN_UPDATE not in kb.keyboard_texts(kb.bot_settings_menu(db2.get_user("62")))
     say("62", kb.BTN_ABOUT)
     mgr = client.sent[-1][1]
-    assert up.current_version() in mgr and "ثبت نشده است" in mgr and "تاندیش اسلب" in mgr, mgr
+    assert up.current_version() in mgr and "واحد نسوز تاندیش فولاد خوزستان" in mgr and "تاندیش اسلب" in mgr, mgr
+    assert "ثبت نشده است" not in mgr
     assert "99.0.0" not in mgr and kb.BTN_UPDATE not in kb.keyboard_texts(client.sent[-1][2])
     assert "github.com" not in mgr
     say("62", kb.BTN_UPDATE)
@@ -281,7 +283,7 @@ def main() -> int:
     h = c.get("/about").text
     assert "99.0.0" in h and up.current_version() in h and "قابلیت تازه" in h and "<li>" in h
     assert "بررسی به‌روزرسانی" in h and "به‌روزرسانی روی سرور" in h
-    assert "ثبت نشده است" in h and "تاندیش اسلب" in h
+    assert "واحد نسوز تاندیش فولاد خوزستان" in h and "ثبت نشده است" not in h and "تاندیش اسلب" in h
     assert "github.com" not in h and "special-materials-robot-project" not in h
     r = c.post("/about/update")
     assert r.status_code == 200 and launched == ["61", "61"] and "شروع شد" in r.text
@@ -290,7 +292,7 @@ def main() -> int:
     h = c.get("/home").text
     assert "update-banner" not in h and 'href="/about"' in h
     h = c.get("/about").text
-    assert up.current_version() in h and "ثبت نشده است" in h
+    assert up.current_version() in h and "واحد نسوز تاندیش فولاد خوزستان" in h and "ثبت نشده است" not in h
     assert 'action="/about/check"' not in h and 'action="/about/update"' not in h
     assert "github.com" not in h
     assert c.post("/about/check", follow_redirects=False).status_code == 403

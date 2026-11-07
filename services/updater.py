@@ -200,6 +200,8 @@ def changelog_text(info: dict) -> str:
 
 # --------------------------------------------------------------------------- about (bot + web share this; no second copy)
 PRODUCT_TITLE = "ربات مواد نسوز تاندیش"
+# Single place for the About line on bot and web. Change this string only.
+CREATOR_NAME = "واحد نسوز تاندیش فولاد خوزستان"
 CHECK_FAIL_FA = "⚠️ بررسی به‌روزرسانی ممکن نشد. بعداً دوباره امتحان کنید."
 NO_UPDATE_FA = "✅ نسخهٔ جدیدتری نیست. نسخهٔ فعلی: {current}"
 OWNER_ONLY_UPDATE_FA = "⛔ به‌روزرسانی فقط برای مالک مجاز است."
@@ -217,11 +219,9 @@ def product_spec_lines() -> list[str]:
 
 
 def creator_name() -> str | None:
-    """Person named as creator, only when application metadata records one.
-
-    This tree has no ``__author__``, package author, or creator field.
-    """
-    return None
+    """Creator shown in About. Empty string hides the name (placeholder instead)."""
+    name = (CREATOR_NAME or "").strip()
+    return name or None
 
 
 def about_facts() -> dict:
