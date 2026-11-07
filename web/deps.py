@@ -116,6 +116,15 @@ def require_admin_web(
     return user
 
 
+def require_owner_web(
+    user: Annotated[dict[str, Any], Depends(current_user)],
+) -> dict[str, Any]:
+    """Update actions — owner only, including forged POSTs."""
+    if not require_owner(user):
+        raise ForbiddenFa("به‌روزرسانی فقط برای مالک مجاز است.")
+    return user
+
+
 def user_can_see_reports(user: dict[str, Any] | None) -> bool:
     return perm.can_any(user, perm.REPORT_FEATURES)
 

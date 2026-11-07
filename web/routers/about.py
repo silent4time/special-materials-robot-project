@@ -1,4 +1,7 @@
-"""v1.6.0 — «ℹ️ درباره و به‌روزرسانی» (owner/manager; same services.updater as the bot)."""
+"""«ℹ️ درباره و به‌روزرسانی» — same services.updater as the bot.
+
+Reading the page: owner and manager. Checking and installing: owner only.
+"""
 from __future__ import annotations
 
 import re
@@ -7,10 +10,11 @@ from html import escape
 from fastapi import APIRouter, Depends, Request
 from markupsafe import Markup
 
+from auth.rbac import require_owner
 from bot.activity import log_activity
 from db.models import Database
 from services import updater as up
-from web.deps import get_db, require_admin_web
+from web.deps import get_db, require_admin_web, require_owner_web
 from web.templating import render
 
 router = APIRouter(tags=["about"])
@@ -44,10 +48,8 @@ def changelog_html(md: str) -> Markup:
 
 
 def update_banner(user: dict | None) -> dict | None:
-    """base.html banner — cached data only (never blocks a page on GitHub)."""
-    from auth.rbac import require_manager
-
-    if not user or not require_manager(user):
+    """base.html banner — cached data only, owner only (never blocks a page)."""
+    if not user or not require_owner(user):
         return None
     try:
         info = up.update_info(get_db(), network=False)
@@ -55,20 +57,25 @@ def update_banner(user: dict | None) -> dict | None:
         return None
     st = info.get("status") or {}
     if st.get("state") == "running":
-        return {"kind": "running", "text": up.status_fa(st)}
+        return {"kind": "running", "text": up.redact_public(up.status_fa(st))}
     if info["available"]:
         return {"kind": "new", "current": info["current"], "latest": info["latest"]}
     return None
 
 
 def _ctx(db: Database, user: dict, *, force: bool = False, message: str = "", error: str = "") -> dict:
-    info = up.update_info(db, force=force)
+    owner = require_owner(user)
+    info = up.update_info(db, force=bool(force and owner), network=bool(force and owner))
+    show_new = bool(owner and info["available"])
     return {
         "user": user,
         "info": info,
-        "changelog": changelog_html(up.changelog_text(info)) if info["available"] else None,
-        "current_changelog": changelog_html(up.local_changelog(info["current"])),
-        "status_text": up.status_fa(info["status"]),
+        "facts": up.about_facts(),
+        "can_update": owner,
+        "show_install": show_new,
+        "changelog": changelog_html(up.changelog_text(info)) if show_new else None,
+        "current_changelog": changelog_html(up.redact_public(up.local_changelog(info["current"]))),
+        "status_text": up.status_fa(info["status"]) if owner else "",
         "message": message,
         "error": error,
     }
@@ -80,18 +87,26 @@ async def about_page(request: Request, user=Depends(require_admin_web), db: Data
 
 
 @router.post("/about/check")
-async def about_check(request: Request, user=Depends(require_admin_web), db: Database = Depends(get_db)):
+async def about_check(request: Request, user=Depends(require_owner_web), db: Database = Depends(get_db)):
     ctx = _ctx(db, user, force=True)
     if ctx["info"]["error"]:
-        ctx["error"] = "بررسی نسخهٔ جدید ممکن نشد (اتصال به GitHub)."
+        ctx["error"] = up.CHECK_FAIL_FA
+    elif not ctx["info"]["available"]:
+        ctx["message"] = up.NO_UPDATE_FA.format(current=ctx["info"]["current"])
     return render(request, "about.html", ctx)
 
 
 @router.post("/about/update")
-async def about_update(request: Request, user=Depends(require_admin_web), db: Database = Depends(get_db)):
-    info = up.update_info(db)
+async def about_update(request: Request, user=Depends(require_owner_web), db: Database = Depends(get_db)):
+    info = up.update_info(db, network=False)
     if not info["available"]:
-        return render(request, "about.html", _ctx(db, user, message="ربات به‌روز است."))
+        info = up.update_info(db, force=True)
+    if info.get("error") and not info["available"]:
+        return render(request, "about.html", _ctx(db, user, error=up.CHECK_FAIL_FA))
+    if not info["available"]:
+        return render(request, "about.html", _ctx(
+            db, user, message=up.NO_UPDATE_FA.format(current=info["current"]),
+        ))
     if (info["status"] or {}).get("state") == "running":
         return render(request, "about.html", _ctx(db, user, error="یک به‌روزرسانی در حال اجراست."))
     how = up.launch_detached(str(user.get("bale_user_id") or ""))
@@ -101,6 +116,7 @@ async def about_update(request: Request, user=Depends(require_admin_web), db: Da
         pass
     return render(request, "about.html", _ctx(
         db, user,
-        message=f"⏳ به‌روزرسانی به نسخهٔ {info['latest']} شروع شد ({how}). پس از اجرای تست‌ها، ربات و پنل وب "
-                "ری‌استارت می‌شوند؛ چند دقیقه بعد صفحه را تازه کنید.",
+        message=f"⏳ به‌روزرسانی به نسخهٔ {info['latest']} روی همین سرور شروع شد ({how}). "
+                "پیش از نصب بک‌آپ گرفته می‌شود. پس از تست‌ها ربات و پنل وب ری‌استارت می‌شوند؛ "
+                "چند دقیقه بعد صفحه را تازه کنید.",
     ))

@@ -80,7 +80,7 @@ async def files_page(request: Request, user=Depends(require_feature(perm.FILE_IN
     return _page(request, db, user)
 
 
-async def _excel(request, db, user, file, pending):
+async def _excel(request, db, user, file, pending, *, notice: str | None = None):
     out = await run_excel_upload(db, user, file, pending, origin="upload")
     if not out.ok:
         return _page(request, db, user, error=out.text, status_code=400)
@@ -92,8 +92,8 @@ async def _excel(request, db, user, file, pending):
     if out.missing_alert:
         summary = summary + "\n\n" + out.missing_alert["text"]
         _notify_unit_alert(db, out.missing_alert, user)
-    return _page(request, db, user, message=f"✅ «{file_guides.TITLES.get(pending, pending)}» ثبت شد.",
-                 summary=summary, new_inbound=inbound)
+    headline = notice or f"✅ «{file_guides.TITLES.get(pending, pending)}» ثبت شد."
+    return _page(request, db, user, message=headline, summary=summary, new_inbound=inbound)
 
 
 def _notify_unit_alert(db: Database, alert: dict, user: dict) -> None:
@@ -118,7 +118,7 @@ def _notify_unit_alert(db: Database, alert: dict, user: dict) -> None:
 async def upload_stock(request: Request, file: UploadFile = File(...),
                        user=Depends(require_feature(perm.FILE_INPUTS)), db: Database = Depends(get_db)):
     """«📥 به‌روزرسانی موجودی انبار» — stock-only merge + new known-code ids + inbound report."""
-    return await _excel(request, db, user, file, "product_inventory")
+    return await _excel(request, db, user, file, "product_inventory", notice=file_upload.DAILY_STOCK_OK_FA)
 
 
 @router.post("/monthly")

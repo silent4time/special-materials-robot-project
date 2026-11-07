@@ -54,6 +54,7 @@ MENU_PARENT: dict[str, str | None] = {
     "assistant": "settings",
     "assistant_ask": "main",
     "backup": "settings",
+    "update": "settings",
     "appearance_item": "appearance",
     "role_perms": "settings",
     "letterhead": "appearance",
@@ -1005,25 +1006,33 @@ def bot_settings_menu(user: dict | None = None) -> dict:
     # دستیار هوشمند فقط برای مالک
     if perm.is_owner(user):
         labels.append(BTN_ASSISTANT)
-    # v1.6.0: درباره / به‌روزرسانی — مالک و مدیر (همانند پنل وب /about)
+    # درباره: مالک و مدیر. دکمه‌های به‌روزرسانی فقط در صفحهٔ درباره و فقط برای مالک.
     if user is None or (user.get("role") in ("owner", "manager")):
         labels.append(BTN_ABOUT)
     return _kb(_pairs(labels), "settings")
 
 
 BTN_ABOUT = "ℹ️ درباره و به‌روزرسانی"
-BTN_UPDATE = "⬆️ به‌روزرسانی"
+BTN_UPDATE = "⬆️ به‌روزرسانی روی سرور"
+BTN_UPDATE_CHECK = "🔄 بررسی به‌روزرسانی"
+# Old confirm label; canonical() sends it to BTN_UPDATE (install).
 BTN_UPDATE_CONFIRM = "✅ تأیید و نصب به‌روزرسانی"
-BTN_UPDATE_CHECK = "🔄 بررسی نسخهٔ جدید"
+CB_UPDATE_PREFIX = "upd|"
+CB_UPDATE_CHECK = "upd|check"
+CB_UPDATE_APPLY = "upd|apply"
+
+
+LEGACY_ALIASES.update({
+    "🔄 بررسی نسخهٔ جدید": BTN_UPDATE_CHECK,
+    "⬆️ به‌روزرسانی": BTN_UPDATE,
+    BTN_UPDATE_CONFIRM: BTN_UPDATE,
+})
 
 
 def update_menu(available: bool = True) -> dict:
+    """Owner About keyboard: check first; install only when a newer release is known."""
     rows = [[BTN_UPDATE] if available else [], [BTN_UPDATE_CHECK]]
     return _kb(rows, "update")
-
-
-def update_confirm_menu() -> dict:
-    return _kb([[BTN_UPDATE_CONFIRM], [BTN_UPDATE_CHECK]], "update")
 
 
 

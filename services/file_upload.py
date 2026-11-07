@@ -30,6 +30,10 @@ from services import user_errors
 
 logger = logging.getLogger(__name__)
 
+# Headline of a stock-only warehouse upload. It must not say the master file
+# («منبع اصلی») was replaced; that wording stays on a real full-source upload.
+DAILY_STOCK_OK_FA = "✅ موجودی روزانه به‌روزرسانی شد."
+
 
 @dataclass
 class UploadOutcome:
@@ -83,8 +87,7 @@ def process_upload(
                     dest.replace(inv_dest)
                     dest = inv_dest
                 format_redirect_note = (
-                    "\n(فایل با قالب منبع اصلی شناسایی شد — "
-                    "جدول اصلی موجودی به‌روز شد.)"
+                    "\n(فایل با قالب موجودی انبار شناسایی شد.)"
                 )
                 logger.info(
                     "monthly/consumables upload redirected to product_inventory for user %s",
@@ -314,6 +317,10 @@ def process_upload(
             logger.warning("usage_location sync after monthly failed: %s", exc)
 
     label = FILE_TYPES[pending]["label_fa"]
+    if is_stock_upload:
+        head = DAILY_STOCK_OK_FA
+    else:
+        head = f"✅ فایل «{label}» دریافت شد."
     reasons = result.drop_reasons or {}
     if pending == "product_inventory" and reasons:
         dropped_note = (
@@ -363,7 +370,7 @@ def process_upload(
         ok=True, kind="ok", pending=pending, session=session, inbound_report=inbound_report,
         unit_alert=unit_alert, missing_alert=missing_alert,
         text=(
-            f"✅ فایل «{label}» دریافت شد.\n"
+            f"{head}\n"
             f"از {result.raw_row_count} ردیف خام، {new_kept} ردیف نگه داشته شد."
             f"{merge_note}{dropped_note}{extra_cols_note}{catalog_note}{inbound_note}{format_redirect_note}\n"
             f"نسخه تمیز ذخیره و در پایگاه‌داده ثبت شد.\n"

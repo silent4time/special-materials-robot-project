@@ -48,8 +48,8 @@
   {% if _ub %}
   <div class="alert update-banner" role="status">
     {% if _ub.kind == "new" %}🆕 نسخهٔ جدید ربات آماده است: <strong>{{ _ub.latest }}</strong> (نسخهٔ فعلی {{ _ub.current }})
-      <form method="post" action="/about/update" style="display:inline"><button class="btn" type="submit">⬆️ به‌روزرسانی</button></form>
-      <a href="/about">مشاهدهٔ تغییرات</a>
+      <form method="post" action="/about/update" style="display:inline"><button class="btn" type="submit">⬆️ به‌روزرسانی روی سرور</button></form>
+      <a href="/about">درباره</a>
     {% else %}{{ _ub.text }}{% endif %}
   </div>
   {% endif %}

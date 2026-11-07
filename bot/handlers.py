@@ -5044,6 +5044,25 @@ class BotApp:
             except BaleAPIError as exc:
                 logger.warning("answerCallbackQuery failed: %s", exc)
 
+        if data.startswith(kb.CB_UPDATE_PREFIX):
+            from services import updater as up
+
+            user = ensure_registered(self.db, uid, self._display_name(message))
+            if not user or not perm.is_owner(user):
+                answer(up.OWNER_ONLY_UPDATE_FA, alert=True)
+                self._reply(message, up.OWNER_ONLY_UPDATE_FA, kb.main_menu(user) if user else None)
+                return
+            if data == kb.CB_UPDATE_CHECK:
+                answer()
+                self.on_about(message, force=True)
+                return
+            if data == kb.CB_UPDATE_APPLY:
+                answer()
+                self.on_update_apply(message)
+                return
+            answer("درخواست نامعتبر است.", alert=True)
+            return
+
         if data.startswith(kb.CB_ROLE_PERM_PREFIX):
             user = ensure_registered(self.db, uid, self._display_name(message))
             if not user:
@@ -5459,70 +5478,65 @@ class BotApp:
             return None
         return user
 
-    # ------------------------------------------------------------ v1.6.0 به‌روزرسانی
-    def _update_user(self, message: dict) -> dict | None:
+    # ------------------------------------------------------------ به‌روزرسانی (فقط مالک؛ همان services.updater)
+    def _about_reader(self, message: dict) -> dict | None:
         user = self._user_or_deny(message)
         if not user:
             return None
         if not user.get("active") or user.get("role") not in ("owner", "manager"):
-            self._reply(message, "⛔ به‌روزرسانی ربات فقط برای مالک و مدیر مجاز است.", kb.main_menu(user))
+            self._reply(message, "⛔ بخش درباره فقط برای مالک و مدیر است.", kb.main_menu(user))
+            return None
+        return user
+
+    def _update_owner(self, message: dict) -> dict | None:
+        from services import updater as up
+
+        user = self._user_or_deny(message)
+        if not user:
+            return None
+        if not perm.is_owner(user):
+            self._reply(message, up.OWNER_ONLY_UPDATE_FA, kb.main_menu(user))
             return None
         return user
 
     def on_about(self, message: dict, force: bool = False) -> None:
         from services import updater as up
 
-        if not self._update_user(message):
-            return
-        info = up.update_info(self.db, force=force)
-        lines = ["ℹ️ درباره ربات", f"نسخهٔ فعلی: {info['current']}"]
-        if info["available"]:
-            lines += [f"🆕 نسخهٔ جدید: {info['latest']}", "", "📝 تغییرات:", up.changelog_text(info)[:1500]]
-        elif info["error"]:
-            lines.append("⚠️ بررسی نسخهٔ جدید ممکن نشد (اتصال به GitHub). بعداً دوباره امتحان کنید.")
-        else:
-            lines.append("✅ ربات به‌روز است.")
-        st = up.status_fa(info["status"])
-        if st:
-            lines += ["", "آخرین به‌روزرسانی: " + st]
-        self._reply(message, "\n".join(lines), kb.update_menu(info["available"]))
-
-    def on_update_start(self, message: dict) -> None:
-        from services import updater as up
-
-        if not self._update_user(message):
-            return
-        info = up.update_info(self.db)
-        if not info["available"]:
-            self._reply(message, f"✅ ربات به‌روز است (نسخهٔ {info['current']}).", kb.update_menu(False))
-            return
-        self._reply(
-            message,
-            f"⬆️ به‌روزرسانی از {info['current']} به {info['latest']}\n\n"
-            "پیش از نصب: بک‌آپ پایگاه داده و کد گرفته می‌شود، فایل‌های .env و data حفظ می‌شوند، "
-            "تست‌ها اجرا می‌شوند و در صورت خطا به نسخهٔ قبل برمی‌گردد. ربات و پنل وب چند ثانیه ری‌استارت می‌شوند.\n"
-            "تأیید می‌کنید؟",
-            kb.update_confirm_menu(),
-        )
-
-    def on_update_confirm(self, message: dict) -> None:
-        from services import updater as up
-
-        user = self._update_user(message)
+        user = self._about_reader(message)
         if not user:
             return
-        info = up.update_info(self.db)
+        owner = perm.is_owner(user)
+        if force and not owner:
+            self._reply(message, up.OWNER_ONLY_UPDATE_FA, kb.main_menu(user))
+            return
+        info = up.update_info(self.db, force=bool(force and owner), network=bool(force and owner))
+        menu = kb.update_menu(bool(info["available"])) if owner else kb.bot_settings_menu(user)
+        self._reply(message, up.about_text(info, owner=owner, checked=bool(force and owner)), menu)
+
+    def on_update_apply(self, message: dict) -> None:
+        from services import updater as up
+
+        user = self._update_owner(message)
+        if not user:
+            return
+        info = up.update_info(self.db, network=False)
         if not info["available"]:
-            self._reply(message, f"✅ ربات به‌روز است (نسخهٔ {info['current']}).", kb.update_menu(False))
+            info = up.update_info(self.db, force=True)
+        if not info["available"]:
+            self._reply(
+                message,
+                up.NO_UPDATE_FA.format(current=info["current"]) if not info.get("error") else up.CHECK_FAIL_FA,
+                kb.update_menu(False),
+            )
             return
         if (info["status"] or {}).get("state") == "running":
-            self._reply(message, "⏳ یک به‌روزرسانی در حال اجراست.")
+            self._reply(message, "⏳ یک به‌روزرسانی در حال اجراست.", kb.update_menu(True))
             return
         how = up.launch_detached(str(user.get("bale_user_id") or ""))
         self._reply(
             message,
-            f"⏳ به‌روزرسانی به نسخهٔ {info['latest']} شروع شد ({how}). اجرای تست‌ها چند دقیقه طول می‌کشد؛ "
-            "نتیجه پس از ری‌استارت اعلام می‌شود.",
+            f"⏳ به‌روزرسانی به نسخهٔ {info['latest']} روی همین سرور شروع شد ({how}). "
+            "پیش از نصب بک‌آپ گرفته می‌شود؛ تست‌ها چند دقیقه طول می‌کشد و در صورت خطا به نسخهٔ قبل برمی‌گردد.",
             kb.bot_settings_menu(user),
         )
 
@@ -7422,8 +7436,7 @@ class BotApp:
             kb.BTN_BACKUP: self.on_backup_menu,
             kb.BTN_ABOUT: self.on_about,
             kb.BTN_UPDATE_CHECK: lambda m: self.on_about(m, force=True),
-            kb.BTN_UPDATE: self.on_update_start,
-            kb.BTN_UPDATE_CONFIRM: self.on_update_confirm,
+            kb.BTN_UPDATE: self.on_update_apply,
             kb.BTN_BACKUP_CREATE: self.on_backup_create,
             kb.BTN_BACKUP_LIST: self.on_backup_list,
             kb.BTN_BACKUP_RESTORE: self.on_backup_restore_start,
