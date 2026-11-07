@@ -222,7 +222,8 @@ def main() -> int:
     p3 = _stock_xlsx(tmp / "w3.xlsx", [(1203, A, "نوآوران C85", 150), (1203, B, "رایان 85BT", 40)])
     r = wc.post("/files/stock", files={"file": ("w3.xlsx", p3.read_bytes(),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
-    assert r.status_code == 200 and "دریافت شد" in r.text, r.text[-800:]
+    assert r.status_code == 200 and "موجودی روزانه به‌روزرسانی شد" in r.text, r.text[-800:]
+    assert "فایل «منبع اصلی» دریافت شد" not in r.text
     after = ms.load_primary_frame(db, bale_user_id="901").set_index("id")
     assert float(after.at[A, "quantity"]) == 150
     for col in ("unit", "slab_renovation", "keyword", "work_order", "priority", "critical_point"):

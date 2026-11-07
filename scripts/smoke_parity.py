@@ -74,9 +74,8 @@ BOT_TO_WEB = {
     "♻️ بازگردانی از بک‌آپ": "/settings/backups/restore/upload",
     # v1.6.0 به‌روزرسانی (both use services.updater)
     "ℹ️ درباره و به‌روزرسانی": "/about",
-    "🔄 بررسی نسخهٔ جدید": "/about/check",
-    "⬆️ به‌روزرسانی": "/about/update",
-    "✅ تأیید و نصب به‌روزرسانی": "/about/update",
+    "🔄 بررسی به‌روزرسانی": "/about/check",
+    "⬆️ به‌روزرسانی روی سرور": "/about/update",
 }
 BOT_ONLY: dict[str, str] = {}
 

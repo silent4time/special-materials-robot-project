@@ -143,10 +143,30 @@ def cached_remote(db: Any) -> dict:
         return {"version": ""}
 
 
-def _safe_err(e: Exception) -> str:
-    s = str(e)[:300]
+_GH_URL = re.compile(
+    r"(?:https?://|git@)?(?:www\.)?"
+    r"(?:github\.com|api\.github\.com|raw\.githubusercontent\.com|"
+    r"objects\.githubusercontent\.com|release-assets\.githubusercontent\.com|"
+    r"codeload\.github\.com)[^\s)>\]]*|"
+    r"github\.com/\S+",
+    re.I,
+)
+_REPO_SLUG = re.compile(r"\b[\w.-]+/special-materials-robot-project\b", re.I)
+
+
+def redact_public(text: str) -> str:
+    """Strip repo addresses and the server token from anything a person can read."""
+    s = str(text or "")
     tok = config.UPDATE_GITHUB_TOKEN
-    return s.replace(tok, "***") if tok else s
+    if tok:
+        s = s.replace(tok, "")
+    s = _GH_URL.sub("", s)
+    s = _REPO_SLUG.sub("", s)
+    return s
+
+
+def _safe_err(e: Exception) -> str:
+    return redact_public(str(e)[:300])
 
 
 def update_info(db: Any, *, force: bool = False, network: bool = True) -> dict:
@@ -173,7 +193,70 @@ def local_changelog(version: str, root: Path | None = None) -> str:
 
 
 def changelog_text(info: dict) -> str:
-    return (info.get("remote") or {}).get("changelog") or local_changelog(info.get("latest") or "") or "—"
+    raw = (info.get("remote") or {}).get("changelog") or local_changelog(info.get("latest") or "") or "—"
+    cleaned = redact_public(raw).strip()
+    return cleaned or "—"
+
+
+# --------------------------------------------------------------------------- about (bot + web share this; no second copy)
+PRODUCT_TITLE = "ربات مواد نسوز تاندیش"
+# Single place for the About line on bot and web. Change this string only.
+CREATOR_NAME = "واحد نسوز تاندیش فولاد خوزستان"
+CHECK_FAIL_FA = "⚠️ بررسی به‌روزرسانی ممکن نشد. بعداً دوباره امتحان کنید."
+NO_UPDATE_FA = "✅ نسخهٔ جدیدتری نیست. نسخهٔ فعلی: {current}"
+OWNER_ONLY_UPDATE_FA = "⛔ به‌روزرسانی فقط برای مالک مجاز است."
+
+
+def product_spec_lines() -> list[str]:
+    """Facts already fixed in config (tundish standard, input labels, report font)."""
+    kinds = "، ".join(config.TUNDISH_TYPES.values())
+    files = "، ".join(item["label_fa"] for item in config.FILE_TYPES.values())
+    return [
+        f"استاندارد تاندیش کارخانه: {kinds}",
+        f"ورودی‌های داده: {files}",
+        "رابط فارسی و راست‌به‌چپ؛ گزارش PDF و اکسل با قلم Vazirmatn",
+    ]
+
+
+def creator_name() -> str | None:
+    """Creator shown in About. Empty string hides the name (placeholder instead)."""
+    name = (CREATOR_NAME or "").strip()
+    return name or None
+
+
+def about_facts() -> dict:
+    return {
+        "title": PRODUCT_TITLE,
+        "specs": product_spec_lines(),
+        "creator": creator_name(),
+        "version": current_version(),
+    }
+
+
+def about_text(info: dict, *, owner: bool, checked: bool = False) -> str:
+    """Persian About body. Update lines only for the owner, and never a repo address."""
+    facts = about_facts()
+    lines = ["ℹ️ درباره ربات", f"نام: {facts['title']}", "مشخصات:"]
+    lines += [f"• {item}" for item in facts["specs"]]
+    if facts["creator"]:
+        lines.append(f"سازنده: {facts['creator']}")
+    else:
+        lines.append("سازنده: در فرادادهٔ برنامه ثبت نشده است.")
+    lines.append(f"نسخهٔ فعلی: {info.get('current') or facts['version']}")
+    if owner:
+        if checked and info.get("error"):
+            lines.append(CHECK_FAIL_FA)
+        elif info.get("available"):
+            lines.append(f"نسخهٔ آمادهٔ نصب: {info.get('latest') or ''}")
+            note = changelog_text(info)
+            if note and note != "—":
+                lines += ["", "تغییرات:", note[:1500]]
+        elif checked:
+            lines.append(NO_UPDATE_FA.format(current=info.get("current") or facts["version"]))
+        st = status_fa(info.get("status") or {})
+        if st:
+            lines += ["", "وضعیت به‌روزرسانی:", st]
+    return redact_public("\n".join(lines))
 
 
 # --------------------------------------------------------------------------- status
@@ -205,7 +288,7 @@ def status_fa(st: dict) -> str:
     s = f"{STATE_FA.get(st.get('state'), st.get('state'))} — نسخهٔ {st.get('version', '')} ({st.get('at', '')} تهران)"
     if st.get("message"):
         s += f"\n{st['message']}"
-    return s
+    return redact_public(s)
 
 
 # --------------------------------------------------------------------------- apply
@@ -321,7 +404,10 @@ def apply_update(
     overlaid = False
     try:
         if not is_newer(ver, cur):
-            raise UpdateError(info.get("error") and f"خطای GitHub: {info['error']}" or "نسخهٔ جدیدتری وجود ندارد.")
+            if info.get("error"):
+                log("remote: " + redact_public(str(info.get("error"))))
+                raise UpdateError("بررسی نسخهٔ جدید ممکن نشد.")
+            raise UpdateError("نسخهٔ جدیدتری وجود ندارد.")
         _set_status(db, state="running", version=ver, previous=cur, requested_by=requested_by, message="")
         # 1) download + verify
         status, blob = _get(info["package"], accept="application/octet-stream", timeout=300)
@@ -442,28 +528,30 @@ def launch_detached(requested_by: str = "") -> str:
 
 # --------------------------------------------------------------------------- bot hooks
 def notify_text(info: dict) -> str:
+    from bot import keyboards as kb
+
     cl = changelog_text(info)
     if len(cl) > 1500:
         cl = cl[:1500] + "…"
-    return (
-        f"🆕 نسخهٔ جدید ربات منتشر شد\n"
+    return redact_public(
+        f"🆕 نسخهٔ جدید ربات آماده است\n"
         f"نسخهٔ فعلی: {info['current']}\nنسخهٔ جدید: {info['latest']}\n\n"
         f"📝 تغییرات:\n{cl}\n\n"
-        "برای نصب، دکمهٔ «⬆️ به‌روزرسانی» را بزنید (فقط مالک/مدیر)."
+        f"برای نصب، دکمهٔ «{kb.BTN_UPDATE}» را بزنید (فقط مالک)."
     )
 
 
-def admin_recipients(db: Any) -> list[dict]:
-    return [u for u in db.list_users(active_only=True) if u.get("role") in config.ADMIN_ROLES and u.get("active")]
+def owner_recipients(db: Any) -> list[dict]:
+    return [u for u in db.list_users(active_only=True) if u.get("role") == "owner" and u.get("active")]
 
 
 def notify_tick(client: Any, db: Any, keyboard: dict | None = None) -> str | None:
-    """Bot loop hook: tell owners/managers once per new version; report finished updates."""
+    """Bot loop hook: tell the owner once per new version; report finished updates."""
     out = None
     st = get_status(db)
     if st and st.get("state") in ("applied", "rolled_back", "failed") and not st.get("reported"):
-        text = "⬆️ به‌روزرسانی ربات\n" + status_fa(st)
-        for u in admin_recipients(db):
+        text = redact_public("⬆️ به‌روزرسانی ربات\n" + status_fa(st))
+        for u in owner_recipients(db):
             try:
                 client.send_message(u["bale_user_id"], text)
             except Exception:  # noqa: BLE001
@@ -472,7 +560,7 @@ def notify_tick(client: Any, db: Any, keyboard: dict | None = None) -> str | Non
         out = "reported"
     info = update_info(db)
     if info["available"] and db.get_setting(NOTIFIED_KEY) != info["latest"]:
-        for u in admin_recipients(db):
+        for u in owner_recipients(db):
             try:
                 client.send_message(u["bale_user_id"], notify_text(info), keyboard)
             except Exception:  # noqa: BLE001

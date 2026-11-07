@@ -637,8 +637,10 @@ def test_inventory_upload_rules(tmp: Path) -> None:
     assert got.get(COMPANY_ID) == 150 and got.get("378124311111A") == 8, got  # updates incl. 1800
     assert "378112342222B" in got, got  # known code, new id
     assert "378119991234C" not in got and "378124312222D" not in got, got
-    reply = client.msgs[-1]
-    assert "⛔ 2 ردیف اضافه نشد" in reply and "378119991234C" in reply and "378124312222D" in reply, reply
+    reply = next(m for m in reversed(client.msgs) if "⛔ 2 ردیف اضافه نشد" in m)
+    assert "موجودی روزانه به‌روزرسانی شد" in reply, reply
+    assert "فایل «منبع اصلی» دریافت شد" not in reply, reply
+    assert "378119991234C" in reply and "378124312222D" in reply, reply
 
     # (c) unauthorized: a technician cannot do a full-source upload (denied, no change)
     db.upsert_user("903", role="technician", display_name="تکنسین تست")
@@ -659,7 +661,10 @@ def test_inventory_upload_rules(tmp: Path) -> None:
     app.on_document(doc)
     got = ids_qty()
     assert "378119991234C" in got and got.get("378124312222D") == 3, got
-    assert "⛔" not in client.msgs[-1], client.msgs[-1]
+    full_reply = next(m for m in reversed(client.msgs) if "دریافت شد" in m)
+    assert "فایل «منبع اصلی» دریافت شد" in full_reply, full_reply
+    assert "موجودی روزانه به‌روزرسانی شد" not in full_reply, full_reply
+    assert "⛔" not in full_reply, full_reply
     # 1800 stays out of critical items / forecasts
     from analytics.critical_items import drop_surplus_rows
 
@@ -679,8 +684,9 @@ def test_inventory_upload_rules(tmp: Path) -> None:
     assert "378124313333E" not in got and "378118881234F" not in got, got
     assert got.get("378124312222D") == 6, got  # existing (now) 1800 row → stock update ok
     # the upload reply (a «🚨» missing-items alarm may follow it)
-    up = next(m for m in reversed(client.msgs) if "دریافت شد" in m)
+    up = next(m for m in reversed(client.msgs) if "موجودی روزانه به‌روزرسانی شد" in m)
     assert "⛔ 2 ردیف اضافه نشد" in up and "378124313333E" in up, up
+    assert "فایل «منبع اصلی» دریافت شد" not in up, up
     assert any(m.startswith("🚨 هشدار") for m in client.msgs[-3:]), client.msgs[-3:]
 
     # --- web settings upload (authorized full source): same shared rule
@@ -706,6 +712,7 @@ def test_inventory_upload_rules(tmp: Path) -> None:
     wids = set(f["id"].astype(str))
     assert "378119991234C" in wids and "378124312222D" in wids, wids  # full source adds 1800 too
     assert "اضافه نشد" not in r.text, r.text[-1500:]
+    assert "فایل «منبع اصلی» دریافت شد" in r.text and "موجودی روزانه به‌روزرسانی شد" not in r.text, r.text[-1500:]
 
     # web: technician cannot do a full-source upload (403, no change)
     db2.upsert_user("904", role="technician", display_name="تکنسین وب")

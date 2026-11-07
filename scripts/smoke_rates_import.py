@@ -5,6 +5,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _smoke_env  # noqa: F401,E402  — keep Database() off the live data/bot.db
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
