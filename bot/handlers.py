@@ -80,6 +80,7 @@ from db.models import Database
 from services import main_source as main_source_svc
 from services import site_stock_notify
 from services import inbound_report as inbound_svc
+from analytics import renovation_caps as _reno
 from excel.processor import (
     ExcelValidationError,
     extract_and_save_clean,
@@ -1723,7 +1724,7 @@ class BotApp:
             self._reply(
                 message,
                 f"{nt.mix_label(mix)} تاندیش — حالت را انتخاب کنید:\n"
-                f"• {kb.BTN_NT_WITH}: نرخ نوسازی + پچینگ\n• {kb.BTN_NT_WITHOUT}: فقط پچینگ\n"
+                f"• {kb.BTN_NT_WITH}: {_reno.MODE_WITH_TEXT_FA}\n• {kb.BTN_NT_WITHOUT}: {_reno.MODE_WITHOUT_TEXT_FA}\n"
                 "(سطح ریخته‌گری × کل تاندیش‌ها در هر دو حالت)",
                 kb.n_tundish_mode_menu(),
             )
@@ -1770,7 +1771,7 @@ class BotApp:
             self._reply(
                 message,
                 f"{p['n']} تاندیش {nt.SECTIONS[p['section']]} — حالت را انتخاب کنید:\n"
-                f"• {kb.BTN_NT_WITH}: نرخ نوسازی + پچینگ\n• {kb.BTN_NT_WITHOUT}: فقط پچینگ\n"
+                f"• {kb.BTN_NT_WITH}: {_reno.MODE_WITH_TEXT_FA}\n• {kb.BTN_NT_WITHOUT}: {_reno.MODE_WITHOUT_TEXT_FA}\n"
                 "(سطح ریخته‌گری × N در هر دو حالت)",
                 kb.n_tundish_mode_menu(),
             )
@@ -2685,50 +2686,55 @@ class BotApp:
                     kb.cancel_pending_menu(),
                 )
                 return True
+            fields = main_source_svc.edit_fields()
             self._main_source_pending[uid] = {
                 "mode": "edit_fields",
                 "item_id": str(row.get("id") or item_id),
+                "raw_row": dict(row),
+                "fields": fields,
+                "field_idx": 0,
+                "answers": {},
             }
-            fields_hint = "، ".join(
-                f"{main_source_svc.FIELD_LABELS_FA.get(c, c)}"
-                for c in main_source_svc.INVENTORY_COLUMNS
-                if c != "id"
+            self._reply(
+                message,
+                "رکورد فعلی:\n"
+                + main_source_svc.format_row_fa(row)
+                + "\n\nفیلدها یکی‌یکی پرسیده می‌شوند. برای نگه داشتن مقدار قبلی هر فیلد "
+                f"«{main_source_svc.EDIT_KEEP_LABEL}» را بزنید.",
+                kb.edit_field_menu(),
             )
             self._reply(
                 message,
-                (
-                    "رکورد فعلی:\n"
-                    + main_source_svc.format_row_fa(row)
-                    + "\n\nبرای ویرایش، یک یا چند خط به صورت "
-                    "«نام فیلد=مقدار» بفرستید.\n"
-                    f"فیلدها: {fields_hint}\n"
-                    "مثال:\nموجودی=120\nمحل استفاده=اسلب، بیلت\nکلید واژه=نسوز"
-                ),
-                kb.cancel_pending_menu(),
+                main_source_svc.edit_prompt_fa(fields[0], row, 1, len(fields)),
+                kb.edit_field_menu(),
             )
             return True
 
         if mode == "edit_fields":
+            # v1.7.0: one question per field; empty answer keeps the previous value
             item_id = pending.get("item_id") or ""
-            updates: dict[str, object] = {}
-            # Accept FA labels or English keys
-            label_to_key = {v: k for k, v in main_source_svc.FIELD_LABELS_FA.items()}
-            for line in text.splitlines():
-                line = line.strip()
-                if not line or "=" not in line:
-                    continue
-                left, right = line.split("=", 1)
-                key = left.strip()
-                key = label_to_key.get(key, key)
-                if key == "id":
-                    continue
-                if key in main_source_svc.INVENTORY_COLUMNS:
-                    updates[key] = right.strip()
+            fields = list(pending.get("fields") or main_source_svc.edit_fields())
+            idx = int(pending.get("field_idx") or 0)
+            raw_row = dict(pending.get("raw_row") or {})
+            answers = dict(pending.get("answers") or {})
+            if idx < len(fields):
+                answers[fields[idx]] = text
+                idx += 1
+            if idx < len(fields):
+                pending["field_idx"], pending["answers"] = idx, answers
+                self._reply(
+                    message,
+                    main_source_svc.edit_prompt_fa(fields[idx], raw_row, idx + 1, len(fields)),
+                    kb.edit_field_menu(),
+                )
+                return True
+            updates = main_source_svc.collect_edit_updates(raw_row, answers)
+            self._clear_main_source_pending(uid)
             if not updates:
                 self._reply(
                     message,
-                    "هیچ فیلد معتبری یافت نشد. قالب: «نام فیلد=مقدار» (مثال: موجودی=120)",
-                    kb.cancel_pending_menu(),
+                    f"تغییری ثبت نشد؛ همهٔ فیلدهای رکورد «{item_id}» همان مقدار قبلی را دارند.",
+                    kb.inventory_edit_menu(user),
                 )
                 return True
             try:
@@ -2736,18 +2742,20 @@ class BotApp:
                     self.db, item_id, updates, bale_user_id=uid
                 )
             except (KeyError, ValueError) as exc:
-                self._reply(message, str(exc), kb.cancel_pending_menu())
+                self._reply(message, str(exc), kb.inventory_edit_menu(user))
                 return True
-            self._clear_main_source_pending(uid)
             log_activity(
                 self.db, user, "edit_main_source_record",
                 item_id=str(result.get("id") or item_id),
                 changes_fa=main_source_svc.changes_fa(result.get("changes") or []),
             )
+            changed = main_source_svc.changes_fa(result.get("changes") or [])
             self._reply(
                 message,
                 (
-                    f"✅ رکورد «{result.get('id')}» به‌روز شد.\n"
+                    f"✅ رکورد «{result.get('id')}» به‌روز شد."
+                    + (f"\nتغییرات: {changed}" if changed else "")
+                    + "\n"
                     + main_source_svc.format_row_fa(result.get("row") or {})
                 ),
                 kb.inventory_edit_menu(user),
@@ -2998,6 +3006,7 @@ class BotApp:
             "از امروز: مبنا = مصرف هر تاندیش هر نوع (منبع اصلی) × تعداد تاندیش ماهانهٔ ثبت امروز "
             "(یا میانگین لاگ توالی تاندیش ۳ ماه کامل گذشته)؛ نیاز = مصرف پیش‌بینی‌شده از امروز "
             "(اجناس داخلی ۳ ماه، اجناس وارداتی ۶ ماه) − موجودی امروز؛ فقط اقلام با نیاز مثبت.\n"
+            f"«با نوسازی»: {_reno.MODE_WITH_TEXT_FA}؛ در نیمهٔ اول سال نوسازی لحاظ نمی‌شود.\n"
             "نقش‌های مجاز: مالک، مدیر، کاردان مسئول."
             f"{extra}",
             kb.critical_items_menu(),
@@ -3228,7 +3237,7 @@ class BotApp:
         self._reply(
             message,
             f"{head}{note}حالت محاسبه نیاز اقلام بحرانی (تاریخ گزارش {label}) را انتخاب کنید:\n"
-            "• با نوسازی: نرخ نوسازی + پچینگ (+ سطح ریخته‌گری)\n"
+            f"• با نوسازی: {_reno.MODE_WITH_TEXT_FA} (+ سطح ریخته‌گری)\n"
             "• بدون نوسازی: فقط پچینگ (+ سطح ریخته‌گری)؛ اقلامی که فقط نرخ نوسازی "
             "دارند فهرست نمی‌شوند.",
             kb.critical_reno_inline_keyboard(),
@@ -3519,10 +3528,12 @@ class BotApp:
         if self._deny_technician(message, user, perm.REPORT_INBOUND):
             return
         history = inbound_svc.list_reports(self.db, limit=11)
-        if report_id is not None:
-            report = inbound_svc.get_report(self.db, int(report_id))
-        else:
-            report = inbound_svc.latest_report(self.db)
+        if report_id is None:
+            # v1.7.0: reports menu → inbound items of the last 30 days (up to the last
+            # warehouse-stock upload), with the date each increase was added
+            self._send_inbound_window(message, user, history)
+            return
+        report = inbound_svc.get_report(self.db, int(report_id))
         if not report:
             self._reply(
                 message,
@@ -3538,6 +3549,34 @@ class BotApp:
         self._reply(message, inbound_svc.summary_text_fa(report), menu)
         self._send_inbound_report_files(message, report, user, menu)
         log_activity(self.db, user, "report_inbound", report_id=int(report["id"]))
+
+    def _send_inbound_window(self, message: dict, user: dict, history: list[dict]) -> None:
+        """«گزارش ورودی اقلام» (reports menu): 30-day window from the stored history."""
+        win = inbound_svc.window_events(self.db)
+        menu = kb.inbound_history_menu([inbound_svc.history_button_label(h) for h in history[:10]])
+        if not win.get("anchor"):
+            self._reply(
+                message,
+                "هنوز گزارش اقلام ورودی ثبت نشده است.\n"
+                f"پس از هر آپلود «{kb.BTN_WAREHOUSE_STOCK}» ورودی‌ها به‌طور خودکار ذخیره می‌شوند.",
+                kb.analytics_menu(user),
+            )
+            return
+        self._reply(message, inbound_svc.window_summary_text_fa(win), menu)
+        try:
+            pdf_path, xlsx_path = inbound_svc.build_window_files(self.db, win)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("inbound window files failed")
+            self._reply(message, user_errors.error_fa("خطا در تولید فایل گزارش ورودی اقلام", exc))
+            return
+        cap = f"{inbound_svc.WINDOW_TITLE}\nتا آخرین آپلود موجودی انبار: {win.get('anchor_label')}"
+        self._deliver_files(
+            message, user,
+            [("pdf", pdf_path, cap), ("xlsx", xlsx_path, "نسخه اکسل — " + cap)],
+            done_text="✅ گزارش ورودی اقلام ارسال شد." if not self.auto_output_format else None,
+            done_markup=menu,
+        )
+        log_activity(self.db, user, "report_inbound_window", n_events=int(win.get("n_events") or 0))
 
     def _send_inbound_report_files(self, message: dict, report: dict, user: dict | None = None,
                                    done_markup: dict | None = None) -> None:

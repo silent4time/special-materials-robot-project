@@ -39,6 +39,8 @@ ACTION_PHRASES: dict[str, str] = {
     "report_monthly_summary": "گزارش خلاصه مصرف ماهیانه را گرفت",
     "report_inbound": "گزارش اقلام ورودی به انبار را گرفت",
     "report_inbound_xlsx": "گزارش اقلام ورودی به انبار (اکسل) را گرفت",
+    "report_inbound_window": "گزارش ورودی اقلام ۳۰ روز اخیر را گرفت",
+    "report_inbound_window_xlsx": "گزارش ورودی اقلام ۳۰ روز اخیر (اکسل) را گرفت",
     "report_critical_items": "گزارش اقلام بحرانی (شرکت) را گرفت",
     "report_critical_items_contractor": "گزارش اقلام بحرانی (پیمانکار) را گرفت",
     "report_critical_items_draft": "پیش‌نویس گزارش اقلام بحرانی #{report_id} را ساخت",

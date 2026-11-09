@@ -168,6 +168,8 @@ def create_app() -> FastAPI:
             "assistant_on": lambda: get_db().get_setting("assistant_enabled") == "1",
             "update_banner": __import__("web.routers.about", fromlist=["update_banner"]).update_banner,
             "app_version": __import__("services.updater", fromlist=["current_version"]).current_version,
+            "RENO_WITH_TEXT": __import__("analytics.renovation_caps", fromlist=["x"]).MODE_WITH_TEXT_FA,
+            "RENO_WITHOUT_TEXT": __import__("analytics.renovation_caps", fromlist=["x"]).MODE_WITHOUT_TEXT_FA,
         }
     )
     get_db()  # schema + WAL on startup

@@ -1304,6 +1304,16 @@ class Database:
             ).fetchone()
             return dict(row) if row else None
 
+    def list_inbound_reports_full(self, limit: int = 500) -> list[dict[str, Any]]:
+        """Stored inbound reports WITH their lines (newest first) — the 30-day
+        «گزارش ورودی اقلام» window reads the persisted history from here."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM inventory_inbound_reports ORDER BY stock_upload_id DESC, id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def list_inbound_reports(self, limit: int = 20) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(

@@ -820,6 +820,53 @@ def format_row_fa(row: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ------------------------------------------------------------------ ✏️ ویرایش رکورد (v1.7.0)
+# بعد از ارسال شناسه و نمایش مشخصات فعلی، ربات «هر فیلد را جداگانه» می‌پرسد و منتظر پاسخ
+# می‌ماند؛ پاسخ خالی (دکمهٔ «⏭ بدون تغییر»، «-» یا فقط فاصله) = همان مقدار قبلی. وب همین
+# فیلدها را به همین ترتیب، هر کدام با مقدار فعلی، نشان می‌دهد و خانهٔ خالی = مقدار قبلی.
+EDIT_KEEP_LABEL = "⏭ بدون تغییر"
+EDIT_KEEP_TOKENS = frozenset({"", "-", "—", "–", EDIT_KEEP_LABEL, "بدون تغییر", "⏭"})
+
+
+def edit_fields() -> list[str]:
+    """Editable fields, in prompt order (every main-source column except the ID)."""
+    return [c for c in INVENTORY_COLUMNS if c != "id"]
+
+
+def is_keep_answer(raw: object) -> bool:
+    """Empty answer → keep the previous value."""
+    text = "" if raw is None else " ".join(str(raw).split())
+    return text in EDIT_KEEP_TOKENS
+
+
+def current_value_fa(row: Mapping[str, Any] | None, field: str) -> str:
+    val = (row or {}).get(field)
+    return "—" if _is_blank(val) else _audit_val(val)
+
+
+def edit_prompt_fa(field: str, row: Mapping[str, Any] | None, index: int, total: int) -> str:
+    """«(۳/۲۰) کلید واژه — مقدار فعلی: نسوز …» (same wording in bot and web)."""
+    label = FIELD_LABELS_FA.get(field, field)
+    return (
+        f"({index}/{total}) «{label}»{FIELD_HINTS_FA.get(field, '')}\n"
+        f"مقدار فعلی: {current_value_fa(row, field)}\n"
+        f"مقدار جدید را بفرستید؛ برای نگه داشتن مقدار قبلی «{EDIT_KEEP_LABEL}» را بزنید (یا «-» بفرستید)."
+    )
+
+
+def collect_edit_updates(row: Mapping[str, Any] | None, answers: Mapping[str, Any]) -> dict[str, str]:
+    """Answers → updates: empty answers keep the previous value; unchanged values are dropped."""
+    out: dict[str, str] = {}
+    for field in edit_fields():
+        if field not in answers or is_keep_answer(answers.get(field)):
+            continue
+        new = str(answers.get(field)).strip()
+        if _audit_val(new) == _audit_val((row or {}).get(field)):
+            continue
+        out[field] = new
+    return out
+
+
 def list_ids_preview(df: pd.DataFrame | None, *, limit: int = 30) -> list[str]:
     """Short preview lines «id — product_name» for pick lists."""
     if df is None or df.empty:

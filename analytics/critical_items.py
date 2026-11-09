@@ -14,8 +14,11 @@ DEFINITION (user, 1405-07-14 — t206u/t207u):
   • حد تحمل (روز) = stock ÷ (monthly ÷ 30) — 30-day months (DAYS_PER_MONTH).
 
 MODES (نوسازی): the user picks one before generating.
-  • «با نوسازی» (RENO_WITH, default / previous behavior): per-tundish material
-    for a type = renovation + patching (e.g. billet_renovation + billet_patching).
+  • «با نوسازی» (RENO_WITH, default): patching for EVERY tundish + renovation only
+    for the CAPPED number of renovated tundishes (v1.7.0, analytics.renovation_caps:
+    slab ≤5/year, billet ≤5/year, bloom ≤2/year, ≤1 per section per month, only
+    مهر–اسفند). Over the horizon H starting at the report month:
+    renovations = min(count × H, 2nd-half months in H × 1, annual cap per year).
   • «بدون نوسازی» (RENO_WITHOUT): per-tundish material = patching only; every
     *_renovation column is ignored. Items whose need comes only from renovation
     (e.g. «بتن 86 نوسازی», patching rate 0) get need 0 and are NOT listed.
@@ -515,20 +518,28 @@ def monthly_need_for_rates(
     casting_floor: float,
     counts: TundishMonthCounts,
     reno_mode: str = RENO_WITH,
+    reno_counts: dict[str, float] | None = None,
 ) -> float:
-    """Monthly need from per-tundish rates × counts (+ casting_floor rule).
+    """Need from per-tundish rates × counts (+ casting_floor rule).
 
-    «با نوسازی»: per tundish = renovation + patching. «بدون نوسازی»: patching
-    only. casting_floor is applied in both modes.
+    «با نوسازی» (v1.7.0): patching × tundish count + renovation × CAPPED renovation
+    count (``reno_counts`` = {billet, bloom, slab}; see ``analytics.renovation_caps``).
+    ``reno_counts=None`` → caps for a raw count: min(count, annual cap) per section.
+    «بدون نوسازی»: patching only. casting_floor is applied in both modes.
     """
+    from analytics.renovation_caps import capped_renovations_for_n
+
     reno = 1.0 if normalize_reno_mode(reno_mode) == RENO_WITH else 0.0
-    per_billet = reno * float(billet_renovation) + float(billet_patching)
-    per_bloom = reno * float(bloom_renovation) + float(bloom_patching)
-    per_slab = reno * float(slab_renovation) + float(slab_patching)
+    cnt = {"billet": float(counts.count_billet), "bloom": float(counts.count_bloom),
+           "slab": float(counts.count_slab)}
+    if reno_counts is None:
+        rc = {sec: capped_renovations_for_n(sec, cnt[sec]) for sec in cnt}
+    else:
+        rc = {sec: max(0.0, float(reno_counts.get(sec) or 0.0)) for sec in cnt}
     need = (
-        float(counts.count_billet) * per_billet
-        + float(counts.count_bloom) * per_bloom
-        + float(counts.count_slab) * per_slab
+        cnt["billet"] * float(billet_patching) + reno * rc["billet"] * float(billet_renovation)
+        + cnt["bloom"] * float(bloom_patching) + reno * rc["bloom"] * float(bloom_renovation)
+        + cnt["slab"] * float(slab_patching) + reno * rc["slab"] * float(slab_renovation)
     )
     # ASSUMPTION: casting_floor × total tundish count for the month.
     cf = float(casting_floor)
@@ -538,6 +549,29 @@ def monthly_need_for_rates(
         # No tundishes entered — still surface the raw casting-floor rate as need.
         need += cf
     return need
+
+
+def horizon_reno_monthly(counts: TundishMonthCounts, horizon_months: int) -> dict[str, float]:
+    """Monthly-equivalent renovation counts over a horizon starting at the report month.
+
+    renovations in horizon (``analytics.renovation_caps.window_renovations``) ÷ H, so
+    that «میانگین مصرف ماهانه» × H = forecast with the capped renovation. A basis
+    without a real month (year 0) → raw-count cap spread over H.
+    """
+    from analytics.renovation_caps import SECTIONS as _SECS, capped_renovations_for_n, window_renovations
+
+    h = max(1, int(horizon_months))
+    monthly = {"billet": float(counts.count_billet), "bloom": float(counts.count_bloom),
+               "slab": float(counts.count_slab)}
+    y, m = int(counts.jalali_year or 0), int(counts.jalali_month or 0)
+    if y <= 0 or not 1 <= m <= 12:
+        return {sec: capped_renovations_for_n(sec, monthly[sec] * h) / h for sec in _SECS}
+    return {sec: window_renovations(sec, monthly[sec], y, m, h) / h for sec in _SECS}
+
+
+def horizon_reno_counts(counts: TundishMonthCounts, horizon_months: int) -> dict[str, float]:
+    """Total renovations per section in the horizon (for notes / tests)."""
+    return {k: v * max(1, int(horizon_months)) for k, v in horizon_reno_monthly(counts, horizon_months).items()}
 
 
 def prepare_code_rates(
@@ -625,7 +659,7 @@ def build_critical_items_rows(
     (stock, rates, critical-point totals) to that «تأمین‌کننده» (شرکت/پیمانکار) side before
     aggregation. None keeps every row (legacy / tests).
 
-    ``reno_mode`` = RENO_WITH (renovation + patching) or RENO_WITHOUT (patching
+    ``reno_mode`` = RENO_WITH (patching + capped renovation) or RENO_WITHOUT (patching
     only; renovation-only categories drop out). casting_floor counts in both.
 
     Printed columns = ``REPORT_COLUMNS`` (مبدأ, افق, موجودی, میانگین مصرف ماهانه بر
@@ -661,11 +695,14 @@ def build_critical_items_rows(
     ) -> dict[str, Any] | None:
         if sum(rates[c] for c in use_cols) <= 0 or sum(rates.values()) <= 0:
             return None
-        monthly = monthly_need_for_rates(counts=counts, reno_mode=reno_mode, **rates)
-        if monthly <= 0:
-            return None
         okey, olabel, oflag = origin
         horizon = HORIZON_MONTHS[okey]
+        # v1.7.0: renovation capped over the horizon (monthly-equivalent counts)
+        monthly = monthly_need_for_rates(
+            counts=counts, reno_mode=reno_mode, reno_counts=horizon_reno_monthly(counts, horizon), **rates
+        )
+        if monthly <= 0:
+            return None
         forecast = monthly * horizon
         shortage = max(0.0, forecast - stock)
         # v1.4.0 (user rule 1405-08-02): stock ≤ نقطه بحرانی (filled, > 0) → always
@@ -950,6 +987,23 @@ def basis_sources_text(counts: TundishMonthCounts) -> str:
     return " + ".join(srcs)
 
 
+def renovation_note_fa(counts: TundishMonthCounts) -> str:
+    """«با نوسازی» note: caps + renovations counted in the 3- and 6-month horizons."""
+    from analytics.renovation_caps import SECTION_FA, caps_text_fa, fmt
+
+    def part(h: int) -> str:
+        rc = horizon_reno_counts(counts, h)
+        return "، ".join(f"{SECTION_FA[k]} {fmt(rc[k])}" for k in ("slab", "billet", "bloom"))
+
+    start = ""
+    if counts.jalali_year and 1 <= int(counts.jalali_month or 0) <= 12:
+        start = f" از {PERSIAN_MONTH_NAMES.get(int(counts.jalali_month), '')} {int(counts.jalali_year)}"
+    return (
+        f"نوسازی: پچینگ برای همهٔ تاندیش‌ها و مواد نوسازی فقط برای تاندیش‌های نوسازی‌شده؛ {caps_text_fa()}. "
+        f"تعداد نوسازی لحاظ‌شده{start} — افق ۳ ماه: {part(3)}؛ افق ۶ ماه: {part(6)}."
+    )
+
+
 def horizon_header_note(counts: TundishMonthCounts) -> str:
     """Header note on every critical-items report (PDF, xlsx, bot, web)."""
     since = f"از امروز {counts.report_date}: " if counts.report_date else ""
@@ -996,9 +1050,12 @@ def reno_mode_note(reno_mode: str | None = None) -> str:
             "(بیلت/بلوم/اسلب) است و ستون‌های نوسازی نادیده گرفته می‌شوند؛ اقلامی که "
             "مصرفشان فقط از نوسازی است (نرخ پچینگ صفر، مثل «بتن 86 نوسازی») فهرست نمی‌شوند."
         )
+    from analytics.renovation_caps import caps_text_fa
+
     return (
-        "حالت محاسبه: «با نوسازی» — برای هر نوع تاندیش، مصرف هر تاندیش = "
-        "نوسازی + پچینگ (تا وقتی لاگ روزانه نوسازی/پچینگ جدا شود)."
+        "حالت محاسبه: «با نوسازی» — نرخ پچینگ برای همهٔ تاندیش‌ها و نرخ نوسازی فقط برای "
+        f"تعداد محدود تاندیش نوسازی‌شده در افق ({caps_text_fa()}؛ در نیمهٔ اول سال "
+        "نوسازی لحاظ نمی‌شود)."
     )
 
 
@@ -1057,11 +1114,12 @@ def report_footer_notes(
         f"تعداد تاندیش ماه‌های مبنا (۳ ماه کامل قبل از تاریخ گزارش) — {months}.",
         (
             "لاگ توالی تاندیش ستون نوسازی/پچینگ ندارد؛ هر سکوئنس (ردیف لاگ) یک بار استفاده "
-            "از تاندیش شمرده شده است: «با نوسازی» = هر تاندیش نرخ نوسازی + پچینگ، "
-            "«بدون نوسازی» = فقط نرخ پچینگ."
+            "از تاندیش شمرده شده است: «با نوسازی» = پچینگ برای هر تاندیش + نوسازی فقط برای "
+            "تعداد محدود تاندیش نوسازی‌شده (سقف سالانه/ماهانه)، «بدون نوسازی» = فقط نرخ پچینگ."
         ),
         (
-            f"«{COL_MONTHLY}» = نرخ‌های هر کد × میانگین ماهانه تعداد تاندیش ماه‌های مبنا "
+            f"«{COL_MONTHLY}» = نرخ پچینگ هر کد × میانگین ماهانه تعداد تاندیش ماه‌های مبنا "
+            "+ نرخ نوسازی × (تعداد نوسازی مجاز در افق ÷ ماه‌های افق) "
             "(+ سطح ریخته‌گری × مجموع تاندیش‌ها)."
         ),
         (

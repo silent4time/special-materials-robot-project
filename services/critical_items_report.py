@@ -385,7 +385,10 @@ def template_sheet(
     rates_line: str | None = None,
 ) -> dict[str, Any]:
     sec = _segment_table_section(segment, df if df is not None else pd.DataFrame(), reno_mode)
-    fixed = fixed_notes(counts) + ([rates_line] if rates_line else [])
+    from analytics.critical_items import renovation_note_fa
+
+    reno_line = renovation_note_fa(counts) if normalize_reno_mode(reno_mode) == RENO_WITH else ""
+    fixed = fixed_notes(counts) + ([reno_line] if reno_line else []) + ([rates_line] if rates_line else [])
     return {
         "segment": segment,
         "name": template_sheet_name(counts, segment),

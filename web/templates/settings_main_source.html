@@ -63,18 +63,26 @@
   {% endif %}
 </div>
 
-<div class="card">
+<div class="card" id="edit-record">
   <h2>ویرایش رکورد</h2>
+  <form method="get" action="/settings/main-source/edit#edit-record">
+    <label for="edit_pick_id">شناسه مواد</label>
+    <input id="edit_pick_id" name="id" type="text" required value="{{ edit_record.id if edit_record else '' }}">
+    <p style="margin-top:1rem"><button type="submit">نمایش مشخصات فعلی</button></p>
+  </form>
+  {% if edit_record %}
+  <h3>رکورد فعلی: {{ edit_record.id }}</h3>
+  <ul class="muted">{% for d in edit_record.details %}<li>{{ d }}</li>{% endfor %}</ul>
+  <p class="muted">هر فیلد جداگانه پرسیده می‌شود؛ خانهٔ خالی یعنی همان مقدار قبلی می‌ماند.</p>
   <form method="post" action="/settings/main-source/edit">
-    <label for="edit_id">شناسه مواد</label>
-    <input id="edit_id" name="id" type="text" required>
-    {% for key in columns if key != 'id' %}
-    <label for="edit_{{ key }}">{{ labels.get(key, key) }}</label>
-    <input id="edit_{{ key }}" name="{{ key }}" type="text"{% if key == 'usage_location' %} placeholder="اسلب، بیلت، سطح ریخته گری اسلب"{% endif %}>
+    <input type="hidden" name="id" value="{{ edit_record.id }}">
+    {% for f in edit_record.fields %}
+    <label for="edit_{{ f.key }}">({{ f.n }}/{{ edit_record.total }}) {{ f.label }}{{ f.hint }} — مقدار فعلی: {{ f.current }}</label>
+    <input id="edit_{{ f.key }}" name="{{ f.key }}" type="text" placeholder="خالی = بدون تغییر ({{ f.current }})">
     {% endfor %}
-    <p class="muted">فقط فیلدهایی که پر شوند به‌روز می‌شوند.</p>
     <p style="margin-top:1rem"><button type="submit">ذخیره ویرایش</button></p>
   </form>
+  {% endif %}
 </div>
 
 {% if is_approver and pending_requests %}

@@ -209,7 +209,13 @@ def test_aggregation_rule() -> None:
     df = build_critical_items_rows(inv, cnt, segment="company", include_covered=True)
     got = {str(r["کد چهاررقمی"]): (int(r["موجودی"]), int(r[COL_MONTHLY])) for _, r in df.iterrows()}
     assert got["1700"] == (100, 10), got  # 40 (<100) + 60 (unrated); prio-0 5000/3 excluded
-    assert got["1450"] == (50, 20), got  # qty 50 < 100 still counted
+    # qty 50 < 100 still counted. v1.7.0: 1450 is renovation-only (billet 2/tundish) →
+    # renovations over the 3-month horizon from شهریور = مهر + آبان = 2 (≤1/month, 2nd half)
+    # → monthly-equivalent 2 × 2/3 = 1.33 (was 10 tundish × 2 = 20 before the cap).
+    from analytics.renovation_caps import window_renovations
+
+    assert window_renovations("billet", 10, 1405, 6, 3) == 2.0
+    assert got["1450"] == (50, int(2 * 2.0 / 3)), got
     assert "1800" not in got and "9999" not in got, got
     # explicit critical point: alert when summed stock (100) ≤ cp
     inv2 = inv.copy()
@@ -401,9 +407,13 @@ def test_merged_cells(tmp: Path) -> None:
     assert bool(rows["1901"]["below_threshold"])
     # 1902: merged stock counted once
     assert int(rows["1902"]["موجودی"]) == 300 and int(rows["1902"][COL_MONTHLY]) == 10
-    # 1903/1904 pooled: one group row, need (6+6)×10 once, combined stock
+    # 1903/1904 pooled: one group row, need once, combined stock. v1.7.0 renovation cap:
+    # patching 6 × 10 tundish + renovation 6 × (2 renovations in شهریور..آبان ÷ 3) = 64
+    # (before the cap: (6+6)×10 = 120).
     g = rows["1903/1904"]
-    assert g["row_kind"] == ROW_GROUP and int(g[COL_MONTHLY]) == 120 and int(g["موجودی"]) == 300, g
+    exp_g = int(6 * 10 + 6 * 2 / 3)
+    assert exp_g == 64
+    assert g["row_kind"] == ROW_GROUP and int(g[COL_MONTHLY]) == exp_g and int(g["موجودی"]) == 300, g
     assert rows["1903"]["row_kind"] == ROW_MEMBER and rows["1903"][COL_MONTHLY] == SHARED_NEED_LABEL
     assert int(rows["1903"]["موجودی"]) == 100 and int(rows["1904"]["موجودی"]) == 200
     pos = list(co["کد چهاررقمی"].astype(str))
@@ -418,7 +428,7 @@ def test_merged_cells(tmp: Path) -> None:
     # alternative mode: every code gets the full rate separately
     pc = build_critical_items_rows(inv, cnt, segment="company", shared_mode="per_code", include_covered=True)
     prow = {str(r["کد چهاررقمی"]): r for _, r in pc.iterrows()}
-    assert "1903/1904" not in prow and int(prow["1903"][COL_MONTHLY]) == 120 and int(prow["1904"][COL_MONTHLY]) == 120
+    assert "1903/1904" not in prow and int(prow["1903"][COL_MONTHLY]) == exp_g and int(prow["1904"][COL_MONTHLY]) == exp_g
     assert critical_item_count(pc) == 5
     print("merged cells (fill, stock once, per-code max, pooled vs per_code, segments) OK")
 
@@ -476,7 +486,9 @@ def test_section_rules() -> None:
     co = build_critical_items_rows(inv, cnt, segment="company", include_covered=True)
     ct = build_critical_items_rows(inv, cnt, segment="contractor", include_covered=True)
     need = lambda df, code: int(df.loc[df["کد چهاررقمی"].astype(str) == code, COL_MONTHLY].iloc[0])
-    assert need(co, "1937") == 10 and need(ct, "1937") == 40  # billet 1×10 | bloom 4×10
+    # billet 1×10 | bloom patching 2×10 + renovation 2 × (2 renovations in شهریور..آبان ÷ 3)
+    # (v1.7.0 cap; before: bloom (2+2)×10 = 40)
+    assert need(co, "1937") == 10 and need(ct, "1937") == int(2 * 10 + 2 * 2 / 3) == 21
     assert need(co, "1938") == 30 + 40 and need(ct, "1938") == 30  # slab 3×10 once + billet 4×10
     assert need(ct, "1939") == 50 and need(co, "1940") == 10
     # main goal / forecast: section-restricted matching by id
@@ -841,7 +853,19 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     co, ct = res.frames["company"], res.frames["contractor"]
     co_codes = list(co["کد چهاررقمی"].astype(str))
     ct_codes = list(ct["کد چهاررقمی"].astype(str))
-    assert sorted(co_codes) == ["1203", "1450", "1451", "1700"], co_codes
+    # v1.7.0 renovation cap (date-dependent: report month = today): renovations in the
+    # 3-month domestic horizon, ≤1/month, only مهر..اسفند, annual cap 5 (billet/slab).
+    import math
+
+    from analytics.renovation_caps import window_renovations
+
+    ry, rm = int(res.counts.jalali_year), int(res.counts.jalali_month)
+    rb3 = window_renovations("billet", 50, ry, rm, 3)
+    rs3 = window_renovations("slab", 50, ry, rm, 3)
+    assert 0 <= rb3 <= 3 and 0 <= rs3 <= 3
+    # 1450 (billet renovation-only 2, stock 50): 2 × ≤3 renovations ≤ 6 < 50 → never critical
+    # (before the cap: 2 × 50 × 3 = 300 → listed).
+    assert sorted(co_codes) == ["1203", "1451", "1700"], co_codes
     from analytics.critical_items import COL_HORIZON, COL_MONTHLY, COL_NEED
 
     r1700 = co.loc[co["کد چهاررقمی"].astype(str) == "1700"].iloc[0]
@@ -849,15 +873,21 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     assert int(r1700["موجودی"]) == 100 and int(r1700[COL_MONTHLY]) == 50, r1700.to_dict()
     assert int(r1700[COL_HORIZON]) == 6 and int(r1700[COL_NEED]) == 200, r1700.to_dict()
     assert r1700["کد و شرح کالا"] == "نازل الف"
-    assert sorted(ct_codes) == ["1203", "1655"], ct_codes
+    # 1655 (contractor, billet renovation-only 3, stock 300): 3 × ≤3 = ≤9 < 300 → not listed
+    assert sorted(ct_codes) == ["1203"], ct_codes
     r_co = co.loc[co["کد چهاررقمی"].astype(str) == "1203"].iloc[0]
     r_ct = ct.loc[ct["کد چهاررقمی"].astype(str) == "1203"].iloc[0]
-    # company: ledger applied once (1000-100=900, NOT 800); monthly = 20×50; H 3
+    # company: ledger applied once (1000-100=900, NOT 800); H 3;
+    # monthly = patching 10×50 + renovation 10 × rb3/3 (was (10+10)×50 = 1000)
+    m_co = 10 * 50 + 10 * rb3 / 3
     assert int(r_co["موجودی"]) == 900, r_co["موجودی"]
-    assert int(r_co[COL_MONTHLY]) == 1000 and int(r_co[COL_NEED]) == 3000 - 900
-    assert int(r_co["حد تحمل(روز)"]) == 27  # 900 / (1000/30)
-    # contractor: own stock/rates only (slab 10×50; origin blank → domestic)
-    assert int(r_ct["موجودی"]) == 500 and int(r_ct[COL_MONTHLY]) == 500 and int(r_ct[COL_NEED]) == 1000
+    assert int(r_co[COL_MONTHLY]) == int(round(m_co, 1)), (r_co[COL_MONTHLY], m_co)
+    assert int(r_co[COL_NEED]) == math.ceil(m_co * 3 - 900 - 1e-6), (r_co[COL_NEED], m_co)
+    assert int(r_co["حد تحمل(روز)"]) == int(round(900 / (m_co / 30)))
+    # contractor: own stock/rates only (slab patching 5×50 + renovation 5 × rs3/3; origin blank → domestic)
+    m_ct = 5 * 50 + 5 * rs3 / 3
+    assert int(r_ct["موجودی"]) == 500 and int(r_ct[COL_MONTHLY]) == int(round(m_ct, 1))
+    assert int(r_ct[COL_NEED]) == math.ceil(m_ct * 3 - 500 - 1e-6), (r_ct[COL_NEED], m_ct)
     assert _basis_label() in res.header_note, res.header_note
     assert f"تاریخ گزارش: {_today_tag().replace('-', '/')}" in res.header_note, res.header_note
     assert _today_tag().replace("-", "/") in res.titles["company"], res.titles
@@ -927,8 +957,12 @@ def test_service_split_and_ledger(tmp: Path) -> dict:
     cnt = TundishMonthCounts(1405, 6, 70, 0, 100)
     kw = dict(billet_renovation=200, billet_patching=50, bloom_renovation=9, bloom_patching=9,
               slab_renovation=170, slab_patching=30, casting_floor=1, counts=cnt)
-    assert monthly_need_for_rates(**kw) == 70 * 250 + 100 * 200 + 170
+    # v1.7.0: raw counts → patching × count + renovation × min(count, annual cap)
+    assert monthly_need_for_rates(**kw) == 70 * 50 + 5 * 200 + 100 * 30 + 5 * 170 + 170
     assert monthly_need_for_rates(**kw, reno_mode="without") == 70 * 50 + 100 * 30 + 170
+    # explicit (horizon) renovation counts
+    assert monthly_need_for_rates(**kw, reno_counts={"billet": 1, "slab": 2}) == (
+        70 * 50 + 1 * 200 + 100 * 30 + 2 * 170 + 170)
     print("service بدون نوسازی OK", wco_codes, wct_codes)
     return {
         "critical_company": res.company_pdf,
@@ -1004,7 +1038,7 @@ def test_bot_flow(tmp: Path) -> None:
     assert "پیش‌نویس" in client.docs[0][1] and "با نوسازی" in client.docs[2][1]
     summary = client.msgs[-2]
     assert "حالت «با نوسازی»" in summary and "پیش‌نویس" in summary, summary
-    assert "شرکت (گزارش اصلی): 4 قلم" in summary, summary
+    assert "شرکت (گزارش اصلی): 3 قلم" in summary, summary  # v1.7.0: 1450 (renovation-only) no longer critical
     assert "مبدأ نامشخص" in summary, summary
     assert f"پیش‌نویس #{rid}" in client.msgs[-1]
     dk = [b["callback_data"] for row in markups[-1]["inline_keyboard"] for b in row]

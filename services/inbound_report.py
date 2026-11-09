@@ -746,3 +746,172 @@ def history_button_label(item: dict[str, Any]) -> str:
 
 
 HISTORY_PREFIX = "📥 ورودی "
+
+
+
+# ── «گزارش ورودی اقلام» در منوی گزارش‌ها: ورودی‌های ۳۰ روز اخیر (نسخهٔ 1.7.0) ─────────
+# پیام بلافاصله بعد از آپلود موجودی انبار تغییر نمی‌کند (فقط اختلاف با آپلود قبلی).
+# این گزارش از سابقهٔ ذخیره‌شدهٔ همهٔ آپلودها (inventory_inbound_reports) ساخته می‌شود:
+# بازه = از ۳۰ روز قبل از آخرین آپلود موجودی انبار تا خود آن آپلود؛ هر افزایش با تاریخ
+# آپلودی که آن را نشان داد یک ردیف است (اگر یک قلم در چند آپلود افزایش داشت، همهٔ آن‌ها
+# با تاریخ خودشان می‌آیند).
+WINDOW_DAYS = 30
+COL_INBOUND_QTY = "مقدار وارده"
+COL_ADDED_DATE = "تاریخ اضافه شدن"
+WINDOW_TITLE = "گزارش ورودی اقلام (۳۰ روز اخیر)"
+WINDOW_COLUMNS = [COL_ROW, COL_CODE, COL_ID, COL_KEYWORD, COL_UNIT, COL_INBOUND_QTY, COL_ADDED_DATE, COL_TYPE]
+
+
+def _parse_ts(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def window_events(db: Database, *, days: int = WINDOW_DAYS) -> dict[str, Any]:
+    """Inbound events of the stored uploads in [last upload − ``days``, last upload].
+
+    Returns {"anchor": iso, "anchor_label", "since_label", "uploads": [...], "lines": [...],
+    "n_events", "n_items", "total"} — read-only (never writes the DB)."""
+    from datetime import timedelta
+
+    from bot.jalali import format_datetime as _fmt_dt
+
+    rows = db.list_inbound_reports_full(limit=1000)
+    out: dict[str, Any] = {"anchor": None, "anchor_label": "", "since_label": "", "uploads": [],
+                           "lines": [], "n_events": 0, "n_items": 0, "total": 0.0, "days": int(days)}
+    if not rows:
+        return out
+    stamps = [(_parse_ts(r.get("upload_created_at")), r) for r in rows]
+    stamps = [(t, r) for t, r in stamps if t is not None]
+    if not stamps:
+        return out
+    anchor = max(t for t, _r in stamps)
+    since = anchor - timedelta(days=int(days))
+    out["anchor"] = anchor.isoformat()
+    out["anchor_label"] = _fmt_dt(anchor)
+    out["since_label"] = _fmt_dt(since)
+    events: list[dict[str, Any]] = []
+    for t, r in sorted(stamps, key=lambda x: (x[0], int(x[1].get("id") or 0))):
+        if t < since or t > anchor:
+            continue
+        rep = _parse(r) or {}
+        label = _fmt_dt(t)
+        out["uploads"].append({"id": int(r["id"]), "label": label, "n_inbound": rep.get("n_inbound", 0),
+                               "has_baseline": rep.get("has_baseline", False)})
+        if not rep.get("has_baseline"):
+            continue
+        for ln in rep.get("lines") or []:
+            qty = _qty(ln.get(COL_INBOUND))
+            if qty is None or qty <= 0:
+                continue
+            events.append({
+                COL_CODE: ln.get(COL_CODE) or "—",
+                COL_ID: ln.get(COL_ID) or "—",
+                COL_KEYWORD: ln.get(COL_KEYWORD) or "—",
+                COL_UNIT: ln.get(COL_UNIT) or "",
+                COL_INBOUND_QTY: _num(qty),
+                COL_ADDED_DATE: label,
+                COL_TYPE: ln.get(COL_TYPE) or "",
+                "_ts": t.isoformat(),
+                "_qty": float(qty),
+            })
+    events.sort(key=lambda e: (str(e[COL_CODE]), str(e[COL_ID]), e["_ts"]))
+    for i, e in enumerate(events, 1):
+        e[COL_ROW] = i
+    out["n_events"] = len(events)
+    out["n_items"] = len({str(e[COL_ID]) for e in events})
+    out["total"] = float(sum(e["_qty"] for e in events))
+    out["lines"] = events
+    return out
+
+
+def window_header_lines_fa(win: dict[str, Any]) -> list[str]:
+    if not win.get("anchor"):
+        return ["هنوز آپلود موجودی انباری ثبت نشده است."]
+    n_up = len(win.get("uploads") or [])
+    return [
+        f"بازه: {win.get('since_label')} تا {win.get('anchor_label')} "
+        f"({win.get('days', WINDOW_DAYS)} روز تا آخرین آپلود موجودی انبار)",
+        f"آپلودهای موجودی انبار در این بازه: {n_up}",
+        f"ورودی‌ها: {win.get('n_events', 0)} مورد برای {win.get('n_items', 0)} قلم",
+        "«مقدار وارده» = افزایش موجودی نسبت به آپلود قبل از آن؛ «تاریخ اضافه شدن» = تاریخ آپلودی که "
+        "افزایش را نشان داد. «موجودی» = موجودی امروز منبع اصلی.",
+    ]
+
+
+def window_sections(win: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{
+        "title": "ورودی اقلام در ۳۰ روز اخیر",
+        "sheet_title": "ورودی ۳۰ روز",
+        "columns": WINDOW_COLUMNS,
+        "rows": [{k: v for k, v in e.items() if not k.startswith("_")} for e in win.get("lines") or []],
+        # base columns: کد ۴ رقمی، آیدی کد، شرح، کلیدواژه، موجودی (امروز)، محل استفاده، تأمین‌کننده
+        "material": {"id": COL_ID, "code": COL_CODE, "mode": "per_id"},
+        "empty_message": "در ۳۰ روز منتهی به آخرین آپلود موجودی انبار ورودی‌ای ثبت نشده است.",
+    }]
+
+
+def window_summary_text_fa(win: dict[str, Any], *, limit: int = 15) -> str:
+    from services.units import unit_fa
+
+    lines = [f"📥 {WINDOW_TITLE}"] + window_header_lines_fa(win)[:3]
+    for e in (win.get("lines") or [])[:limit]:
+        unit = f" {unit_fa(e.get(COL_UNIT))}" if e.get(COL_UNIT) else ""
+        lines.append(
+            f"• {e.get(COL_CODE)} | {e.get(COL_ID)} | {str(e.get(COL_KEYWORD))[:35]} | "
+            f"+{e.get(COL_INBOUND_QTY)}{unit} | {e.get(COL_ADDED_DATE)}"
+        )
+    extra = int(win.get("n_events", 0)) - limit
+    if extra > 0:
+        lines.append(f"… و {extra} مورد دیگر (جزئیات در فایل)")
+    if win.get("anchor") and not win.get("n_events"):
+        lines.append("در این بازه ورودی‌ای شناسایی نشد.")
+    return "\n".join(lines)
+
+
+def window_file_stem(win: dict[str, Any]) -> str:
+    label = (str(win.get("anchor_label") or "")[:10]).replace("/", "-") or "بدون_تاریخ"
+    return f"گزارش_ورودی_اقلام_۳۰_روز_{label}"
+
+
+def build_window_files(db: Database, win: dict[str, Any], *, out_dir: Path | None = None) -> tuple[Path, Path]:
+    """PDF (letterhead) + XLSX of the 30-day inbound window (same styling as other reports)."""
+    from excel.simple_report import generate_simple_report_xlsx
+    from pdf.generator import generate_simple_report_pdf
+    from services.file_names import unique_dir
+
+    out = unique_dir(Path(out_dir or config.REPORT_DIR), "inbound_window")
+    stem = window_file_stem(win)
+    subtitle = "\n".join(window_header_lines_fa(win))
+    sections = window_sections(win)
+    pdf_path = generate_simple_report_pdf(
+        WINDOW_TITLE, subtitle=subtitle, sections=sections, output_path=out / f"{stem}.pdf",
+        filename_stem=stem, letterhead_path=letterhead_path(db),
+    )
+    xlsx_path = generate_simple_report_xlsx(
+        WINDOW_TITLE, subtitle=subtitle, sections=sections, output_path=out / f"{stem}.xlsx",
+        filename_stem=stem,
+    )
+    return Path(pdf_path), Path(xlsx_path)
+
+
+def window_preview_table(win: dict[str, Any], limit: int = 60) -> dict[str, Any] | None:
+    """Web preview (base material columns first, same as the files)."""
+    if not win.get("lines"):
+        return None
+    from pdf.generator import _format_simple_cell
+    from services.material_columns import apply_section
+    from services.units import unit_fa
+
+    sec = window_sections(win)[0]
+    sec = apply_section(dict(sec, rows=list(sec["rows"])[:limit]))
+
+    def cell(r: dict[str, Any], c: str) -> str:
+        return unit_fa(r.get(c)) if c == COL_UNIT and r.get(c) else _format_simple_cell(r.get(c), c)
+
+    return {"header": list(sec["columns"]), "rows": [[cell(r, c) for c in sec["columns"]] for r in sec["rows"]]}
