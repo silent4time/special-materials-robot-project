@@ -784,6 +784,14 @@ def n_tundish_count_menu() -> dict:
     return _kb([["۱", "۲", "۳", "۴"], ["۵", "۶", "۸", "۱۰"], [BTN_CANCEL]], "flow")
 
 
+BTN_EDIT_KEEP = "⏭ بدون تغییر"
+
+
+def edit_field_menu() -> dict:
+    """v1.7.0 «✏️ ویرایش رکورد»: one field at a time — keep previous value / cancel."""
+    return _kb([[BTN_EDIT_KEEP], [BTN_CANCEL]], "flow")
+
+
 def output_format_menu() -> dict:
     """v1.5.0: «خروجی PDF» / «خروجی اکسل» before any report file is sent."""
     return _kb([[BTN_OUT_PDF, BTN_OUT_XLSX], [BTN_CANCEL]], "flow")

@@ -135,28 +135,65 @@ async def main_source_settings(
     )
 
 
+def _edit_record_context(db: Database, user: dict, item_id: str) -> tuple[dict | None, str | None]:
+    """v1.7.0: current details of one record + one entry per editable field (bot order)."""
+    frame = main_source_svc.load_primary_frame(db, bale_user_id=user["bale_user_id"])
+    if frame is None or frame.empty:
+        return None, "منبع اصلی خالی است. ابتدا فایل را آپلود یا رکورد جدید اضافه کنید."
+    _idx, row = main_source_svc.find_row_by_id(frame, item_id)
+    if row is None:
+        return None, f"شناسه «{item_id}» یافت نشد."
+    fields = main_source_svc.edit_fields()
+    return {
+        "id": main_source_svc._cell_str(row.get("id")) or item_id,
+        "details": main_source_svc.format_row_fa(row).split("\n"),
+        "fields": [
+            {"key": k, "label": main_source_svc.FIELD_LABELS_FA.get(k, k),
+             "hint": main_source_svc.FIELD_HINTS_FA.get(k, ""), "n": i,
+             "current": main_source_svc.current_value_fa(row, k)}
+            for i, k in enumerate(fields, 1)
+        ],
+        "total": len(fields),
+    }, None
+
+
+@router.get("/main-source/edit")
+async def main_source_edit_pick(
+    request: Request,
+    id: str = "",
+    user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
+    db: Database = Depends(get_db),
+):
+    """Step 1 (same as the bot): send the ID → current details + one input per field."""
+    item_id = str(id or "").strip()
+    ctx_edit, error = _edit_record_context(db, user, item_id) if item_id else (None, "شناسه مواد الزامی است.")
+    ctx = _main_source_context(db, user, error=error)
+    ctx["edit_record"] = ctx_edit
+    return render(request, "settings_main_source.html", ctx, status_code=400 if error else 200)
+
+
 @router.post("/main-source/edit")
 async def main_source_edit(
     request: Request,
     user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
     db: Database = Depends(get_db),
 ):
+    """Step 2: every field answered separately; an empty field keeps the previous value."""
     form = await request.form()
     item_id = str(form.get("id") or "").strip()
-    updates = {}
-    for key in main_source_svc.INVENTORY_COLUMNS:
-        if key == "id":
-            continue
-        raw = str(form.get(key) or "").strip()
-        if raw:
-            updates[key] = raw
+    answers = {key: str(form.get(key) or "") for key in main_source_svc.edit_fields() if key in form}
     error = None
     message = None
     try:
-        if not updates:
-            raise ValueError("حداقل یک فیلد برای ویرایش پر کنید.")
         if not item_id:
             raise ValueError("شناسه مواد الزامی است.")
+        frame = main_source_svc.load_primary_frame(db, bale_user_id=user["bale_user_id"])
+        _idx, current = main_source_svc.find_row_by_id(frame if frame is not None else None, item_id)
+        if current is None:
+            raise KeyError(f"ردیفی با شناسه «{item_id}» یافت نشد.")
+        updates = main_source_svc.collect_edit_updates(current, answers)
+        if not updates:
+            raise ValueError("تغییری ثبت نشد؛ همهٔ فیلدها همان مقدار قبلی را دارند (خانهٔ خالی = مقدار قبلی).")
         result = main_source_svc.upsert_row(
             db, item_id, updates, bale_user_id=user["bale_user_id"]
         )
