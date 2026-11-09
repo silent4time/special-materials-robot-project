@@ -773,7 +773,9 @@ def _test_critical_items_report() -> None:
     assert days_in_jalali_month(1403, 12) in {29, 30}
 
     counts = TundishMonthCounts(1405, 6, count_billet=70, count_bloom=0, count_slab=100)
-    # per billet 200+200=400 → 70*400=28000; slab 170+170=340 → 100*340=34000; total 62000
+    # v1.7.0 renovation cap (raw counts): billet patching 200×70 + renovation 200×min(70,5);
+    # slab patching 170×100 + renovation 170×min(100,5) = 14000+1000+17000+850 = 32850
+    # (before the cap: (200+200)×70 + (170+170)×100 = 62000)
     need = monthly_need_for_rates(
         billet_renovation=200,
         billet_patching=200,
@@ -784,7 +786,7 @@ def _test_critical_items_report() -> None:
         casting_floor=0,
         counts=counts,
     )
-    assert need == 62000, need
+    assert need == 200 * 70 + 200 * 5 + 170 * 100 + 170 * 5 == 32850, need
     # casting_floor × total tundishes
     need_cf = monthly_need_for_rates(
         billet_renovation=0,
@@ -823,12 +825,15 @@ def _test_critical_items_report() -> None:
     assert "1203" in codes and "1638" in codes and "9999" not in codes
     row1203 = df.loc[df["کد چهاررقمی"].astype(str) == "1203"].iloc[0]
     assert int(row1203["موجودی"]) == 19000
-    # monthly 62000; «سازنده» blank → domestic H=3 → forecast 186000; نیاز = 186000 − 19000
-    assert int(row1203["میانگین مصرف ماهانه بر اساس ۳ ماه گذشته"]) == 62000
-    assert int(row1203["مصرف پیش‌بینی‌شده در افق"]) == 186000
-    assert int(row1203["نیاز"]) == 167000
-    # days_cover = 19000 / (62000/30) ≈ 9.2 (30-day months)
-    assert int(row1203["حد تحمل(روز)"]) == 9
+    # v1.7.0: «سازنده» blank → domestic H=3 from شهریور 1405 → renovations in the horizon
+    # = مهر + آبان = 2 per section (first-half شهریور has none) →
+    # monthly = 200×70 + 200×2/3 + 170×100 + 170×2/3 = 31246.7 (was 62000 uncapped)
+    monthly = 200 * 70 + 200 * 2 / 3 + 170 * 100 + 170 * 2 / 3
+    assert int(row1203["میانگین مصرف ماهانه بر اساس ۳ ماه گذشته"]) == int(monthly) == 31246
+    assert int(row1203["مصرف پیش‌بینی‌شده در افق"]) == int(round(monthly * 3, 1)) == 93740
+    assert int(row1203["نیاز"]) == 93740 - 19000
+    # days_cover = 19000 / (31246.7/30) ≈ 18.2 (30-day months)
+    assert int(row1203["حد تحمل(روز)"]) == 18
     assert "لیست اقلام بحرانی" in report_title(counts)
     assert "شهریور" in report_title(counts)
 

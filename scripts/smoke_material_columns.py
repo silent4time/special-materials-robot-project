@@ -231,6 +231,12 @@ def part_b() -> None:
         collect("ورودی انبار", [a, b], expect_material=bool(rep.get("lines")))
         pv = ib.preview_table(rep)
         check(pv is None or mc.header_starts_with_base(pv["header"]), "web inbound preview header")
+    win = ib.window_events(db)  # v1.7.0 «گزارش ورودی اقلام» (30 days)
+    if win.get("anchor"):
+        a, b = ib.build_window_files(db, win, out_dir=out / "inb30")
+        collect("ورودی اقلام ۳۰ روز", [a, b], expect_material=bool(win.get("lines")))
+        pv = ib.window_preview_table(win)
+        check(pv is None or mc.header_starts_with_base(pv["header"]), "web inbound 30-day preview header")
     c = comp.generate_files(db, owner, start, end, range_label="۹۰ روز")
     if c.pdf:
         collect("گزارش جامع", [c.pdf, c.xlsx])

@@ -219,18 +219,24 @@ def main() -> int:
         client.msgs.clear(); client.markups.clear()
         n_docs = len(sent_docs)
         app.handle_update({"message": dict(msg, text=kb.BTN_INBOUND)})
-        assert client.msgs and "4 قلم" in client.msgs[0], client.msgs
+        # v1.7.0: reports menu → 30-day window (4 inbound events of the last upload, with dates)
+        assert client.msgs and svc.WINDOW_TITLE in client.msgs[0] and "4 مورد برای 4 قلم" in client.msgs[0], client.msgs
         hist_labels = [row[0]["text"] if isinstance(row[0], dict) else row[0]
                        for row in (client.markups[0] or {}).get("keyboard", [])]
-        first_lbl = next(lbl for lbl in hist_labels if lbl.startswith(svc.HISTORY_PREFIX))
-        assert f"(#{r1['id']})" in first_lbl, hist_labels
+        first_lbl = next(lbl for lbl in hist_labels if f"(#{r1['id']})" in lbl)
+        assert any(f"(#{rep['id']})" in lbl for lbl in hist_labels), hist_labels
         assert len(sent_docs) == n_docs + 2
+        win_x = pd.ExcelFile([p for p in sent_docs[n_docs:] if p.suffix == ".xlsx"][0])
+        win_df = pd.read_excel(win_x, sheet_name=0, header=None).fillna("")
+        win_hdr = next(list(map(str, r)) for _i, r in win_df.iterrows() if "مقدار وارده" in list(map(str, r)))
+        for col in ("کد ۴ رقمی", "آیدی کد", "شرح", "کلیدواژه", "موجودی", "واحد", "مقدار وارده", "تاریخ اضافه شدن"):
+            assert col in win_hdr, (col, win_hdr)
         client.msgs.clear()
         app.handle_update({"message": dict(msg, text=first_lbl)})
         assert client.msgs and "اولین پایه" in client.msgs[0], client.msgs
         client.msgs.clear()
         app.handle_update({"message": dict(msg, text=kb.BTN_INBOUND_LEGACY)})
-        assert client.msgs and "4 قلم" in client.msgs[0], client.msgs
+        assert client.msgs and svc.WINDOW_TITLE in client.msgs[0], client.msgs
         assert kb.BTN_INBOUND == "📄 گزارش اقلام ورودی به انبار"
         assert kb.canonical("📥 گزارش اقلام ورودی به انبار") == kb.BTN_INBOUND  # old label alias
         assert kb.BTN_INBOUND in str(kb.analytics_menu())
