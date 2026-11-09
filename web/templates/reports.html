@@ -51,7 +51,7 @@
 {% if can(user, "report.n_tundish") %}
 <div class="card" id="n-tundish">
   <h2>🧮 نیاز مواد برای N تاندیش</h2>
-  <p class="muted">همان نرخ‌ها و قواعد «اقلام بحرانی» از منبع اصلی: نوسازی+پچینگ («با نوسازی») یا فقط پچینگ، + سطح ریخته‌گری × N؛
+  <p class="muted">همان نرخ‌ها و قواعد «اقلام بحرانی» از منبع اصلی: «با نوسازی» = {{ RENO_WITH_TEXT }} یا «بدون نوسازی» = {{ RENO_WITHOUT_TEXT }}، + سطح ریخته‌گری × N؛
     کد ۱۸۰۰ و اولویت ۰ حذف؛ گروه نازل‌ها با نیاز مشترک. فقط‌خواندنی؛ اقلام با کسری قرمز.</p>
   <form method="get" action="/reports/n-tundish" class="form-grid">
     <label>بخش<select name="section"><option value="slab">اسلب</option><option value="bloom">بلوم</option><option value="billet">بیلت</option></select></label>
@@ -140,6 +140,27 @@
     ورودی = افزایش موجودی شناسه‌های موجود در پایه + شناسه جدید با کد ۴ رقمی موجود در منبع اصلی و موجودی بیشتر از صفر.
     کد 1800 لحاظ نمی‌شود؛ ردیف‌های رد شده (⛔) جدا آمده و ورودی حساب نمی‌شوند.
   </p>
+  {% if inbound_window and inbound_window.anchor %}
+  <h3>📥 گزارش ورودی اقلام — ۳۰ روز اخیر</h3>
+  <ul class="muted">{% for n in inbound_window_lines %}<li>{{ n }}</li>{% endfor %}</ul>
+  <div class="report-actions">
+    <a class="btn" href="/reports/inbound-30d.pdf">خروجی PDF</a>
+    <a class="btn" href="/reports/inbound-30d.xlsx">خروجی اکسل</a>
+  </div>
+  {% if inbound_window_table %}
+  <div style="overflow-x:auto"><table>
+    <thead><tr>{% for h in inbound_window_table.header %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for row in inbound_window_table.rows %}
+      <tr>{% for c in row %}<td>{{ c }}</td>{% endfor %}</tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="muted">در ۳۰ روز منتهی به آخرین آپلود موجودی انبار ورودی‌ای ثبت نشده است.</p>
+  {% endif %}
+  <h3 style="margin-top:1rem">اختلاف هر آپلود با آپلود قبلی</h3>
+  {% endif %}
   {% if inbound_latest %}
   {% set r = inbound_latest %}
   <p><strong>آخرین گزارش:</strong> آپلود {{ r.upload_label }}
@@ -181,7 +202,7 @@
   <p class="muted">
     همان منطق ربات: مصرف ماهانه = مصرف هر تاندیش هر نوع (منبع اصلی) × میانگین تعداد تاندیش ۳ ماه کامل قبل از امروز
     (لاگ توالی تاندیش؛ ماهی که لاگ ندارد از ثبت دستی زیر) ×
-    (نوسازی+پچینگ یا فقط پچینگ) + سطح ریخته‌گری؛ «مصرف پیش‌بینی‌شده در افق» = میانگین ماهانه × افق
+    («با نوسازی»: {{ RENO_WITH_TEXT }}، در نیمهٔ اول سال بدون نوسازی؛ «بدون نوسازی»: {{ RENO_WITHOUT_TEXT }}) + سطح ریخته‌گری؛ «مصرف پیش‌بینی‌شده در افق» = میانگین ماهانه × افق
     (داخلی ۳ ماه، وارداتی ۶ ماه)؛ «نیاز» = مصرف پیش‌بینی‌شده − موجودی، فقط اقلام با نیاز مثبت.
     نقش‌های مجاز: مالک، مدیر، کاردان مسئول.
   </p>
@@ -242,7 +263,7 @@
   <p class="muted">هنوز گزارشی تأیید نشده است.</p>
   {% endif %}
   <p class="muted">تفکیک بر اساس ستون «تأمین‌کننده» منبع اصلی (شرکت/پیمانکار، از روی شناسه مواد)؛ گزارش اصلی فقط اقلام شرکت است و اقلام پیمانکار جدا می‌آید.
-    «با نوسازی» = نرخ نوسازی + پچینگ (+ سطح ریخته‌گری)؛ «بدون نوسازی» = فقط پچینگ (+ سطح ریخته‌گری) — اقلامی که فقط نرخ نوسازی دارند حذف می‌شوند.</p>
+    «با نوسازی» = {{ RENO_WITH_TEXT }} (+ سطح ریخته‌گری)؛ «بدون نوسازی» = فقط پچینگ (+ سطح ریخته‌گری) — اقلامی که فقط نرخ نوسازی دارند حذف می‌شوند.</p>
 </div>
 {% endif %}
 {% endblock %}

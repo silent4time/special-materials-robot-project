@@ -97,6 +97,10 @@ async def reports_page(
     ctx["inbound_table"] = inbound_svc.preview_table(ctx["inbound_latest"]) if ctx["inbound_latest"] else None
     ctx["inbound_notes"] = inbound_svc.rejected_breakdown_fa(ctx["inbound_latest"]) if ctx["inbound_latest"] else []
     ctx["inbound_history"] = inbound_svc.list_reports(db, limit=20)
+    # v1.7.0: «گزارش ورودی اقلام» = inbound items of the 30 days up to the last stock upload
+    ctx["inbound_window"] = inbound_svc.window_events(db)
+    ctx["inbound_window_lines"] = inbound_svc.window_header_lines_fa(ctx["inbound_window"])
+    ctx["inbound_window_table"] = inbound_svc.window_preview_table(ctx["inbound_window"])
     try:
         from services import period_consumption as _pc
 
@@ -115,6 +119,31 @@ def _inbound_file(db: Database, report_id: int, kind: str):
     except Exception as exc:  # noqa: BLE001
         return None, user_errors.error_fa("خطا در تولید گزارش اقلام ورودی", exc)
     return (pdf_path if kind == "pdf" else xlsx_path), None
+
+
+@router.get("/inbound-30d.{ext}")
+async def inbound_window_file(
+    ext: str,
+    user=Depends(require_feature(perm.REPORT_INBOUND)),
+    db: Database = Depends(get_db),
+):
+    """«گزارش ورودی اقلام» (30 days up to the last warehouse-stock upload) — same files as the bot."""
+    if ext not in ("pdf", "xlsx"):
+        return RedirectResponse(f"/reports?err={quote('قالب نامعتبر')}#inbound", status_code=303)
+    win = inbound_svc.window_events(db)
+    if not win.get("anchor"):
+        return RedirectResponse(f"/reports?err={quote('هنوز گزارش اقلام ورودی ثبت نشده است.')}#inbound",
+                                status_code=303)
+    try:
+        pdf_path, xlsx_path = inbound_svc.build_window_files(db, win)
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(
+            f"/reports?err={quote(user_errors.error_fa('خطا در تولید گزارش ورودی اقلام', exc))}#inbound",
+            status_code=303)
+    log_activity(db, user, "report_inbound_window" + ("_xlsx" if ext == "xlsx" else ""),
+                 n_events=int(win.get("n_events") or 0), source="web")
+    path = pdf_path if ext == "pdf" else xlsx_path
+    return FileResponse(path, media_type="application/pdf" if ext == "pdf" else _XLSX, filename=path.name)
 
 
 @router.get("/inbound/{report_id}.pdf")
