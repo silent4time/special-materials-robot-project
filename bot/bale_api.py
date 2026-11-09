@@ -110,7 +110,9 @@ class BaleClient:
         chat_id: int | str,
         file_path: Path | str,
         caption: str | None = None,
+        filename: str | None = None,
     ) -> dict:
+        """Send a local file. ``filename`` (optional) = name shown to the receiver."""
         path = Path(file_path)
         data: dict[str, Any] = {"chat_id": str(chat_id)}
         if caption:
@@ -125,7 +127,7 @@ class BaleClient:
         else:
             mime = "application/pdf"
         with path.open("rb") as fh:
-            files = {"document": (path.name, fh, mime)}
+            files = {"document": (filename or path.name, fh, mime)}
             return self._call("sendDocument", data=data, files=files)
 
     def send_voice(self, chat_id: int | str, file_path: Path | str, caption: str | None = None) -> dict:

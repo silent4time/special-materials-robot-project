@@ -16,6 +16,33 @@
     <button class="btn" type="submit">ساخت لینک دعوت</button>
   </form>
 </div>
+{% macro guide_row(d) %}
+    <tr id="guide-{{ d.target }}">
+      <td>{{ d.title }}</td>
+      <td>{{ d.source_fa }}</td>
+      <td>{{ d.name }}{% if d.size_fa %} ({{ d.size_fa }}){% endif %}</td>
+      <td>{% if d.exists %}<a href="/settings/users/guides/{{ d.target }}/file">دریافت PDF</a>{% endif %}</td>
+      <td><form method="post" action="/settings/users/guides/{{ d.target }}/upload" enctype="multipart/form-data" style="display:inline">
+        <input type="file" name="file" accept="application/pdf,.pdf" required>
+        <button type="submit">آپلود</button></form></td>
+      <td>{% if d.is_custom %}<form method="post" action="/settings/users/guides/{{ d.target }}/restore" style="display:inline" onsubmit="return confirm('فایل پیش‌فرض دوباره فعال شود؟')"><button type="submit">↺ پیش‌فرض</button></form>{% else %}—{% endif %}</td>
+    </tr>
+{% endmacro %}
+<div class="card">
+  <h2>📘 معرفی ربات و 📄 راهنمای نقش</h2>
+  <p>بعد از پذیرش هر دعوت، پس از پیام خوشامد، «راهنمای کار با ربات» مخصوص نقش کاربر و «معرفی ربات» برایش ارسال می‌شود (فقط در اولین ورود با دعوت، نه در هر /start).
+  تا وقتی فایلی آپلود نکنید، فایل پیش‌فرض ارسال می‌شود. فقط PDF، حداکثر {{ max_pdf_mb }} مگابایت.</p>
+  <h3>📘 معرفی ربات</h3>
+  <table class="table">
+    <tr><th>فایل</th><th>وضعیت</th><th>فایل فعلی</th><th>👁 دریافت</th><th>📤 آپلود PDF</th><th>↺ بازگشت به پیش‌فرض</th></tr>
+    {{ guide_row(intro_doc) }}
+  </table>
+  <h3>📄 راهنمای نقش</h3>
+  <table class="table">
+    <tr><th>نقش</th><th>وضعیت</th><th>فایل فعلی</th><th>👁 دریافت</th><th>📤 آپلود PDF</th><th>↺ بازگشت به پیش‌فرض</th></tr>
+    {% for d in role_docs %}{{ guide_row(d) }}{% endfor %}
+  </table>
+</div>
 <div class="card">
   <h2>📋 لیست کاربران</h2>
   <table class="table">
