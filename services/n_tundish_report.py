@@ -2,8 +2,9 @@
 
 Reuses the «اقلام بحرانی» rate pipeline exactly (``analytics.critical_items``):
 1800 excluded, section/supplier attribution, priority ≠ 0 per 4-digit code,
-merged-cell rates counted once per code, renovation+patching («با نوسازی») or
-patching only («بدون نوسازی»), + casting-floor × N, nozzle shared-need groups
+merged-cell rates counted once per code, patching × N + renovation × min(N, annual
+cap) («با نوسازی», v1.7.0 analytics.renovation_caps) or patching only («بدون نوسازی»),
++ casting-floor × N, nozzle shared-need groups
 (need once + per-code stock + subtotal). Company (شرکت) and contractor
 (پیمانکار) rows are computed separately and listed together with a
 «تأمین‌کننده» column.
@@ -33,6 +34,13 @@ from analytics.critical_items import (
     normalize_reno_mode,
     prepare_code_rates,
 )
+from analytics.renovation_caps import (
+    ANNUAL_RENOVATION_CAP,
+    capped_renovations_for_mix,
+    capped_renovations_for_n,
+    caps_text_fa,
+)
+from analytics.critical_items import fmt_count
 from services.units import unit_fa
 
 SECTIONS: dict[str, str] = {"slab": "اسلب", "bloom": "بلوم", "billet": "بیلت"}
@@ -105,7 +113,12 @@ class NTundishResult:
     @property
     def basis_line(self) -> str:
         mode = RENO_LABEL_FA[self.reno_mode]
-        per = "نوسازی + پچینگ" if self.reno_mode == RENO_WITH else "فقط پچینگ"
+        if self.reno_mode == RENO_WITH:
+            reno_n = capped_renovations_for_n(self.section, self.n)
+            per = (f"پچینگ × {self.n} تاندیش + نوسازی × {fmt_count(reno_n)} تاندیش "
+                   f"(سقف سالانهٔ نوسازی {SECTIONS[self.section]}: {ANNUAL_RENOVATION_CAP[self.section]})")
+        else:
+            per = f"فقط پچینگ × {self.n} تاندیش"
         return (
             f"مبنا: نرخ مصرف به ازای هر تاندیش از منبع اصلی ({mode}: {per}) + سطح ریخته‌گری × {self.n}؛ "
             "همان قواعد اقلام بحرانی (اولویت ۰ و کد ۱۸۰۰ حذف، نرخ سلول ادغام‌شده یک‌بار برای هر کد، "
@@ -407,6 +420,22 @@ def per_tundish_rates(rates: dict[str, float], reno_mode: str = RENO_WITH) -> di
     } | {"casting_floor": float(rates.get("casting_floor") or 0)}
 
 
+def effective_per_tundish(rates: dict[str, float], mix: dict[str, int], reno_mode: str = RENO_WITH) -> dict[str, float]:
+    """Average consumption per tundish of each type for this mix, renovation capped
+    (patching + renovation × min(N, annual cap) ÷ N). A type with N = 0 shows its
+    uncapped single-tundish rate (one tundish ≤ every cap)."""
+    reno = 1.0 if normalize_reno_mode(reno_mode) == RENO_WITH else 0.0
+    out: dict[str, float] = {}
+    for sec in MIX_ORDER:
+        n = float(mix.get(sec) or 0)
+        r_p = float(rates.get(f"{sec}_patching") or 0)
+        r_r = float(rates.get(f"{sec}_renovation") or 0)
+        share = capped_renovations_for_n(sec, n) / n if n > 0 else 1.0
+        out[sec] = r_p + reno * r_r * share
+    out["casting_floor"] = float(rates.get("casting_floor") or 0)
+    return out
+
+
 def rate_entries(inventory_df: pd.DataFrame | None, reno_mode: str = RENO_WITH, *,
                  shared_mode: str | None = None) -> list[dict[str, Any]]:
     """One entry per 4-digit code (or shared-need nozzle group) and supplier:
@@ -480,10 +509,16 @@ class MixResult:
 
     @property
     def basis_line(self) -> str:
-        per = "نوسازی + پچینگ" if self.reno_mode == RENO_WITH else "فقط پچینگ"
+        if self.reno_mode == RENO_WITH:
+            caps = capped_renovations_for_mix(self.mix)
+            reno_txt = "، ".join(f"{SECTIONS[k]} {fmt_count(caps[k])}" for k in MIX_ORDER if self.mix.get(k))
+            per = f"پچینگ × تعداد هر نوع + نوسازی فقط برای تاندیش‌های نوسازی‌شده ({reno_txt})"
+        else:
+            per = "فقط پچینگ × تعداد هر نوع"
         return (
-            f"مبنا: مصرف هر تاندیش هر نوع از منبع اصلی ({RENO_LABEL_FA[self.reno_mode]}: {per}) × تعداد آن نوع "
-            f"+ سطح ریخته‌گری × کل تاندیش‌ها ({self.total})؛ همان قواعد اقلام بحرانی. کسری = نیاز − موجودی."
+            f"مبنا: مصرف هر تاندیش هر نوع از منبع اصلی ({RENO_LABEL_FA[self.reno_mode]}: {per}) "
+            f"+ سطح ریخته‌گری × کل تاندیش‌ها ({self.total})؛ {caps_text_fa()}؛ همان قواعد اقلام بحرانی. "
+            "ستون‌های «مصرف هر تاندیش» میانگین واقعی هر تاندیش با همین سقف است. کسری = نیاز − موجودی."
         )
 
     @property
@@ -572,6 +607,8 @@ def build_mix_rows(
                                  COL_PER_SLAB: "—", COL_PER_CF: "—", need_col: SHARED_NEED_LABEL,
                                  COL_STOCK: _num(st), COL_SHORT: "—"})
         i += 1
+        # v1.7.0: average per tundish of each type with the renovation cap (Σ per × count + cf = need)
+        e["per"] = effective_per_tundish(e["rates"], mix, reno_mode)
         row = {COL_ROW: i, COL_CODE: e["code"], COL_KEYWORD: e["desc"], COL_UNIT: e["unit"],
                COL_SUPPLIER: sup,
                COL_PER_BILLET: _num(e["per"]["billet"], 3), COL_PER_BLOOM: _num(e["per"]["bloom"], 3),
