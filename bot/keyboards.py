@@ -5,7 +5,7 @@ Menu tree (role-filtered through ``services.permissions``)::
     منوی اصلی
     ├─ 📥 موجودی روزانه سایت      ├─ 🧾 گزارش تاندیش
     ├─ 🛒 درخواست مواد            ├─ ↩️ برگشت به انبار
-    ├─ 📊 گزارش‌ها                ├─ 🎯 هدف اصلی
+    ├─ 📊 گزارش‌ها  →  پیش بینی مواد بر حسب تناژ تولید
     ├─ 📤 ورود فایل‌ها → 📦 منبع اصلی
     └─ ⚙️ تنظیمات (مالک/مدیر)     └─ ❓ راهنما
 
@@ -39,7 +39,7 @@ MENU_PARENT: dict[str, str | None] = {
     "reports": "main",
     "critical": "reports",
     "inbound_history": "reports",
-    "main_goal": "main",
+    "main_goal": "reports",
     "mg_inputs": "main_goal",
     "mg_history": "main_goal",
     "files": "main",
@@ -100,7 +100,7 @@ BTN_TR_MENU = "🧾 گزارش تاندیش"
 BTN_MATERIAL_REQUEST = "🛒 درخواست مواد"
 BTN_WAREHOUSE_RETURN = "↩️ برگشت به انبار"
 BTN_ANALYTICS = "📊 گزارش‌ها"
-BTN_MAIN_GOAL = "🎯 هدف اصلی"
+BTN_MAIN_GOAL = "پیش بینی مواد بر حسب تناژ تولید"
 BTN_MG_MENU = BTN_MAIN_GOAL
 BTN_UPLOAD_MENU = "📤 ورود فایل‌ها"
 BTN_BOT_SETTINGS = "⚙️ تنظیمات"
@@ -408,6 +408,7 @@ LEGACY_ALIASES: dict[str, str] = {
     # main menu
     "🧾 گزارش تاندیش بعد از ریخته‌گری": BTN_TR_MENU,
     "📊 گزارش‌ها / تحلیل تاندیش": BTN_ANALYTICS,
+    "🎯 هدف اصلی": BTN_MAIN_GOAL,
     "🎯 گزارش هدف اصلی": BTN_MAIN_GOAL,
     "📤 آپلود فایل": BTN_UPLOAD_MENU,
     "⚙️ تنظیمات ربات": BTN_BOT_SETTINGS,
@@ -616,7 +617,7 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
     for pair in (
         [(perm.SITE_STOCK, BTN_SITE_STOCK), (perm.TUNDISH_REPORT, BTN_TR_MENU)],
         [(perm.MATERIAL_REQUEST, BTN_MATERIAL_REQUEST), (perm.WAREHOUSE_RETURN, BTN_WAREHOUSE_RETURN)],
-        [(perm.REPORTS, BTN_ANALYTICS), (perm.MAIN_GOAL, BTN_MAIN_GOAL)],
+        [(perm.REPORTS, BTN_ANALYTICS)],
         [((perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT), BTN_UPLOAD_MENU)],
         [(perm.SETTINGS, BTN_BOT_SETTINGS)],
     ):
@@ -732,6 +733,7 @@ def analytics_menu(user: dict | None = None) -> dict:
         (perm.REPORT_INBOUND, BTN_INBOUND),
         (perm.REPORT_MONTHLY_SUMMARY, BTN_MONTHLY_SUMMARY),
         (perm.REPORT_STOCK, BTN_STOCK_REPORT),
+        (perm.MAIN_GOAL, BTN_MAIN_GOAL),
     ]
     labels = [lbl for feat, lbl in items if u is None or perm.can(u, feat)]
     return _kb(_pairs(labels), "reports")

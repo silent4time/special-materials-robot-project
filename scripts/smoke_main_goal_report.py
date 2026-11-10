@@ -163,8 +163,15 @@ def test_bot_menu_wiring() -> None:
     from bot import keyboards as kb
     from services import main_goal_report as mg
 
-    assert kb.BTN_MAIN_GOAL in str(kb.main_menu({"active": 1, "role": "owner"}))  # main menu since phase 1
-    assert kb.BTN_MAIN_GOAL not in str(kb.main_menu({"active": 1, "role": "technician"}))
+    owner = {"active": 1, "role": "owner"}
+    tech = {"active": 1, "role": "technician"}
+    assert kb.BTN_MAIN_GOAL not in str(kb.main_menu(owner))
+    assert kb.BTN_MAIN_GOAL in str(kb.analytics_menu(owner))
+    assert kb.BTN_MAIN_GOAL not in str(kb.main_menu(tech))
+    assert kb.BTN_MAIN_GOAL not in str(kb.analytics_menu(tech))
+    assert kb.MENU_PARENT["main_goal"] == "reports"
+    assert kb.canonical("🎯 هدف اصلی") == kb.BTN_MAIN_GOAL
+    assert kb.canonical("🎯 گزارش هدف اصلی") == kb.BTN_MAIN_GOAL
     assert mg.can_run({"active": 1, "role": "owner"})
     assert mg.can_run({"active": 1, "role": "manager"})
     assert mg.can_run({"active": 1, "role": "responsible_officer"})

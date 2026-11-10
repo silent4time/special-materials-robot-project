@@ -1,6 +1,7 @@
-"""Bale UX for «🎯 هدف اصلی» — سابقهٔ چندماهه + دو سناریو.
+"""Bale UX for «پیش بینی مواد بر حسب تناژ تولید» — سابقهٔ چندماهه + دو سناریو.
 
-Menu: منوی اصلی → 🎯 هدف اصلی
+Menu: منوی اصلی → 📊 گزارش‌ها → پیش بینی مواد بر حسب تناژ تولید
+(old label «🎯 هدف اصلی» still opens it)
 Roles: owner / manager / responsible_officer (حذف ماه: owner / manager)
 
 Flow:
@@ -133,7 +134,7 @@ class MainGoalReportFlow(ProductionStatsMixin):
         if not mg.can_run(user):
             self._reply(
                 message,
-                "دسترسی «هدف اصلی» ندارید (مالک / مدیر / کاردان مسئول).",
+                f"دسترسی «{kb.BTN_MAIN_GOAL}» ندارید (مالک / مدیر / کاردان مسئول).",
                 kb.main_menu(user),
             )
             return None

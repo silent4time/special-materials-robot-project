@@ -79,7 +79,7 @@ FEATURE_LABEL_FA: dict[str, str] = {
     REPORT_INBOUND: "گزارش اقلام ورودی به انبار",
     REPORT_MONTHLY_SUMMARY: "خلاصه مصرف ماهیانه",
     REPORT_STOCK: "گزارش موجودی انبار",
-    MAIN_GOAL: "هدف اصلی",
+    MAIN_GOAL: "پیش بینی مواد بر حسب تناژ تولید",
     MAIN_GOAL_DELETE: "حذف ماه ذخیره‌شدهٔ هدف اصلی",
     FILE_INPUTS: "ورود فایل‌ها",
     MAIN_SOURCE_EDIT: "ویرایش منبع اصلی",
@@ -132,7 +132,9 @@ REPORT_FEATURES = (
 SETTINGS_FEATURES = (
     USERS, USER_ACTIVITY, ROLE_PERMISSIONS, TUNDISH_REPORT_SETTINGS, REMINDERS, STOCK_GROUP, APPEARANCE, BACKUP,
 )
-DERIVED = {REPORTS: REPORT_FEATURES, SETTINGS: SETTINGS_FEATURES}
+# MAIN_GOAL lives inside «📊 گزارش‌ها», so that menu is shown when the feature is on
+# even if every other report toggle is off. The feature key stays ``main_goal``.
+DERIVED = {REPORTS: REPORT_FEATURES + (MAIN_GOAL,), SETTINGS: SETTINGS_FEATURES}
 # owner/manager only, never toggled (spec: users & role-permission pages)
 LOCKED_ADMIN_ONLY = frozenset({USERS, ROLE_PERMISSIONS})
 LOCKED_ADMIN_ONLY_NOTE_FA = "فقط مالک و مدیر (قفل)"

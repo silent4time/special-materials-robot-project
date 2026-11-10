@@ -309,6 +309,17 @@ def test_assistant_and_web(db, bot_body: str) -> None:
     app.state._uid = MANAGER
     print("  web assistant (assistant off): answer / clarify / permission OK")
 
+    from bot import keyboards as kb
+
+    home = c.get("/home").text
+    reports = c.get("/reports").text
+    assert "پیش بینی مواد بر حسب تناژ تولید" in reports and 'href="/reports/main-goal"' in reports, reports[:2500]
+    assert "🎯 هدف اصلی" not in home and "پیش بینی مواد بر حسب تناژ تولید" not in home
+    assert kb.BTN_MAIN_GOAL not in kb.keyboard_texts(kb.main_menu(db.get_user(MANAGER)))
+    assert kb.BTN_MAIN_GOAL in kb.keyboard_texts(kb.analytics_menu(db.get_user(MANAGER)))
+    assert kb.canonical("🎯 هدف اصلی") == kb.BTN_MAIN_GOAL
+    print("  menu moved into گزارش‌ها (old label still opens it) OK")
+
     # web «سناریو ۱ — تناژ هدف» = bot: same billet-only material rows
     import json
 
