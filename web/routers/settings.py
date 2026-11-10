@@ -135,17 +135,14 @@ async def main_source_settings(
     )
 
 
-def _edit_record_context(db: Database, user: dict, item_id: str) -> tuple[dict | None, str | None]:
-    """v1.7.0: current details of one record + one entry per editable field (bot order)."""
-    frame = main_source_svc.load_primary_frame(db, bale_user_id=user["bale_user_id"])
-    if frame is None or frame.empty:
-        return None, "منبع اصلی خالی است. ابتدا فایل را آپلود یا رکورد جدید اضافه کنید."
-    _idx, row = main_source_svc.find_row_by_id(frame, item_id)
-    if row is None:
-        return None, f"شناسه «{item_id}» یافت نشد."
-    fields = main_source_svc.edit_fields()
+def _edit_hit_context(hit: dict) -> dict:
+    row = hit["row"]
+    fields = main_source_svc.edit_fields(row)
+    iid = main_source_svc._cell_str(row.get("id"))
     return {
-        "id": main_source_svc._cell_str(row.get("id")) or item_id,
+        "id": iid,
+        "id_label": iid or main_source_svc.NO_ID_FA,
+        "row_pos": hit["pos"],
         "details": main_source_svc.format_row_fa(row).split("\n"),
         "fields": [
             {"key": k, "label": main_source_svc.FIELD_LABELS_FA.get(k, k),
@@ -154,22 +151,66 @@ def _edit_record_context(db: Database, user: dict, item_id: str) -> tuple[dict |
             for i, k in enumerate(fields, 1)
         ],
         "total": len(fields),
-    }, None
+    }
+
+
+def _edit_record_context(db: Database, user: dict, item_id: str) -> tuple[dict | None, str | None]:
+    """Backward-compatible exact id lookup (v1.7.0 callers)."""
+    frame = main_source_svc.load_primary_frame(db, bale_user_id=user["bale_user_id"])
+    if frame is None or frame.empty:
+        return None, "منبع اصلی خالی است. ابتدا فایل را آپلود یا رکورد جدید اضافه کنید."
+    found = main_source_svc.search_inventory(frame, item_id)
+    if found["exact"]:
+        return _edit_hit_context(found["exact"]), None
+    if found["matches"]:
+        return None, None
+    return None, f"چیزی برای «{item_id}» پیدا نشد."
 
 
 @router.get("/main-source/edit")
 async def main_source_edit_pick(
     request: Request,
     id: str = "",
+    q: str = "",
+    pos: str = "",
     user=Depends(require_feature(perm.MAIN_SOURCE_EDIT)),
     db: Database = Depends(get_db),
 ):
-    """Step 1 (same as the bot): send the ID → current details + one input per field."""
-    item_id = str(id or "").strip()
-    ctx_edit, error = _edit_record_context(db, user, item_id) if item_id else (None, "شناسه مواد الزامی است.")
-    ctx = _main_source_context(db, user, error=error)
-    ctx["edit_record"] = ctx_edit
-    return render(request, "settings_main_source.html", ctx, status_code=400 if error else 200)
+    """Search by 4-digit code, id, or keyword — same rules as the bot."""
+    query = str(q or id or "").strip()
+    ctx = _main_source_context(db, user)
+    ctx["edit_query"] = query
+    frame = main_source_svc.load_primary_frame(db, bale_user_id=user["bale_user_id"])
+    if pos.strip():
+        try:
+            position = int(pos)
+        except ValueError:
+            ctx["error"] = "شمارهٔ رکورد نامعتبر است."
+            return render(request, "settings_main_source.html", ctx, status_code=400)
+        _idx, row = main_source_svc.row_at(frame, position)
+        if row is None:
+            ctx["error"] = "این رکورد دیگر در منبع اصلی نیست."
+            return render(request, "settings_main_source.html", ctx, status_code=400)
+        ctx["edit_record"] = _edit_hit_context({"pos": position, "row": row})
+        return render(request, "settings_main_source.html", ctx)
+    if not query:
+        return render(request, "settings_main_source.html", ctx)
+    if frame is None or frame.empty:
+        ctx["error"] = "منبع اصلی خالی است. ابتدا فایل را آپلود یا رکورد جدید اضافه کنید."
+        return render(request, "settings_main_source.html", ctx, status_code=400)
+    found = main_source_svc.search_inventory(frame, query)
+    if found["exact"]:
+        ctx["edit_record"] = _edit_hit_context(found["exact"])
+        return render(request, "settings_main_source.html", ctx)
+    if found["matches"]:
+        ctx["edit_matches"] = [
+            {"pos": hit["pos"], "label": main_source_svc.match_label(hit)} for hit in found["matches"]
+        ]
+        ctx["edit_more"] = found["more"]
+        ctx["edit_total"] = found["total"]
+        return render(request, "settings_main_source.html", ctx)
+    ctx["error"] = f"چیزی برای «{query}» پیدا نشد."
+    return render(request, "settings_main_source.html", ctx, status_code=400)
 
 
 @router.post("/main-source/edit")
@@ -180,26 +221,40 @@ async def main_source_edit(
 ):
     """Step 2: every field answered separately; an empty field keeps the previous value."""
     form = await request.form()
-    item_id = str(form.get("id") or "").strip()
-    answers = {key: str(form.get(key) or "") for key in main_source_svc.edit_fields() if key in form}
+    lookup_id = str(form.get("lookup_id") or "").strip()
+    row_pos = None
+    if str(form.get("row_pos") or "").strip():
+        try:
+            row_pos = int(str(form.get("row_pos")))
+        except ValueError:
+            row_pos = None
+    if row_pos is None and not lookup_id:
+        lookup_id = str(form.get("id") or "").strip()
     error = None
     message = None
     try:
-        if not item_id:
-            raise ValueError("شناسه مواد الزامی است.")
+        if row_pos is None and not lookup_id:
+            raise ValueError("رکورد را با کد، آیدی یا کلیدواژه پیدا کنید.")
         frame = main_source_svc.load_primary_frame(db, bale_user_id=user["bale_user_id"])
-        _idx, current = main_source_svc.find_row_by_id(frame if frame is not None else None, item_id)
+        current = None
+        if row_pos is not None:
+            _idx, current = main_source_svc.row_at(frame, row_pos)
         if current is None:
-            raise KeyError(f"ردیفی با شناسه «{item_id}» یافت نشد.")
+            _idx, current = main_source_svc.find_row_by_id(frame if frame is not None else None, lookup_id)
+        if current is None:
+            raise KeyError(f"ردیفی با شناسه «{lookup_id or 'بدون آیدی'}» یافت نشد.")
+        fields = main_source_svc.edit_fields(current)
+        answers = {key: str(form.get(key) or "") for key in fields if key in form}
         updates = main_source_svc.collect_edit_updates(current, answers)
         if not updates:
             raise ValueError("تغییری ثبت نشد؛ همهٔ فیلدها همان مقدار قبلی را دارند (خانهٔ خالی = مقدار قبلی).")
         result = main_source_svc.upsert_row(
-            db, item_id, updates, bale_user_id=user["bale_user_id"]
+            db, lookup_id or main_source_svc._cell_str(current.get("id")), updates,
+            bale_user_id=user["bale_user_id"], row_pos=row_pos,
         )
         log_activity(
             db, user, "web_edit_main_source_record",
-            item_id=str(result.get("id") or item_id),
+            item_id=str(result.get("id") or lookup_id),
             changes_fa=main_source_svc.changes_fa(result.get("changes") or []),
         )
         message = f"✅ رکورد «{result.get('id')}» به‌روز شد."
@@ -316,7 +371,7 @@ async def main_source_download(
     db: Database = Depends(get_db),
 ):
     """«📄 دانلود اکسل منبع اصلی» — same export as the bot."""
-    from fastapi.responses import FileResponse, RedirectResponse
+    from fastapi.responses import FileResponse
 
     from analytics.frames import load_primary_inventory
     from config import REPORT_DIR
@@ -324,11 +379,16 @@ async def main_source_download(
     from services.file_names import fa_stem, unique_dir
 
     frame = load_primary_inventory(db, user)
-    if frame is None or frame.empty:
-        return RedirectResponse("/settings/main-source", status_code=303)
     out = unique_dir(REPORT_DIR, "main_source") / f"{fa_stem('منبع اصلی')}.xlsx"
-    export_dataframe_xlsx(frame, out, columns=list(main_source_svc.INVENTORY_COLUMNS),
-                          header_map=main_source_svc.FIELD_LABELS_FA, sheet_name="ریز اطلاعات")
+    empty = frame is None or frame.empty
+    export_dataframe_xlsx(
+        frame if not empty else pd.DataFrame(),
+        out,
+        columns=list(main_source_svc.INVENTORY_COLUMNS),
+        header_map=main_source_svc.FIELD_LABELS_FA,
+        sheet_name="ریز اطلاعات",
+        allow_empty=empty,
+    )
     log_activity(db, user, "download_main_source")
     return FileResponse(out, filename=out.name,
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

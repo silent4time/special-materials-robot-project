@@ -294,7 +294,24 @@ class BotApp:
         if key not in ("main", "flow"):
             self._nav_markups.setdefault(uid, {})[key] = dict(markup)
         self._mark_flow(uid, key == "flow")
-        if key == "flow":
+        if key == "assistant_ask":
+            if cur.get("key") == "assistant_ask":
+                origin = cur.get("origin") or "main"
+                section = cur.get("section")
+            elif cur.get("key") == "flow":
+                origin = cur.get("origin") or "main"
+                section = None
+            else:
+                origin = cur.get("key") or "main"
+                section = None
+            if origin == "tr_section_settings":
+                sp = self.tundish_report.settings_pending.get(uid) or {}
+                section = sp.get("section") or section
+            nav = {"key": "assistant_ask", "origin": origin or "main"}
+            if section:
+                nav["section"] = str(section)
+            self._nav[uid] = nav
+        elif key == "flow":
             origin = cur.get("origin") if cur.get("key") == "flow" else cur.get("key")
             self._nav[uid] = {"key": "flow", "origin": origin or "main"}
         else:
@@ -392,6 +409,12 @@ class BotApp:
             "appearance_item": self.on_appearance_menu,
             "letterhead": self.on_appearance_menu,
             "stock_group": self.on_bot_settings_menu,
+            "backup": self.on_backup_menu,
+            "update": self.on_about,
+            "role_perms": self.on_role_permissions,
+            "material_request": self.on_material_request_start,
+            "warehouse_return": self.on_warehouse_return_start,
+            "tr_section_settings": self.tundish_report.open_settings,
         }
         opener = openers.get(key)
         if opener is None:
@@ -470,6 +493,16 @@ class BotApp:
         if not user:
             return
         uid = str(user["bale_user_id"])
+        cur = self._nav.get(uid) or {}
+        if cur.get("key") == "assistant_ask":
+            target = cur.get("origin") or "main"
+            section = cur.get("section")
+            self._clear_all_pending(uid)
+            if target == "tr_section_settings" and section:
+                self.tundish_report.open_section_settings(message, section)
+                return
+            self._open_menu(message, user, target)
+            return
         try:
             if self._step_back(message, user, uid):
                 return
@@ -2703,24 +2736,41 @@ class BotApp:
         if self._deny_technician(message, user, perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT):
             return
         menu = kb.main_source_file_menu(user)
+        frame = None
         try:
             frame = load_primary_inventory(self.db, user)
         except Exception as exc:  # noqa: BLE001
             logger.exception("load primary inventory for download failed")
             self._reply(message, user_errors.error_fa("خطا در خواندن منبع اصلی", exc), menu)
             return
-        if frame is None or getattr(frame, "empty", True):
-            self._reply(
-                message,
-                "هنوز فایل منبع اصلی آپلود نشده است.\n"
-                "ابتدا از «ورود فایل اکسل منبع اصلی» یا «موجودی انبار» فایل را بفرستید.",
-                menu,
-            )
-            return
+        empty = frame is None or getattr(frame, "empty", True)
         try:
             from services.file_names import fa_stem, unique_dir
 
             out = unique_dir(REPORT_DIR, "main_source") / f"{fa_stem('منبع اصلی')}.xlsx"
+            if empty:
+                export_dataframe_xlsx(
+                    pd.DataFrame(),
+                    out,
+                    columns=list(INVENTORY_COLUMNS),
+                    header_map=FIELD_LABELS_FA,
+                    sheet_name="ریز اطلاعات",
+                    allow_empty=True,
+                )
+                self.client.send_document(
+                    self._chat_id(message),
+                    out,
+                    caption="قالب خالی منبع اصلی (فقط سرستون‌ها)",
+                )
+                self._reply(
+                    message,
+                    "منبع اصلی رکورد داده‌ای ندارد.\n"
+                    "یک فایل اکسل فقط با سرستون‌های فارسی ارسال شد. "
+                    "بعد از پر کردن، از «📦 جایگزینی کامل منبع اصلی» بارگذاری کنید.\n"
+                    "کدهای دسته‌بندی در پایگاه جدا ذخیره می‌شوند و با این دانلود عوض نمی‌شوند.",
+                    menu,
+                )
+                return
             export_dataframe_xlsx(
                 frame,
                 out,
@@ -2744,6 +2794,36 @@ class BotApp:
             self._reply(message, user_errors.error_fa("خطا در ساخت اکسل منبع اصلی", exc), menu)
 
 
+    def _begin_main_source_edit(self, message: dict, user: dict, hit: dict) -> None:
+        row = dict(hit.get("row") or {})
+        uid = str(user["bale_user_id"])
+        fields = main_source_svc.edit_fields(row)
+        item_id = main_source_svc._cell_str(row.get("id"))
+        self._main_source_pending[uid] = {
+            "mode": "edit_fields",
+            "item_id": item_id,
+            "row_pos": int(hit["pos"]),
+            "raw_row": row,
+            "fields": fields,
+            "field_idx": 0,
+            "answers": {},
+        }
+        title = item_id or main_source_svc.NO_ID_FA
+        self._reply(
+            message,
+            "رکورد فعلی:\n"
+            + main_source_svc.format_row_fa(row)
+            + "\n\nفیلدها یکی‌یکی پرسیده می‌شوند. برای نگه داشتن مقدار قبلی هر فیلد "
+            f"«{main_source_svc.EDIT_KEEP_LABEL}» را بزنید."
+            + ("" if item_id else "\nاین رکورد آیدی ندارد؛ می‌توانید در پرسش آیدی، یک شناسهٔ تازه بگذارید."),
+            kb.edit_field_menu(),
+        )
+        self._reply(
+            message,
+            main_source_svc.edit_prompt_fa(fields[0], row, 1, len(fields)) + f"\n({title})",
+            kb.edit_field_menu(),
+        )
+
     def on_inv_edit_record_start(self, message: dict) -> None:
         user = self._user_or_deny(message)
         if not user:
@@ -2759,14 +2839,12 @@ class BotApp:
                 kb.inventory_edit_menu(user),
             )
             return
-        preview = main_source_svc.list_ids_preview(frame, limit=25)
+        preview = main_source_svc.list_ids_preview(frame, limit=8)
         self._main_source_pending[uid] = {"mode": "edit_pick_id"}
-        body = "شناسه رکورد را ارسال کنید (یا یکی از موارد زیر):\n" + "\n".join(preview)
-        if len(frame) > 25:
-            body += f"\n… و {int(len(frame)) - 25} مورد دیگر"
-        body += (
-            f"\n\nبرای انصراف «{kb.BTN_CANCEL_PENDING}» را بزنید."
-        )
+        body = main_source_svc.EDIT_SEARCH_PROMPT_FA
+        if preview:
+            body += "\n\nچند رکورد برای نمونه:\n" + "\n".join(preview)
+        body += f"\n\nبرای انصراف «{kb.BTN_CANCEL_PENDING}» را بزنید."
         self._reply(message, body, kb.cancel_pending_menu())
 
     def on_inv_add_record_start(self, message: dict) -> None:
@@ -2895,53 +2973,49 @@ class BotApp:
 
         mode = pending.get("mode")
         if mode == "edit_pick_id":
-            item_id = text.strip().split()[0]
-            # allow "ID — name" paste from preview
-            if "—" in item_id:
-                item_id = item_id.split("—", 1)[0].strip()
-            if " - " in item_id and len(item_id) > 20:
-                item_id = item_id.split(" - ", 1)[0].strip()
+            query = text.strip()
+            # allow "ID — name" paste from an old preview
+            head = query.split()[0] if query.split() else query
+            if "—" in head:
+                query = head.split("—", 1)[0].strip()
+            elif " - " in query and len(query) > 20:
+                query = query.split(" - ", 1)[0].strip()
             frame = main_source_svc.load_primary_frame(self.db, bale_user_id=uid)
             if frame is None:
                 frame = pd.DataFrame()
-            _idx, row = main_source_svc.find_row_by_id(frame, item_id)
-            if row is None:
+            found = main_source_svc.search_inventory(frame, query)
+            if found["exact"]:
+                self._begin_main_source_edit(message, user, found["exact"])
+                return True
+            if not found["matches"]:
                 self._reply(
                     message,
-                    f"شناسه «{item_id}» یافت نشد. دوباره شناسه را بفرستید یا انصراف بزنید.",
+                    f"چیزی برای «{query}» پیدا نشد. کد چهار رقمی، آیدی یا کلیدواژه را دوباره بفرستید، یا انصراف بزنید.",
                     kb.cancel_pending_menu(),
                 )
                 return True
-            fields = main_source_svc.edit_fields()
-            self._main_source_pending[uid] = {
-                "mode": "edit_fields",
-                "item_id": str(row.get("id") or item_id),
-                "raw_row": dict(row),
-                "fields": fields,
-                "field_idx": 0,
-                "answers": {},
-            }
-            self._reply(
-                message,
-                "رکورد فعلی:\n"
-                + main_source_svc.format_row_fa(row)
-                + "\n\nفیلدها یکی‌یکی پرسیده می‌شوند. برای نگه داشتن مقدار قبلی هر فیلد "
-                f"«{main_source_svc.EDIT_KEEP_LABEL}» را بزنید.",
-                kb.edit_field_menu(),
-            )
-            self._reply(
-                message,
-                main_source_svc.edit_prompt_fa(fields[0], row, 1, len(fields)),
-                kb.edit_field_menu(),
+            lines = ["چند رکورد پیدا شد. یکی را انتخاب کنید:"]
+            if found["more"]:
+                lines.append(main_source_svc.EDIT_SEARCH_MORE_FA.format(
+                    total=found["total"], limit=main_source_svc.SEARCH_LIMIT,
+                ))
+            rows = [[
+                {"text": main_source_svc.match_label(hit),
+                 "callback_data": f"{main_source_svc.CB_EDIT_PICK}{hit['pos']}"},
+            ] for hit in found["matches"]]
+            self.client.send_message(
+                self._chat_id(message),
+                "\n".join(lines),
+                reply_markup=BaleClient.inline_keyboard(rows),
             )
             return True
 
         if mode == "edit_fields":
             # v1.7.0: one question per field; empty answer keeps the previous value
             item_id = pending.get("item_id") or ""
-            fields = list(pending.get("fields") or main_source_svc.edit_fields())
-            idx = int(pending.get("field_idx") or 0)
             raw_row = dict(pending.get("raw_row") or {})
+            fields = list(pending.get("fields") or main_source_svc.edit_fields(raw_row))
+            idx = int(pending.get("field_idx") or 0)
             answers = dict(pending.get("answers") or {})
             if idx < len(fields):
                 answers[fields[idx]] = text
@@ -2965,7 +3039,8 @@ class BotApp:
                 return True
             try:
                 result = main_source_svc.upsert_row(
-                    self.db, item_id, updates, bale_user_id=uid
+                    self.db, item_id, updates, bale_user_id=uid,
+                    row_pos=pending.get("row_pos"),
                 )
             except (KeyError, ValueError) as exc:
                 self._reply(message, str(exc), kb.inventory_edit_menu(user))
@@ -5309,6 +5384,38 @@ class BotApp:
             except BaleAPIError as exc:
                 logger.warning("answerCallbackQuery failed: %s", exc)
 
+        if data == kb.CB_ASK_ASSISTANT:
+            user = ensure_registered(self.db, uid, self._display_name(message))
+            if not user:
+                answer("شما در سیستم ثبت نشده‌اید.", alert=True)
+                return
+            answer()
+            self.on_assistant_ask_start(message)
+            return
+
+        if data.startswith(main_source_svc.CB_EDIT_PICK):
+            user = ensure_registered(self.db, uid, self._display_name(message))
+            if not user:
+                answer("شما در سیستم ثبت نشده‌اید.", alert=True)
+                return
+            if self._deny_technician(message, user, perm.MAIN_SOURCE_EDIT) or self._deny_main_source_edit(message, user):
+                answer("اجازهٔ ویرایش منبع اصلی را ندارید.", alert=True)
+                return
+            raw_pos = data[len(main_source_svc.CB_EDIT_PICK):]
+            try:
+                pos = int(raw_pos)
+            except ValueError:
+                answer("درخواست نامعتبر است.", alert=True)
+                return
+            frame = main_source_svc.load_primary_frame(self.db, bale_user_id=str(user["bale_user_id"]))
+            idx, row = main_source_svc.row_at(frame, pos)
+            if row is None:
+                answer("این رکورد دیگر در منبع اصلی نیست.", alert=True)
+                return
+            answer()
+            self._begin_main_source_edit(message, user, {"pos": pos, "row": row})
+            return
+
         if data.startswith(kb.CB_UPDATE_PREFIX):
             from services import updater as up
 
@@ -5573,7 +5680,7 @@ class BotApp:
         self._reply(
             message,
             f"دستیار هوشمند {'فعال شد' if enable else 'غیرفعال شد'}." + note
-            + (f"\nدکمهٔ «{kb.BTN_ASK_ASSISTANT}» در منوی اصلی اضافه شد." if enable else ""),
+            + (f"\nدکمهٔ «{kb.BTN_ASK_ASSISTANT}» به همهٔ منوها اضافه شد." if enable else ""),
             kb.assistant_settings_menu(),
         )
 
@@ -5893,7 +6000,9 @@ class BotApp:
         ] + ["", bk.last_auto_status_fa(self.db), "برای دریافت، دکمهٔ شمارهٔ آن را بزنید."]
         rows = [[{"text": f"⬇️ {i}) {b['date_fa']}", "callback_data": f"{kb.CB_BACKUP_PREFIX}get|{b['name']}"}]
                 for i, b in enumerate(items, 1)]
-        self.client.send_message(self._chat_id(message), "\n".join(lines), reply_markup={"inline_keyboard": rows})
+        self.client.send_message(
+            self._chat_id(message), "\n".join(lines), reply_markup=BaleClient.inline_keyboard(rows),
+        )
 
     def on_backup_restore_start(self, message: dict) -> None:
         user = self._backup_user(message)
@@ -5946,9 +6055,9 @@ class BotApp:
         self.client.send_message(
             self._chat_id(message),
             bk.summary_fa(man) + "\n\n⚠ همهٔ داده‌های فعلی با این بک‌آپ جایگزین می‌شود. ادامه می‌دهید؟",
-            reply_markup={"inline_keyboard": [[
+            reply_markup=BaleClient.inline_keyboard([[
                 {"text": "✅ ادامه", "callback_data": f"{kb.CB_BACKUP_PREFIX}r1"},
-                {"text": "❌ انصراف", "callback_data": f"{kb.CB_BACKUP_PREFIX}rx"}]]},
+                {"text": "❌ انصراف", "callback_data": f"{kb.CB_BACKUP_PREFIX}rx"}]]),
         )
         return True
 
@@ -5989,9 +6098,9 @@ class BotApp:
                 self._chat_id(message),
                 "⚠️ تأیید نهایی: پایگاه داده، فایل‌های آپلود و دارایی‌های ربات با بک‌آپ جایگزین می‌شوند "
                 "(پیش از آن خودکار یک بک‌آپ «پیش از بازگردانی» گرفته می‌شود).",
-                reply_markup={"inline_keyboard": [[
+                reply_markup=BaleClient.inline_keyboard([[
                     {"text": "⚠️ بله، بازگردانی شود", "callback_data": f"{kb.CB_BACKUP_PREFIX}r2"},
-                    {"text": "❌ انصراف", "callback_data": f"{kb.CB_BACKUP_PREFIX}rx"}]]},
+                    {"text": "❌ انصراف", "callback_data": f"{kb.CB_BACKUP_PREFIX}rx"}]]),
             )
             return
         if act == "r2" and pend.get("await") == "confirm2":
@@ -7576,6 +7685,9 @@ class BotApp:
             return
         if text == kb.BTN_HELP:
             self.cmd_help(message)
+            return
+        if text == kb.BTN_ASK_ASSISTANT:
+            self.on_assistant_ask_start(message)
             return
         if text == kb.BTN_FILE_GUIDE:
             self.on_file_guide(message)

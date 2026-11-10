@@ -390,13 +390,20 @@ def export_dataframe_xlsx(
     columns: list[str] | None = None,
     header_map: dict[str, str] | None = None,
     sheet_name: str = "ریز اطلاعات",
+    allow_empty: bool = False,
 ) -> Path:
-    """Write a DataFrame to xlsx with optional Persian header rename."""
+    """Write a DataFrame to xlsx with optional Persian header rename.
+
+    ``allow_empty`` writes the header row only (a blank template). Other callers
+    still get an error when there is nothing to export.
+    """
     import pandas as pd
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+    if not isinstance(df, pd.DataFrame):
+        df = pd.DataFrame()
+    if df.empty and not allow_empty:
         raise ValueError("داده‌ای برای خروجی اکسل نیست.")
     work = df.copy()
     use_cols = list(columns) if columns else [c for c in work.columns]

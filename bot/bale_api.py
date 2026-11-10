@@ -290,8 +290,27 @@ class BaleClient:
 
     @staticmethod
     def inline_keyboard(rows: list[list[dict[str, str]]]) -> dict:
-        """Inline keyboard from rows of button dicts (text + callback_data and/or url)."""
-        return {"inline_keyboard": rows}
+        """Inline keyboard from rows of button dicts (text + callback_data and/or url).
+
+        A non-empty keyboard gains «🤖 از دستیار بپرس» when the assistant is on.
+        An empty keyboard stays empty (that is how a message clears its buttons).
+        """
+        built = [list(r) for r in rows if r]
+        if built:
+            try:
+                from bot.keyboards import BTN_ASK_ASSISTANT, CB_ASK_ASSISTANT, assistant_menu_on
+
+                texts = [
+                    b.get("text") for r in built for b in r if isinstance(b, dict)
+                ]
+                if assistant_menu_on() and BTN_ASK_ASSISTANT not in texts:
+                    built.append([{
+                        "text": BTN_ASK_ASSISTANT,
+                        "callback_data": CB_ASK_ASSISTANT,
+                    }])
+            except Exception:  # noqa: BLE001 — never block a keyboard on the assistant flag
+                pass
+        return {"inline_keyboard": built}
 
     def answer_callback_query(
         self,

@@ -143,10 +143,12 @@ def request_text_fa(req: dict) -> str:
 
 
 def inline_markup(req_id: int) -> dict:
-    return {"inline_keyboard": [[
+    from bot.bale_api import BaleClient
+
+    return BaleClient.inline_keyboard([[
         {"text": "✅ تایید", "callback_data": f"{CB_PREFIX}{req_id}|ok"},
         {"text": "❌ رد", "callback_data": f"{CB_PREFIX}{req_id}|no"},
-    ]]}
+    ]])
 
 
 def bale_send(chat_ids: list, text: str, markup: dict | None = None) -> int:

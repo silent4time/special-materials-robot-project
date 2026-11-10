@@ -366,7 +366,7 @@ class TundishReportFlow:
                 self._reply(
                     message,
                     "متن گزارش را در یک پیام بفرستید. نمونه:\n" + SAMPLE_TEXT,
-                    BaleClient.reply_keyboard([[kb.BTN_TR_MODE_STEP], [kb.BTN_TR_CANCEL]]),
+                    kb.tundish_report_mode_menu(),
                 )
             else:
                 self._reply(message, "روش ورود را از دکمه‌ها انتخاب کنید.", kb.tundish_report_mode_menu())
