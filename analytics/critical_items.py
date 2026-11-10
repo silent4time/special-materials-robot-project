@@ -666,6 +666,9 @@ def prepare_code_rates(
     # کد 1800 = اقلام مازاد → never a consumable (rule B, 1405-07-14).
     inventory_df = drop_surplus_rows(inventory_df)
     inventory_df, _changes = apply_section_rate_attribution(inventory_df)
+    from analytics.wall_stones import apply_wall_stone_rates
+
+    inventory_df = apply_wall_stone_rates(inventory_df)
     inventory_df = filter_inventory_segment(inventory_df, segment)
     if inventory_df is None or inventory_df.empty:
         return None
