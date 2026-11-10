@@ -14,7 +14,7 @@
 
 در Excel می‌توان کلید انگلیسی یا برچسب فارسی را وارد کرد؛ هنگام بارگذاری هر سه به برچسب فارسی استاندارد تبدیل می‌شوند.
 
-> نسخهٔ فعلی: **1.7.3** (فایل `VERSION`؛ تاریخچه در `CHANGELOG.md`).
+> نسخهٔ فعلی: **1.7.4** (فایل `VERSION`؛ تاریخچه در `CHANGELOG.md`).
 
 ## اهداف محصول
 
@@ -355,7 +355,7 @@ UX ربات: `bot/tundish_report_flow.py`؛ وب: `/tundish-report` و `/tundish
 - فایل‌های `data/updates/update.lock` و `data/updates/update_progress.json` را کاربر سرویس‌های `nasoz-bot`، `nasoz-web` و واحد موقت به‌روزرسانی باید بتوانند بسازند (پوشهٔ `data/updates/` از قبل همین مالک را دارد). ری‌استارت همچنان با `systemd-run` (اگر ریشه باشد) زمان‌بندی می‌شود تا خودِ به‌روزرسان با ری‌استارت سرویس کشته نشود؛ بدون systemd-run فرایند جدا با setsid است و ممکن است با ری‌استارت سرویس قطع شود — در آن صورت شروع بعدی ربات وضعیت گیرکرده را جمع می‌کند.
 - تأیید «📥 به‌روزرسانی موجودی انبار» (ربات و وب): «موجودی روزانه به‌روزرسانی شد». آپلود کامل منبع اصلی پیام خودش را دارد.
 - منبع: آخرین ریلیز منتشرشده (نه پیش‌نویس/پیش‌انتشار) در `silent4time/special-materials-robot-project` (`NASOZ_UPDATE_REPO`)؛ توکن اختیاری `NASOZ_GITHUB_TOKEN`. کش ۶ ساعت / ۱ ساعت پس از خطا. دستی: `.venv/bin/python -m services.updater check --force`.
-- نصب: بستهٔ `nasoz-bot.zip` + `nasoz-bot.zip.sha256` (یا zipball بدون چک‌سام) ← بک‌آپ DB و کد (`data/updates/rollback_*`) ← جایگزینی فایل‌ها (هرگز `.env`, `data/`, `uploads/`, `reports/`, `.venv`, `.git`) ← تست‌های smoke ← بازگشت خودکار در صورت خطا ← `systemd-run … systemctl restart nasoz-bot nasoz-web`. گزارش: `data/updates/update.log`.
+- نصب: بستهٔ `nasoz-bot.zip` + `nasoz-bot.zip.sha256` (یا zipball بدون چک‌سام) ← بک‌آپ DB و کد (`data/updates/rollback_<نسخهٔ فعلی>_<زمان>/`، همان درختِ قبل از این نصب) ← جایگزینی فایل‌ها (هرگز `.env`, `data/`, `uploads/`, `reports/`, `.venv`, `.git`) ← تست‌های smoke ← بازگشت خودکار در صورت خطا ← `systemd-run … systemctl restart nasoz-bot nasoz-web`. گزارش اجرا: `data/updates/update.log`. اگر smoke رد شود، نام آزمون و خروجی در `data/updates/smoke.log` است و همان در پیام ربات می‌آید. آزمون‌ها قفل `data/updates/update.lock` را که خودِ به‌روزرسان گرفته دست نمی‌زنند.
 - انتشار نسخه: `VERSION` و `CHANGELOG.md` را به‌روز کنید، tag `vX.Y.Z` بزنید، `bash scripts/make_release.sh vX.Y.Z` و دو فایل `dist/nasoz-bot.zip` و `dist/nasoz-bot.zip.sha256` را به ریلیز (غیر پیش‌نویس) پیوست کنید؛ متن ریلیز = تغییرات فارسی. `assets/logo.png` چون در گیت است داخل زیپ می‌آید.
 - لوگوی رسمی `assets/logo.png` در فاویکون و سربرگ پنل وب است. API بله عکس پروفایل خودِ بازو را تنظیم نمی‌کند؛ در @botfather دستور `/setuserpic` (یا `/mybots` ← ویرایش ← تصویر پروفایل) و سپس همان فایل.
 

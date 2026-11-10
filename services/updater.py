@@ -360,6 +360,18 @@ _proc_busy = False
 
 
 def updates_dir(root: Path | None = None) -> Path:
+    """Lock and progress files.
+
+    ``NASOZ_UPDATES_DIR`` redirects the *process-default* directory (no explicit
+    root). The updater sets it for smoke subprocesses, and ``smoke_updater``
+    sets it itself, so a smoke run cannot see or delete the lock the updater
+    is holding. An explicit ``root`` (a real apply, or a temp project in tests)
+    always uses ``<root>/data/updates``.
+    """
+    if root is None:
+        override = os.environ.get("NASOZ_UPDATES_DIR", "").strip()
+        if override:
+            return Path(override)
     return Path(root or config.BASE_DIR) / "data" / "updates"
 
 
@@ -692,18 +704,62 @@ def _extract(zip_path: Path, staging: Path) -> Path:
     return src
 
 
+def smoke_failure_text(smoke: Callable | None = None, root: Path | None = None) -> str:
+    """Persian reason naming the failed smoke scripts and the log file."""
+    names = [str(n) for n in (getattr(smoke, "last_failures", None) or []) if n]
+    path = str(getattr(smoke, "last_log", None) or (updates_dir(root) / "smoke.log"))
+    if names:
+        shown = "، ".join(names[:8])
+        extra = f" و {len(names) - 8} مورد دیگر" if len(names) > 8 else ""
+        return f"تست‌های دود (smoke) پس از به‌روزرسانی رد شدند: {shown}{extra}\nخروجی: {path}"
+    return f"تست‌های دود (smoke) پس از به‌روزرسانی رد شدند.\nخروجی: {path}"
+
+
 def default_smoke(root: Path, log: Callable[[str], None]) -> bool:
+    """Run ``scripts/smoke_*.py``. Hermetic: children do not use the live lock dir.
+
+    Failures are written to ``<root>/data/updates/smoke.log`` (stdout+stderr tail).
+    ``last_failures`` and ``last_log`` are set on this function for the error text.
+    """
     py = root / ".venv" / "bin" / "python"
     py = str(py) if py.exists() else sys.executable
+    scratch = Path(tempfile.mkdtemp(prefix="nasoz-smoke-updates-"))
+    env = os.environ.copy()
+    env["NASOZ_UPDATES_DIR"] = str(scratch)
+    log_path = updates_dir(root) / "smoke.log"
+    failed: list[str] = []
+    chunks: list[str] = []
     ok = True
-    for t in sorted((root / "scripts").glob("smoke_*.py")):
-        try:
-            r = subprocess.run([py, str(t)], cwd=root, capture_output=True, text=True, timeout=900)
-            passed = r.returncode == 0
-        except subprocess.TimeoutExpired:
-            passed = False
-        log(f"{'PASS' if passed else 'FAIL'} {t.name}")
-        ok = ok and passed
+    try:
+        for t in sorted((root / "scripts").glob("smoke_*.py")):
+            try:
+                r = subprocess.run(
+                    [py, str(t)], cwd=str(root), capture_output=True, text=True,
+                    timeout=900, env=env,
+                )
+                passed = r.returncode == 0
+                detail = "\n".join(part for part in ((r.stdout or "").rstrip(), (r.stderr or "").rstrip()) if part)
+            except subprocess.TimeoutExpired as exc:
+                passed = False
+                out = exc.stdout or ""
+                err = exc.stderr or ""
+                if isinstance(out, bytes):
+                    out = out.decode("utf-8", "replace")
+                if isinstance(err, bytes):
+                    err = err.decode("utf-8", "replace")
+                detail = "\n".join(part for part in ("TIMEOUT after 900s", str(out).rstrip(), str(err).rstrip()) if part)
+            log(f"{'PASS' if passed else 'FAIL'} {t.name}")
+            if not passed:
+                failed.append(t.name)
+                chunks.append(f"===== FAIL {t.name} =====\n{detail[-8000:]}\n")
+            ok = ok and passed
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    if chunks:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("\n".join(chunks), encoding="utf-8")
+    default_smoke.last_failures = failed  # type: ignore[attr-defined]
+    default_smoke.last_log = str(log_path)  # type: ignore[attr-defined]
     return ok
 
 
@@ -834,7 +890,7 @@ def apply_update(
             log("pip install OK")
         # 5) smoke suite
         if not smoke(root, log):
-            raise UpdateError("تست‌های دود (smoke) پس از به‌روزرسانی رد شدند.")
+            raise UpdateError(smoke_failure_text(smoke, root))
         # keep git's index in step so a later `git pull` stays clean (best effort)
         if (root / ".git").exists() and shutil.which("git"):
             subprocess.run(["git", "fetch", "-q", "--tags", "origin"], cwd=root, capture_output=True, timeout=120)
