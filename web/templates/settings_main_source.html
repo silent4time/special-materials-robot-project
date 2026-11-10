@@ -65,17 +65,28 @@
 
 <div class="card" id="edit-record">
   <h2>ویرایش رکورد</h2>
+  <p class="muted">کد چهار رقمی، آیدی کد، یا کلیدواژه / بخشی از شرح. ارقام فارسی و حروف ي و ك هم پذیرفته می‌شود. رکورد بدون آیدی هم پیدا می‌شود.</p>
   <form method="get" action="/settings/main-source/edit#edit-record">
-    <label for="edit_pick_id">شناسه مواد</label>
-    <input id="edit_pick_id" name="id" type="text" required value="{{ edit_record.id if edit_record else '' }}">
-    <p style="margin-top:1rem"><button type="submit">نمایش مشخصات فعلی</button></p>
+    <label for="edit_pick_id">جستجو</label>
+    <input id="edit_pick_id" name="q" type="text" required value="{{ edit_query or (edit_record.id if edit_record else '') }}">
+    <p style="margin-top:1rem"><button type="submit">جستجو</button></p>
   </form>
+  {% if edit_matches %}
+  <p>{{ edit_total }} رکورد پیدا شد. یکی را انتخاب کنید.</p>
+  {% if edit_more %}<p class="muted">{{ edit_total }} مورد است؛ {{ edit_matches|length }} تای اول آمده. جستجو را دقیق‌تر کنید.</p>{% endif %}
+  <ul>
+    {% for m in edit_matches %}
+    <li><a href="/settings/main-source/edit?pos={{ m.pos }}#edit-record">{{ m.label }}</a></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
   {% if edit_record %}
-  <h3>رکورد فعلی: {{ edit_record.id }}</h3>
+  <h3>رکورد فعلی: {{ edit_record.id_label }}</h3>
   <ul class="muted">{% for d in edit_record.details %}<li>{{ d }}</li>{% endfor %}</ul>
   <p class="muted">هر فیلد جداگانه پرسیده می‌شود؛ خانهٔ خالی یعنی همان مقدار قبلی می‌ماند.</p>
   <form method="post" action="/settings/main-source/edit">
-    <input type="hidden" name="id" value="{{ edit_record.id }}">
+    <input type="hidden" name="lookup_id" value="{{ edit_record.id }}">
+    <input type="hidden" name="row_pos" value="{{ edit_record.row_pos }}">
     {% for f in edit_record.fields %}
     <label for="edit_{{ f.key }}">({{ f.n }}/{{ edit_record.total }}) {{ f.label }}{{ f.hint }} — مقدار فعلی: {{ f.current }}</label>
     <input id="edit_{{ f.key }}" name="{{ f.key }}" type="text" placeholder="خالی = بدون تغییر ({{ f.current }})">

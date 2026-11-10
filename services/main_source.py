@@ -395,20 +395,163 @@ def find_row_by_id(df: pd.DataFrame, item_id: str) -> tuple[int | None, dict[str
     return None, None
 
 
+# ------------------------------------------------------------------ search (v1.7.9)
+# ویرایش رکورد: کد چهار رقمی، آیدی کد، یا کلیدواژه/بخشی از شرح.
+_SEARCH_DIGIT_TRANS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+SEARCH_LIMIT = 10
+NO_ID_FA = "بدون آیدی"
+CB_EDIT_PICK = "msep|"
+EDIT_SEARCH_PROMPT_FA = (
+    "رکورد را با یکی از این سه راه پیدا کنید:\n"
+    "• کد چهار رقمی (مثلاً ۱۲۰۳ یا 1203)\n"
+    "• آیدی کد\n"
+    "• کلیدواژه یا بخشی از شرح کالا\n"
+    "ارقام فارسی و عربی و حروف ي/ك پذیرفته می‌شود. "
+    "اگر چند رکورد بماند، یکی را از دکمه‌ها انتخاب کنید. "
+    "رکورد بدون آیدی هم پیدا و ویرایش می‌شود و می‌توان برایش آیدی گذاشت."
+)
+EDIT_SEARCH_MORE_FA = (
+    "{total} رکورد پیدا شد. {limit} مورد اول نشان داده می‌شود؛ جستجو را دقیق‌تر کنید."
+)
+
+
+def normalize_search(value: object) -> str:
+    """Digits, yeh/kaf, ZWNJ and spaces folded for lookup (not for stored text)."""
+    if _is_blank(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        text = str(int(value))
+    elif isinstance(value, int) and not isinstance(value, bool):
+        text = str(value)
+    else:
+        text = str(value)
+    text = text.translate(_SEARCH_DIGIT_TRANS)
+    text = text.replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+    text = text.replace("\u200c", " ").replace("\u200d", "").replace("\ufeff", "")
+    text = " ".join(text.split())
+    if text.endswith(".0") and text[:-2].lstrip("-").isdigit():
+        text = text[:-2]
+    return text.casefold()
+
+
+def _row_dict(df: pd.DataFrame, row: Any) -> dict[str, Any]:
+    return {col: row.get(col) for col in INVENTORY_COLUMNS if col in df.columns}
+
+
+def _code_key(value: object) -> str:
+    text = normalize_search(value)
+    if text.isdigit() and len(text) <= 4:
+        return text.zfill(4)
+    return text
+
+
+def iter_inventory_rows(df: pd.DataFrame | None) -> list[dict[str, Any]]:
+    """Positional rows so a blank-id record can be opened again."""
+    if df is None or df.empty:
+        return []
+    hits: list[dict[str, Any]] = []
+    for pos in range(len(df)):
+        row = _row_dict(df, df.iloc[pos])
+        iid = _cell_str(row.get("id"))
+        hits.append({
+            "pos": pos,
+            "row": row,
+            "id_key": normalize_search(iid) if iid else "",
+            "code_key": _code_key(row.get("category_code")),
+            "keyword_key": normalize_search(row.get("keyword")),
+            "name_key": normalize_search(row.get("product_name")),
+        })
+    return hits
+
+
+def row_at(df: pd.DataFrame | None, pos: int) -> tuple[Any, dict[str, Any] | None]:
+    if df is None or df.empty or pos < 0 or pos >= len(df):
+        return None, None
+    return df.index[pos], _row_dict(df, df.iloc[pos])
+
+
+def match_label(hit: Mapping[str, Any]) -> str:
+    row = hit.get("row") or {}
+    code = _cell_str(row.get("category_code")) or "—"
+    iid = _cell_str(row.get("id")) or NO_ID_FA
+    desc = _cell_str(row.get("product_name")) or _cell_str(row.get("keyword")) or "—"
+    if len(desc) > 28:
+        desc = desc[:27] + "…"
+    label = f"{code} | {iid} | {desc}"
+    return label if len(label) <= 60 else label[:59] + "…"
+
+
+def search_inventory(df: pd.DataFrame | None, query: str, *, limit: int = SEARCH_LIMIT) -> dict[str, Any]:
+    """Exact unique id, or exact unique 4-digit code, opens the record.
+
+    Several rows with the same 4-digit code, or a keyword/description hit, come
+    back as buttons (at most ``limit``).
+    """
+    q = normalize_search(query)
+    hits = iter_inventory_rows(df)
+    empty: dict[str, Any] = {"query": q, "exact": None, "matches": [], "total": 0, "more": False}
+
+    def pack(items: list[dict[str, Any]], *, exact: dict[str, Any] | None = None) -> dict[str, Any]:
+        shown = items[:limit]
+        return {
+            "query": q,
+            "exact": exact,
+            "matches": shown,
+            "total": len(items),
+            "more": len(items) > limit,
+        }
+
+    if not q or not hits:
+        return empty
+    id_hits = [h for h in hits if h["id_key"] and h["id_key"] == q]
+    if len(id_hits) == 1:
+        return pack(id_hits, exact=id_hits[0])
+    if len(id_hits) > 1:
+        return pack(id_hits)
+    if q.isdigit() and len(q) == 4:
+        code_hits = [h for h in hits if h["code_key"] == q]
+        if len(code_hits) == 1:
+            return pack(code_hits, exact=code_hits[0])
+        if len(code_hits) > 1:
+            return pack(code_hits)
+    text_hits = [h for h in hits if q in h["keyword_key"] or q in h["name_key"]]
+    return pack(text_hits)
+
+
 def upsert_row(
     db: Database,
     item_id: str,
     updates: Mapping[str, Any],
     *,
     bale_user_id: str | int,
+    row_pos: int | None = None,
 ) -> dict[str, Any]:
-    """Update fields of an existing inventory row by id; persist cleaned extract."""
+    """Update fields of an existing inventory row; persist cleaned extract.
+
+    ``row_pos`` addresses a row that has no id yet. A new ``id`` must be unique.
+    """
     df = load_primary_frame(db, bale_user_id=bale_user_id)
     if df is None or df.empty:
         raise ValueError("منبع اصلی هنوز آپلود نشده است.")
-    idx, current = find_row_by_id(df, item_id)
+    idx = None
+    current = None
+    if row_pos is not None:
+        idx, current = row_at(df, int(row_pos))
     if idx is None or current is None:
-        raise KeyError(f"ردیفی با شناسه «{item_id}» یافت نشد.")
+        idx, current = find_row_by_id(df, item_id)
+    if idx is None or current is None:
+        raise KeyError(f"ردیفی با شناسه «{item_id or 'بدون آیدی'}» یافت نشد.")
+    if "id" in updates:
+        new_id = _cell_str(updates.get("id")).translate(_SEARCH_DIGIT_TRANS)
+        new_id = " ".join(new_id.replace("\u200c", " ").replace("\u200d", "").replace("\ufeff", "").split())
+        target = normalize_search(new_id)
+        if target:
+            for hit in iter_inventory_rows(df):
+                if hit["id_key"] == target and df.index[hit["pos"]] != idx:
+                    raise ValueError(f"شناسه «{new_id}» از قبل برای رکورد دیگری ثبت شده است.")
+        if "id" in df.columns and df["id"].dtype != object:
+            df["id"] = df["id"].astype(object)
+        df.at[idx, "id"] = new_id
     allowed = {k: v for k, v in updates.items() if k in INVENTORY_COLUMNS and k != "id"}
     for key, value in allowed.items():
         if key not in {"quantity", "priority"} and key in df.columns and df[key].dtype != object:
@@ -436,13 +579,18 @@ def upsert_row(
         else:
             df.at[idx, key] = _cell_str(value)
     path = persist_primary_frame(db, df, bale_user_id=bale_user_id)
-    _, updated = find_row_by_id(df, item_id)
+    saved_id = _cell_str(df.at[idx, "id"]) if "id" in df.columns else ""
+    if saved_id:
+        _, updated = find_row_by_id(df, saved_id)
+    else:
+        _, updated = row_at(df, int(row_pos) if row_pos is not None else -1)
+    tracked = list(allowed) + (["id"] if "id" in updates else [])
     changes = [
         {"field": k, "before": _audit_val(current.get(k)), "after": _audit_val((updated or {}).get(k))}
-        for k in allowed
+        for k in tracked
         if _audit_val(current.get(k)) != _audit_val((updated or {}).get(k))
     ]
-    return {"path": str(path), "row": updated or {}, "id": _norm_id(item_id), "changes": changes}
+    return {"path": str(path), "row": updated or {}, "id": saved_id or _norm_id(item_id), "changes": changes}
 
 
 def _audit_val(value: object) -> str:
@@ -828,9 +976,18 @@ EDIT_KEEP_LABEL = "⏭ بدون تغییر"
 EDIT_KEEP_TOKENS = frozenset({"", "-", "—", "–", EDIT_KEEP_LABEL, "بدون تغییر", "⏭"})
 
 
-def edit_fields() -> list[str]:
-    """Editable fields, in prompt order (every main-source column except the ID)."""
-    return [c for c in INVENTORY_COLUMNS if c != "id"]
+def edit_fields(row: Mapping[str, Any] | None = None) -> list[str]:
+    """Editable fields, in prompt order.
+
+    The id is asked only when the record does not have one yet, so it can be filled in.
+    """
+    fields = [c for c in INVENTORY_COLUMNS if c != "id"]
+    if row is not None and not _cell_str((row or {}).get("id")):
+        if "category_code" in fields:
+            fields.insert(fields.index("category_code") + 1, "id")
+        else:
+            fields.insert(0, "id")
+    return fields
 
 
 def is_keep_answer(raw: object) -> bool:
@@ -857,7 +1014,7 @@ def edit_prompt_fa(field: str, row: Mapping[str, Any] | None, index: int, total:
 def collect_edit_updates(row: Mapping[str, Any] | None, answers: Mapping[str, Any]) -> dict[str, str]:
     """Answers → updates: empty answers keep the previous value; unchanged values are dropped."""
     out: dict[str, str] = {}
-    for field in edit_fields():
+    for field in edit_fields(row):
         if field not in answers or is_keep_answer(answers.get(field)):
             continue
         new = str(answers.get(field)).strip()

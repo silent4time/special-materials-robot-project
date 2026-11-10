@@ -67,10 +67,23 @@ MENU_PARENT: dict[str, str | None] = {
 
 
 def _kb(rows: list[list[str]], menu: str | None = None, *, nav: bool = True) -> dict:
-    """Reply keyboard + optional uniform nav row + private ``_menu`` marker."""
+    """Reply keyboard + optional uniform nav row + private ``_menu`` marker.
+
+    When the owner has enabled the voice assistant, «🤖 از دستیار بپرس» is added
+    here — every menu built with ``_kb`` gets it, including ones added later.
+    The main menu never gets «⬅️ بازگشت» / «🏠 منوی اصلی».
+    """
     rows = [list(r) for r in rows if r]
-    if nav:
-        rows.append(list(NAV_ROW))
+    if rows and rows[-1] == list(NAV_ROW):
+        rows.pop()
+        nav = True
+    if assistant_menu_on() and not any(BTN_ASK_ASSISTANT in r for r in rows):
+        rows.append([BTN_ASK_ASSISTANT])
+    if nav and menu != "main":
+        present = {b for r in rows for b in r}
+        need = [b for b in NAV_ROW if b not in present]
+        if need:
+            rows.append(need)
     markup = BaleClient.reply_keyboard(rows)
     if menu:
         markup["_menu"] = menu
@@ -258,6 +271,7 @@ BTN_ASSISTANT_ON = "✅ فعال‌سازی دستیار"
 BTN_ASSISTANT_OFF = "⏸ غیرفعال‌سازی دستیار"
 BTN_ASSISTANT_STATUS = "📋 وضعیت فعلی دستیار"
 BTN_ASK_ASSISTANT = "🤖 از دستیار بپرس"
+CB_ASK_ASSISTANT = "asst|ask"
 BTN_ASSISTANT_MISFIRE = "❌ منظورم این نبود"
 BTN_ASSISTANT_REPHRASE_ON = "✍️ بازنویسی روان پاسخ: روشن"
 BTN_ASSISTANT_REPHRASE_OFF = "✍️ بازنویسی روان پاسخ: خاموش"
@@ -627,8 +641,6 @@ def main_menu(user: dict | str | bool | None = None) -> dict:
         ]
         if row:
             rows.append(row)
-    if assistant_menu_on() and u.get("role"):
-        rows.insert(len(rows) - 1 if rows and rows[-1] == [BTN_BOT_SETTINGS] else len(rows), [BTN_ASK_ASSISTANT])
     # «❓ راهنما» shares the settings row when it exists
     if rows and rows[-1] == [BTN_BOT_SETTINGS]:
         rows[-1].append(BTN_HELP)
@@ -659,11 +671,11 @@ CB_RATES_PREFIX = "ri|"
 
 def rates_review_inline() -> dict:
     """Review of «📥 ورود نرخ‌های مصرف»: keep conflicts (default) / overwrite / cancel."""
-    return {"inline_keyboard": [
+    return BaleClient.inline_keyboard([
         [{"text": "✅ ذخیره (مغایرت‌ها: حفظ مقدار فعلی)", "callback_data": f"{CB_RATES_PREFIX}keep"}],
         [{"text": "♻️ ذخیره با جایگزینی مغایرت‌ها", "callback_data": f"{CB_RATES_PREFIX}over"}],
         [{"text": "❌ انصراف", "callback_data": f"{CB_RATES_PREFIX}x"}],
-    ]}
+    ])
 
 
 def rates_hint_inline(user: dict | None = None) -> dict | None:
@@ -673,7 +685,7 @@ def rates_hint_inline(user: dict | None = None) -> dict | None:
         row.append({"text": BTN_RATES_IMPORT, "callback_data": f"{CB_RATES_PREFIX}start"})
     if user is None or perm.can_any(user, (perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT)):
         row.append({"text": "📄 دانلود منبع اصلی", "callback_data": f"{CB_RATES_PREFIX}dl"})
-    return {"inline_keyboard": [row]} if row else None
+    return BaleClient.inline_keyboard([row]) if row else None
 
 
 def rate_loss_menu() -> dict:
@@ -690,10 +702,11 @@ def main_source_file_menu(user: dict | None = None) -> dict:
             [BTN_FULL_REPLACE, BTN_INV_DOWNLOAD],
             [BTN_INV_ADD_RECORD, BTN_INV_EDIT_RECORD],
             [BTN_INV_ADD_CATEGORY, BTN_INV_LIST_CATEGORIES],
-            [BTN_RATES_IMPORT],
         ]
+        tail = [BTN_RATES_IMPORT]
         if user is not None and user.get("role") in perm.ADMINS:
-            rows.append([BTN_MS_PENDING])
+            tail.append(BTN_MS_PENDING)
+        rows.append(tail)
     else:
         rows = [[BTN_INV_DOWNLOAD, BTN_INV_LIST_CATEGORIES]]
     return _kb(rows, "main_source")
@@ -704,7 +717,7 @@ inventory_edit_menu = main_source_file_menu
 
 
 def full_replace_confirm_menu() -> dict:
-    return _kb([[BTN_FULL_REPLACE_CONFIRM], [BTN_CANCEL]], "flow", nav=False)
+    return _kb([[BTN_FULL_REPLACE_CONFIRM], [BTN_CANCEL]], "flow")
 
 
 def cancel_pending_menu(*, guide: bool = False, nav: bool = True) -> dict:
@@ -744,6 +757,7 @@ def inbound_history_menu(labels: list[str] | None = None) -> dict:
 
 
 def critical_items_menu() -> dict:
+    # The archive label is long, so it stays a full-width row.
     return _kb([[BTN_CRITICAL_COUNTS, BTN_CRITICAL_REPORT], [BTN_CRITICAL_ARCHIVE]], "critical")
 
 
@@ -801,15 +815,15 @@ def critical_reno_inline_keyboard() -> dict:
 
 def section_step_menu() -> dict:
     """Optional step «بخش: همه/اسلب/بلوم/بیلت»."""
-    return _kb([[BTN_SEC_ALL], [BTN_SEC_SLAB, BTN_SEC_BLOOM, BTN_SEC_BILLET], [BTN_CANCEL]], "flow")
+    return _kb([[BTN_SEC_SLAB, BTN_SEC_BLOOM], [BTN_SEC_BILLET, BTN_SEC_ALL], [BTN_CANCEL]], "flow")
 
 
 def n_tundish_section_menu() -> dict:
-    return _kb([[BTN_SEC_SLAB, BTN_SEC_BLOOM, BTN_SEC_BILLET], [BTN_CANCEL]], "flow")
+    return _kb([[BTN_SEC_SLAB, BTN_SEC_BLOOM], [BTN_SEC_BILLET], [BTN_CANCEL]], "flow")
 
 
 def n_tundish_count_menu() -> dict:
-    return _kb([["۱", "۲", "۳", "۴"], ["۵", "۶", "۸", "۱۰"], [BTN_CANCEL]], "flow")
+    return _kb([["۱", "۲"], ["۳", "۴"], ["۵", "۶"], ["۸", "۱۰"], [BTN_CANCEL]], "flow")
 
 
 BTN_EDIT_KEEP = "⏭ بدون تغییر"
@@ -851,36 +865,32 @@ def main_goal_menu() -> dict:
 def main_goal_inputs_menu() -> dict:
     """ورودی‌های هدف اصلی — فایل‌ها از بخش ورود فایل‌ها آپلود می‌شوند."""
     return _kb(
-        [
-            [BTN_MG_INPUT_CORRECT],
-            [BTN_MG_BULK],
-            [BTN_FILE_GUIDE],
-        ],
+        [[BTN_MG_INPUT_CORRECT, BTN_MG_BULK], [BTN_FILE_GUIDE]],
         "mg_inputs",
     )
 
 
 def production_stats_menu() -> dict:
     """«📝 آمار تولید» menu — stays open after every action until the user leaves."""
-    return _kb([[BTN_PS_NEW], [BTN_PS_EDIT, BTN_PS_DELETE], [BTN_PS_BACK, BTN_HOME]], "flow", nav=False)
+    return _kb([[BTN_PS_NEW], [BTN_PS_EDIT, BTN_PS_DELETE], [BTN_PS_BACK]], "flow")
 
 
 def production_stats_entry_menu() -> dict:
-    return _kb([[BTN_CANCEL]], "flow", nav=False)
+    return _kb([[BTN_CANCEL]], "flow")
 
 
 def production_stats_confirm_menu(confirm: str = BTN_PS_CONFIRM) -> dict:
-    return _kb([[confirm], [BTN_CANCEL]], "flow", nav=False)
+    return _kb([[confirm], [BTN_CANCEL]], "flow")
 
 
 def production_stats_months_menu(months: list[str]) -> dict:
-    rows = [months[i : i + 3] for i in range(0, len(months), 3)]
-    return _kb(rows + [[BTN_CANCEL]], "flow", nav=False)
+    rows = [list(months[i : i + 2]) for i in range(0, len(months), 2)]
+    return _kb(rows + [[BTN_CANCEL]], "flow")
 
 
 def production_stats_field_menu() -> dict:
     f = list(BTN_PS_FIELDS.values())
-    return _kb([f[0:2], f[2:4], f[4:6], [BTN_PS_REENTER_ALL], [BTN_CANCEL]], "flow", nav=False)
+    return _kb([f[0:2], f[2:4], f[4:6], [BTN_PS_REENTER_ALL], [BTN_CANCEL]], "flow")
 
 
 def main_goal_range_menu() -> dict:
@@ -917,7 +927,7 @@ def main_goal_month_picker_inline(year: int, selected: list, states: list, *, ma
         {"text": f"📊 ساخت گزارش ({str(len(sel)).translate(fa)} ماه)", "callback_data": f"{CB_MG_PICK_PREFIX}go"},
         {"text": "🧹 پاک کردن", "callback_data": f"{CB_MG_PICK_PREFIX}c"},
     ])
-    return {"inline_keyboard": rows}
+    return BaleClient.inline_keyboard(rows)
 
 
 def main_goal_partial_confirm_menu() -> dict:
@@ -944,7 +954,7 @@ def main_goal_period_menu() -> dict:
 
 def main_goal_section_menu() -> dict:
     return _kb(
-        [[BTN_MG_SEC_BILLET, BTN_MG_SEC_BLOOM, BTN_MG_SEC_SLAB], [BTN_MG_SEC_TOTAL], [BTN_CANCEL]],
+        [[BTN_MG_SEC_BILLET, BTN_MG_SEC_BLOOM], [BTN_MG_SEC_SLAB, BTN_MG_SEC_TOTAL], [BTN_CANCEL]],
         "flow",
     )
 
@@ -954,7 +964,8 @@ def main_goal_section_menu() -> dict:
 # typing it (services.target_tonnage_question parses it; no button state needed).
 def target_tonnage_section_menu(tons_label: str) -> dict:
     """Missing product: «<tons> تن شمش بیلت / بلوم / اسلب»."""
-    return _kb([[f"{tons_label} تن شمش {fa}" for fa in ("بیلت", "بلوم", "اسلب")]], "flow")
+    labels = [f"{tons_label} تن شمش {fa}" for fa in ("بیلت", "بلوم", "اسلب")]
+    return _kb([labels[:2], labels[2:]], "flow")
 
 
 def target_tonnage_tons_menu(section_fa: str) -> dict:
@@ -965,7 +976,8 @@ def target_tonnage_tons_menu(section_fa: str) -> dict:
 
 def target_tonnage_examples_menu() -> dict:
     """Nothing usable: one example per product."""
-    return _kb([[f"۱۰ تن شمش {fa}" for fa in ("بیلت", "بلوم", "اسلب")]], "flow")
+    labels = [f"۱۰ تن شمش {fa}" for fa in ("بیلت", "بلوم", "اسلب")]
+    return _kb([labels[:2], labels[2:]], "flow")
 
 
 def main_goal_targets_confirm_menu() -> dict:
@@ -973,7 +985,7 @@ def main_goal_targets_confirm_menu() -> dict:
 
 
 def main_goal_horizon_menu() -> dict:
-    return _kb([[BTN_MG_P3, BTN_MG_P6, BTN_MG_P12], [BTN_CANCEL]], "flow")
+    return _kb([[BTN_MG_P3, BTN_MG_P6], [BTN_MG_P12], [BTN_CANCEL]], "flow")
 
 
 def main_goal_cancel_menu() -> dict:
@@ -985,7 +997,7 @@ def main_goal_target_menu() -> dict:
 
 
 def date_range_menu() -> dict:
-    return _kb([[BTN_RANGE_TODAY, BTN_RANGE_7, BTN_RANGE_30], [BTN_RANGE_CUSTOM]], "flow")
+    return _kb([[BTN_RANGE_TODAY, BTN_RANGE_7], [BTN_RANGE_30, BTN_RANGE_CUSTOM]], "flow")
 
 
 def month_year_range_menu(*, include_day_advanced: bool = False) -> dict:
@@ -1009,7 +1021,7 @@ def month_picker_menu() -> dict:
     from bot.jalali import PERSIAN_MONTH_NAMES
 
     names = [PERSIAN_MONTH_NAMES[i] for i in range(1, 13)]
-    return _kb([names[i : i + 3] for i in range(0, 12, 3)], "flow")
+    return _kb(_pairs(names), "flow")
 
 
 def material_request_days_menu() -> dict:
@@ -1026,7 +1038,7 @@ def material_request_review_menu(*, draft: bool = True) -> dict:
 
 
 def material_request_edit_menu() -> dict:
-    return _kb([[BTN_MR_BACK_REVIEW], [BTN_CANCEL]], "flow", nav=False)
+    return _kb([[BTN_MR_BACK_REVIEW], [BTN_CANCEL]], "flow")
 
 
 def warehouse_return_review_menu() -> dict:
@@ -1042,7 +1054,7 @@ def site_stock_menu() -> dict:
 
 
 def site_stock_entry_menu() -> dict:
-    return _kb([[BTN_SITE_SKIP], [BTN_SITE_CANCEL], [BTN_BACK_SITE]], "flow", nav=False)
+    return _kb([[BTN_SITE_SKIP], [BTN_SITE_CANCEL], [BTN_BACK_SITE]], "flow")
 
 
 def bot_settings_menu(user: dict | None = None) -> dict:
@@ -1202,11 +1214,11 @@ def reminder_roles_menu(selected: list[str] | set[str]) -> dict:
     sel = set(selected or [])
     rows = [[(RM_CHECK_ON if key in sel else RM_CHECK_OFF) + label] for key, label in ROLES.items()]
     rows.append([BTN_RM_BACK, BTN_HOME])
-    return _kb(rows, "flow", nav=False)
+    return _kb(rows, "flow")
 
 
 def reminder_back_menu() -> dict:
-    return _kb([[BTN_RM_BACK, BTN_HOME]], "flow", nav=False)
+    return _kb([[BTN_RM_BACK, BTN_HOME]], "flow")
 
 
 def invite_url_button(url: str) -> dict:
@@ -1332,7 +1344,7 @@ def tundish_report_menu(user: dict | None = None) -> dict:
 
 
 def tundish_report_mode_menu() -> dict:
-    return _kb([[BTN_TR_MODE_STEP, BTN_TR_MODE_TEXT], [BTN_CANCEL]], "flow", nav=False)
+    return _kb([[BTN_TR_MODE_STEP, BTN_TR_MODE_TEXT], [BTN_CANCEL]], "flow")
 
 
 def tundish_report_step_menu(options: list[str] | None = None, *, optional: bool = False, can_prev: bool = True) -> dict:
@@ -1355,11 +1367,11 @@ def tundish_report_step_menu(options: list[str] | None = None, *, optional: bool
     if optional:
         rows.append([BTN_TR_SKIP])
     rows.append([BTN_TR_PREV, BTN_CANCEL] if can_prev else [BTN_CANCEL])
-    return _kb(rows, "flow", nav=False)
+    return _kb(rows, "flow")
 
 
 def tundish_report_confirm_menu() -> dict:
-    return _kb([[BTN_TR_CONFIRM], [BTN_TR_EDIT, BTN_CANCEL]], "flow", nav=False)
+    return _kb([[BTN_TR_CONFIRM, BTN_TR_EDIT], [BTN_CANCEL]], "flow")
 
 
 def tundish_report_settings_menu() -> dict:
@@ -1370,31 +1382,34 @@ def tundish_report_settings_menu() -> dict:
 
 
 def tundish_report_section_settings_menu() -> dict:
-    return _kb([[BTN_TRS_ADD], [BTN_TRS_EDIT, BTN_TRS_DELETE], [BTN_TRS_LINES]], "tr_section_settings")
+    return _kb([[BTN_TRS_ADD, BTN_TRS_LINES], [BTN_TRS_EDIT, BTN_TRS_DELETE]], "tr_section_settings")
 
 
 def tundish_report_item_edit_menu() -> dict:
     return _kb(
-        [[BTN_TRS_E_LABEL, BTN_TRS_E_TYPE], [BTN_TRS_E_OPTIONS, BTN_TRS_E_REQUIRED], [BTN_TRS_E_ORDER], [BTN_TRS_BACK_SECTION, BTN_HOME]],
+        [[BTN_TRS_E_LABEL, BTN_TRS_E_TYPE], [BTN_TRS_E_OPTIONS, BTN_TRS_E_REQUIRED],
+         [BTN_TRS_E_ORDER], [BTN_TRS_BACK_SECTION]],
         "flow",
-        nav=False,
     )
 
 
 def tundish_report_type_menu() -> dict:
-    return _kb([[BTN_TRS_TYPE_CHOICE, BTN_TRS_TYPE_NUMBER, BTN_TRS_TYPE_TEXT], [BTN_TRS_BACK_SECTION, BTN_HOME]], "flow", nav=False)
+    return _kb(
+        [[BTN_TRS_TYPE_CHOICE, BTN_TRS_TYPE_NUMBER], [BTN_TRS_TYPE_TEXT], [BTN_TRS_BACK_SECTION]],
+        "flow",
+    )
 
 
 def tundish_report_required_menu() -> dict:
-    return _kb([[BTN_TRS_REQUIRED, BTN_TRS_OPTIONAL], [BTN_TRS_BACK_SECTION, BTN_HOME]], "flow", nav=False)
+    return _kb([[BTN_TRS_REQUIRED, BTN_TRS_OPTIONAL], [BTN_TRS_BACK_SECTION]], "flow")
 
 
 def tundish_report_back_section_menu() -> dict:
-    return _kb([[BTN_TRS_BACK_SECTION, BTN_HOME]], "flow", nav=False)
+    return _kb([[BTN_TRS_BACK_SECTION]], "flow")
 
 
 def tundish_report_delete_confirm_menu() -> dict:
-    return _kb([[BTN_TRS_DELETE_CONFIRM], [BTN_TRS_BACK_SECTION, BTN_HOME]], "flow", nav=False)
+    return _kb([[BTN_TRS_DELETE_CONFIRM], [BTN_TRS_BACK_SECTION]], "flow")
 
 
 # Every keyboard builder (menu-walk smoke iterates these)
@@ -1548,7 +1563,7 @@ CB_MY_LATEST_PREFIX = "mylt|"
 
 
 def latest_month_offer_inline(mode: str, ym: tuple[int, int], label: str) -> dict:
-    return {"inline_keyboard": [[{
+    return BaleClient.inline_keyboard([[{
         "text": f"📅 گزارش آخرین ماه دارای داده: {label}",
         "callback_data": f"{CB_MY_LATEST_PREFIX}{mode}|{int(ym[0])}|{int(ym[1])}",
-    }]]}
+    }]])
