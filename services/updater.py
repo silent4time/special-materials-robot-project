@@ -33,6 +33,7 @@ import tempfile
 import threading
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -346,12 +347,13 @@ STATUS_STALE_SECONDS = 30 * 60
 BAR_WIDTH = 6
 BUSY_FA = "به‌روزرسانی در حال انجام است"
 SUCCESS_FA = "✅ به‌روزرسانی کامل شد — نسخهٔ فعال: {version}"
-STAGE_PERCENT = {"verify": 60, "backup": 75, "install": 88, "restart": 96}
+STAGE_PERCENT = {"verify": 60, "backup": 75, "install": 88, "smoke_start": 88, "smoke_end": 95, "restart": 96}
 STAGE_FA = {
     "download": "در حال دانلود",
     "verify": "در حال بررسی چک‌سام",
     "backup": "در حال تهیهٔ نسخهٔ پشتیبان از نصب فعلی",
     "install": "در حال نصب و استخراج",
+    "smoke": "در حال اجرای آزمون‌های دود",
     "restart": "در حال راه‌اندازی مجدد سرویس‌ها",
 }
 
@@ -715,46 +717,121 @@ def smoke_failure_text(smoke: Callable | None = None, root: Path | None = None) 
     return f"تست‌های دود (smoke) پس از به‌روزرسانی رد شدند.\nخروجی: {path}"
 
 
-def default_smoke(root: Path, log: Callable[[str], None]) -> bool:
-    """Run ``scripts/smoke_*.py``. Hermetic: children do not use the live lock dir.
+SMOKE_TIMEOUT_SECONDS = 900
+SMOKE_PROGRESS_INTERVAL = 3.0
 
-    Failures are written to ``<root>/data/updates/smoke.log`` (stdout+stderr tail).
-    ``last_failures`` and ``last_log`` are set on this function for the error text.
+
+def smoke_worker_count() -> int:
+    """Bounded pool. Each script is already its own process; threads only wait."""
+    return max(1, min(4, os.cpu_count() or 1))
+
+
+def smoke_progress_percent(done: int, total: int) -> int:
+    """Map completed tests onto 88% … 95% (install is 88, restart is 96)."""
+    if total <= 0:
+        return STAGE_PERCENT["smoke_end"]
+    span = STAGE_PERCENT["smoke_end"] - STAGE_PERCENT["smoke_start"]
+    done = max(0, min(int(done), int(total)))
+    return STAGE_PERCENT["smoke_start"] + (span * done) // int(total)
+
+
+def _smoke_output(stdout: str | bytes | None, stderr: str | bytes | None, *, prefix: str = "") -> str:
+    def _text(value: str | bytes | None) -> str:
+        if isinstance(value, bytes):
+            return value.decode("utf-8", "replace")
+        return str(value or "")
+
+    parts = [prefix, _text(stdout).rstrip(), _text(stderr).rstrip()]
+    return "\n".join(part for part in parts if part)
+
+
+def _run_smoke_script(py: str, script: Path, root: Path) -> tuple[str, bool, str]:
+    """One smoke script. Its own updates dir; the script's _smoke_env isolates DB/reports/uploads."""
+    scratch = Path(tempfile.mkdtemp(prefix=f"nasoz-smoke-{script.stem}-"))
+    env = os.environ.copy()
+    env["NASOZ_UPDATES_DIR"] = str(scratch)
+    try:
+        try:
+            r = subprocess.run(
+                [py, str(script)], cwd=str(root), capture_output=True, text=True,
+                timeout=SMOKE_TIMEOUT_SECONDS, env=env,
+            )
+            passed = r.returncode == 0
+            detail = _smoke_output(r.stdout, r.stderr)
+        except subprocess.TimeoutExpired as exc:
+            passed = False
+            detail = _smoke_output(exc.stdout, exc.stderr, prefix="TIMEOUT after 900s")
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return script.name, passed, detail
+
+
+def default_smoke(
+    root: Path,
+    log: Callable[[str], None],
+    *,
+    progress: Callable[..., None] | None = None,
+    version: str = "",
+    workers: int | None = None,
+) -> bool:
+    """Run ``scripts/smoke_*.py`` in a bounded pool.
+
+    Every current smoke script is hermetic: ``scripts/_smoke_env.py`` gives it a
+    private temp database, ``reports/`` and ``uploads/``, and this runner gives
+    it a private ``NASOZ_UPDATES_DIR``. Nothing in the suite writes the install's
+    ``data/bot.db`` or a shared reports/uploads directory, so none are kept serial.
+    ``smoke_phase3`` copies samples to ``/tmp/phase3_style_samples``; only that
+    one script does, so it can share the pool.
+
+    PASS/FAIL lines and ``last_failures`` follow sorted script names, not finish
+    order. Progress (stage ``smoke``) moves from 88% toward 95% and is emitted
+    at most about every 3 seconds, plus the first and last result.
     """
     py = root / ".venv" / "bin" / "python"
     py = str(py) if py.exists() else sys.executable
-    scratch = Path(tempfile.mkdtemp(prefix="nasoz-smoke-updates-"))
-    env = os.environ.copy()
-    env["NASOZ_UPDATES_DIR"] = str(scratch)
+    scripts = sorted((root / "scripts").glob("smoke_*.py"))
+    pool = smoke_worker_count() if workers is None else max(1, int(workers))
     log_path = updates_dir(root) / "smoke.log"
+    total = len(scripts)
+    results: dict[str, tuple[bool, str]] = {}
+    done = 0
+    last_emit = 0.0
+
+    def _maybe_emit(force: bool = False) -> None:
+        nonlocal last_emit
+        if progress is None or total == 0:
+            return
+        now = time.monotonic()
+        if not force and done not in (1, total) and now - last_emit < SMOKE_PROGRESS_INTERVAL:
+            return
+        _emit(
+            progress, "smoke", smoke_progress_percent(done, total), version,
+            f"آزمون {done} از {total}",
+        )
+        last_emit = now
+
+    if scripts:
+        with ThreadPoolExecutor(max_workers=min(pool, total)) as executor:
+            futures = [executor.submit(_run_smoke_script, py, script, root) for script in scripts]
+            for future in as_completed(futures):
+                try:
+                    name, passed, detail = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    name, passed, detail = "smoke_unknown.py", False, f"خطای داخلی: {exc}"
+                results[name] = (passed, detail)
+                done += 1
+                _maybe_emit(force=(done == total))
+
     failed: list[str] = []
     chunks: list[str] = []
     ok = True
-    try:
-        for t in sorted((root / "scripts").glob("smoke_*.py")):
-            try:
-                r = subprocess.run(
-                    [py, str(t)], cwd=str(root), capture_output=True, text=True,
-                    timeout=900, env=env,
-                )
-                passed = r.returncode == 0
-                detail = "\n".join(part for part in ((r.stdout or "").rstrip(), (r.stderr or "").rstrip()) if part)
-            except subprocess.TimeoutExpired as exc:
-                passed = False
-                out = exc.stdout or ""
-                err = exc.stderr or ""
-                if isinstance(out, bytes):
-                    out = out.decode("utf-8", "replace")
-                if isinstance(err, bytes):
-                    err = err.decode("utf-8", "replace")
-                detail = "\n".join(part for part in ("TIMEOUT after 900s", str(out).rstrip(), str(err).rstrip()) if part)
-            log(f"{'PASS' if passed else 'FAIL'} {t.name}")
-            if not passed:
-                failed.append(t.name)
-                chunks.append(f"===== FAIL {t.name} =====\n{detail[-8000:]}\n")
-            ok = ok and passed
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+    for script in scripts:
+        passed, detail = results.get(script.name, (False, "نتیجه‌ای برنگشت"))
+        log(f"{'PASS' if passed else 'FAIL'} {script.name}")
+        if not passed:
+            failed.append(script.name)
+            chunks.append(f"===== FAIL {script.name} =====\n{detail[-8000:]}\n")
+            ok = False
     if chunks:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("\n".join(chunks), encoding="utf-8")
@@ -888,8 +965,12 @@ def apply_update(
             if r.returncode != 0:
                 raise UpdateError("نصب وابستگی‌های پایتون ناموفق بود.")
             log("pip install OK")
-        # 5) smoke suite
-        if not smoke(root, log):
+        # 5) smoke suite (parallel; progress 88% → 95%)
+        if smoke is default_smoke:
+            smoke_ok = default_smoke(root, log, progress=progress, version=ver)
+        else:
+            smoke_ok = smoke(root, log)
+        if not smoke_ok:
             raise UpdateError(smoke_failure_text(smoke, root))
         # keep git's index in step so a later `git pull` stays clean (best effort)
         if (root / ".git").exists() and shutil.which("git"):
