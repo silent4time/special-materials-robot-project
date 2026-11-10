@@ -625,6 +625,29 @@ def _emit(progress: Callable[..., None] | None, stage: str, percent: int, versio
         logger.warning("progress callback failed", exc_info=True)
 
 
+def _menu_for_chat(db: Any, chat_id: Any) -> dict | None:
+    """Main menu of the owner who is watching the update, so buttons come back."""
+    from bot import keyboards as kb
+
+    owners = owner_recipients(db)
+    user = next((u for u in owners if str(u.get("bale_user_id")) == str(chat_id)), None)
+    if user is None and owners:
+        user = owners[0]
+    return kb.main_menu(user) if user else None
+
+
+def _send_result_with_menu(client: Any, db: Any, chat_id: Any, text: str) -> bool:
+    """The completion message carries the menu; until then only the wait button is shown."""
+    if client is None or chat_id in (None, ""):
+        return False
+    try:
+        client.send_message(chat_id, text, _menu_for_chat(db, chat_id))
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("update result menu send failed", exc_info=True)
+        return False
+
+
 def bale_progress_editor(chat_id: Any, message_id: int) -> Callable[..., None]:
     """Edit one Bale message. Download ticks are throttled; errors always go through."""
     holder: dict[str, Any] = {"client": None, "last_pct": -1, "last_t": 0.0, "stage": ""}
@@ -649,6 +672,14 @@ def bale_progress_editor(chat_id: Any, message_id: int) -> Callable[..., None]:
 
                 holder["client"] = BaleClient()
             holder["client"].edit_message_text(chat_id, int(message_id), text)
+            if stage in ("done", "error"):
+                from db.models import Database
+
+                import config
+
+                db = Database(config.DATABASE_PATH)
+                if _send_result_with_menu(holder["client"], db, chat_id, text):
+                    _set_status(db, reported=True)
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not edit update progress: %s", exc)
 
@@ -1076,7 +1107,7 @@ def notify_tick(client: Any, db: Any, keyboard: dict | None = None) -> str | Non
         text = redact_public("⬆️ به‌روزرسانی ربات\n" + status_fa(st))
         for u in owner_recipients(db):
             try:
-                client.send_message(u["bale_user_id"], text)
+                client.send_message(u["bale_user_id"], text, _menu_for_chat(db, u["bale_user_id"]))
             except Exception:  # noqa: BLE001
                 pass
         _set_status(db, reported=True)
@@ -1203,6 +1234,7 @@ def finalize_after_restart(client: Any, db: Any, *, root: Path | None = None, no
     if state:
         delivered = _deliver_final(client, state.get("chat_id"), state.get("message_id"), text)
         if delivered:
+            _send_result_with_menu(client, db, state.get("chat_id"), text)
             clear_progress_state(root)
     elif outcome and client is not None:
         owners = owner_recipients(db)
@@ -1210,7 +1242,7 @@ def finalize_after_restart(client: Any, db: Any, *, root: Path | None = None, no
             delivered = True
         for u in owners:
             try:
-                client.send_message(u["bale_user_id"], text)
+                client.send_message(u["bale_user_id"], text, _menu_for_chat(db, u["bale_user_id"]))
                 delivered = True
             except Exception:  # noqa: BLE001
                 logger.warning("update result notify failed", exc_info=True)

@@ -1084,6 +1084,7 @@ BTN_UPDATE = "⬆️ به‌روزرسانی روی سرور"
 BTN_UPDATE_CHECK = "🔄 بررسی به‌روزرسانی"
 # Old confirm label; canonical() sends it to BTN_UPDATE (install).
 BTN_UPDATE_CONFIRM = "✅ تأیید و نصب به‌روزرسانی"
+BTN_UPDATE_WAIT = "⏳ به‌روزرسانی در جریان است"
 CB_UPDATE_PREFIX = "upd|"
 CB_UPDATE_CHECK = "upd|check"
 CB_UPDATE_APPLY = "upd|apply"
@@ -1101,6 +1102,13 @@ def update_menu(available: bool = True) -> dict:
     """Owner About keyboard: check first; install only when a newer release is known."""
     rows = [[BTN_UPDATE] if available else [], [BTN_UPDATE_CHECK]]
     return _kb(rows, "update")
+
+
+def update_wait_menu() -> dict:
+    """The only reply button while an install is running. No nav, no assistant."""
+    markup = BaleClient.reply_keyboard([[BTN_UPDATE_WAIT]])
+    markup["_menu"] = "update_wait"
+    return markup
 
 
 

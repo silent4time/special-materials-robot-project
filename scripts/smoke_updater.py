@@ -283,8 +283,12 @@ def main() -> int:
     say("61", kb.BTN_UPDATE)
     prog = client.sent[-1][1]
     assert launched == ["61"] and "در حال دانلود" in prog and "▰" in prog and "99.0.0" in prog, client.sent[-1]
+    assert kb.BTN_UPDATE_WAIT in kb.keyboard_texts(client.sent[-1][2]), client.sent[-1][2]
     saved = json.loads((scratch / "update_progress.json").read_text(encoding="utf-8"))
     assert saved["target_version"] == "99.0.0" and str(saved["chat_id"]) == "61" and saved["message_id"]
+    say("61", kb.BTN_ANALYTICS)
+    assert launched == ["61"] and up.BUSY_FA in client.sent[-1][1], client.sent[-1]
+    assert kb.BTN_HOME not in kb.keyboard_texts(client.sent[-1][2])
     say("61", kb.BTN_UPDATE)
     assert launched == ["61"] and up.BUSY_FA in client.sent[-1][1], client.sent[-1]
     cleared: list = []

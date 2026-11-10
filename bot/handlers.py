@@ -5384,6 +5384,12 @@ class BotApp:
             except BaleAPIError as exc:
                 logger.warning("answerCallbackQuery failed: %s", exc)
 
+        from services import updater as up
+
+        if up.update_in_progress() and not data.startswith(kb.CB_UPDATE_PREFIX):
+            answer(up.BUSY_FA, alert=True)
+            return
+
         if data == kb.CB_ASK_ASSISTANT:
             user = ensure_registered(self.db, uid, self._display_name(message))
             if not user:
@@ -5929,6 +5935,7 @@ class BotApp:
             version = str(info.get("latest") or "")
             sent = self.client.send_message(
                 chat_id, up.progress_text("download", 5, version, "آماده‌سازی دانلود…"),
+                reply_markup=kb.update_wait_menu(),
             ) or {}
             if isinstance(sent, dict):
                 try:
@@ -7581,6 +7588,19 @@ class BotApp:
 
     # ---------- dispatcher ----------
 
+    def _update_blocks_input(self, message: dict) -> bool:
+        """While an install is running, no menu button, file, or text does any work."""
+        from services import updater as up
+
+        if not up.update_in_progress():
+            return False
+        self._reply(
+            message,
+            up.BUSY_FA + "\nتا آمدن پیام پایان، دکمه‌ها کار نمی‌کنند.",
+            kb.update_wait_menu(),
+        )
+        return True
+
     def handle_message(self, message: dict) -> None:
         try:
             uid = str(((message or {}).get("from") or {}).get("id") or "")
@@ -7596,6 +7616,8 @@ class BotApp:
 
     def _handle_message(self, message: dict) -> None:
         if not message:
+            return
+        if self._update_blocks_input(message):
             return
         raw_text = (message.get("text") or "").strip()
         # Old / renamed labels → current label (old keyboards stay usable)
