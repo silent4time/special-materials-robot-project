@@ -107,9 +107,15 @@ async def about_update(request: Request, user=Depends(require_owner_web), db: Da
         return render(request, "about.html", _ctx(
             db, user, message=up.NO_UPDATE_FA.format(current=info["current"]),
         ))
-    if (info["status"] or {}).get("state") == "running":
-        return render(request, "about.html", _ctx(db, user, error="یک به‌روزرسانی در حال اجراست."))
-    how = up.launch_detached(str(user.get("bale_user_id") or ""))
+    token = up.try_acquire_update_lock()
+    if not token:
+        return render(request, "about.html", _ctx(db, user, error=up.BUSY_FA))
+    try:
+        how = up.launch_detached(str(user.get("bale_user_id") or ""), lock_token=token)
+        up.clear_proc_flag()
+    except Exception:
+        up.release_update_lock(token=token)
+        raise
     try:
         log_activity(db, user, "web_update", from_version=info["current"], to_version=info["latest"])
     except Exception:  # noqa: BLE001

@@ -5321,7 +5321,20 @@ class BotApp:
                 answer()
                 self.on_about(message, force=True)
                 return
-            if data == kb.CB_UPDATE_APPLY:
+            if data in (kb.CB_UPDATE_APPLY, kb.CB_UPDATE_CONFIRM):
+                # Drop the inline keyboard before any slow work so a second tap cannot refire it.
+                chat_id = (message.get("chat") or {}).get("id")
+                mid = message.get("message_id")
+                if chat_id and mid:
+                    try:
+                        self.client.edit_message_reply_markup(
+                            chat_id, int(mid), {"inline_keyboard": []},
+                        )
+                    except (BaleAPIError, TypeError, ValueError):
+                        logger.info("clear update keyboard failed")
+                if up.update_in_progress():
+                    answer(up.BUSY_FA, alert=True)
+                    return
                 answer()
                 self.on_update_apply(message)
                 return
@@ -5784,26 +5797,54 @@ class BotApp:
         user = self._update_owner(message)
         if not user:
             return
-        info = up.update_info(self.db, network=False)
-        if not info["available"]:
-            info = up.update_info(self.db, force=True)
-        if not info["available"]:
-            self._reply(
-                message,
-                up.NO_UPDATE_FA.format(current=info["current"]) if not info.get("error") else up.CHECK_FAIL_FA,
-                kb.update_menu(False),
-            )
+        if up.update_in_progress():
+            self._reply(message, up.BUSY_FA, kb.update_menu(True))
             return
-        if (info["status"] or {}).get("state") == "running":
-            self._reply(message, "⏳ یک به‌روزرسانی در حال اجراست.", kb.update_menu(True))
+        # Take the lock before the network check so a second tap cannot start another run.
+        token = up.try_acquire_update_lock()
+        if not token:
+            self._reply(message, up.BUSY_FA, kb.update_menu(True))
             return
-        how = up.launch_detached(str(user.get("bale_user_id") or ""))
-        self._reply(
-            message,
-            f"⏳ به‌روزرسانی به نسخهٔ {info['latest']} روی همین سرور شروع شد ({how}). "
-            "پیش از نصب بک‌آپ گرفته می‌شود؛ تست‌ها چند دقیقه طول می‌کشد و در صورت خطا به نسخهٔ قبل برمی‌گردد.",
-            kb.bot_settings_menu(user),
-        )
+        chat_id = self._chat_id(message)
+        mid = 0
+        try:
+            info = up.update_info(self.db, network=False)
+            if not info["available"]:
+                info = up.update_info(self.db, force=True)
+            if not info["available"]:
+                up.release_update_lock(token=token)
+                self._reply(
+                    message,
+                    up.NO_UPDATE_FA.format(current=info["current"]) if not info.get("error") else up.CHECK_FAIL_FA,
+                    kb.update_menu(False),
+                )
+                return
+            version = str(info.get("latest") or "")
+            sent = self.client.send_message(
+                chat_id, up.progress_text("download", 5, version, "آماده‌سازی دانلود…"),
+            ) or {}
+            if isinstance(sent, dict):
+                try:
+                    mid = int(sent.get("message_id") or 0)
+                except (TypeError, ValueError):
+                    mid = 0
+            up.write_progress_state(chat_id, mid, version)
+            up.launch_detached(str(user.get("bale_user_id") or ""), token)
+            up.clear_proc_flag()
+        except Exception:
+            up.release_update_lock(token=token)
+            up.clear_progress_state()
+            logger.exception("update start failed")
+            err = up.failure_text("شروع به‌روزرسانی ممکن نشد.")
+            edited = False
+            if mid:
+                try:
+                    self.client.edit_message_text(chat_id, mid, err)
+                    edited = True
+                except Exception:  # noqa: BLE001
+                    logger.info("could not edit failed update start")
+            if not edited:
+                self._reply(message, err, kb.update_menu(True))
 
     def on_backup_menu(self, message: dict) -> None:
         from services import backup as bk
@@ -6411,15 +6452,19 @@ class BotApp:
             return True
         extra = ""
         if which == "logo":
-            ok, detail = self.client.try_set_my_photo(path)
-            if ok:
-                extra = "\nعکس پروفایل بازو هم به‌روز شد."
+            from services.bot_logo import LOGO_UPLOAD_HINT_FA, PROFILE_PHOTO_API_SUPPORTED
+
+            if PROFILE_PHOTO_API_SUPPORTED:
+                ok, detail = self.client.try_set_my_photo(path)
+                if ok:
+                    extra = "\nعکس پروفایل بازو هم به‌روز شد."
+                else:
+                    extra = "\n" + LOGO_UPLOAD_HINT_FA
+                    logger.info("set bot profile photo fallback: %s", detail)
             else:
-                extra = (
-                    "\n(API عکس پروفایل بازو در بله پشتیبانی نشد؛ "
-                    "لوگو به‌عنوان تصویر برندینگ ذخیره شد و در خوشامدگویی نمایش داده می‌شود.)"
-                )
-                logger.info("set bot profile photo fallback: %s", detail)
+                # docs.bale.ai has no method for the bot's own avatar; don't call one and pretend.
+                extra = "\n" + LOGO_UPLOAD_HINT_FA
+                logger.info("bot avatar API unsupported; logo stored for welcome/web only")
         self._bot_settings_pending[uid] = {"mode": "menu", "which": which}
         self._reply(
             message,

@@ -4,13 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}داشبورد مواد{% endblock %}</title>
+  <link rel="icon" type="image/png" href="/assets/logo.png">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 {% if user %}
 <header class="topbar">
   <div class="topbar-inner">
-    <a class="brand" href="/home">داشبورد مواد تاندیش</a>
+    <a class="brand" href="/home"><img class="brand-logo" src="/assets/logo.png" alt="">داشبورد مواد تاندیش</a>
     <nav class="nav">
       <a href="/home">خانه</a>
       {% if can(user, "site_stock") %}<a href="/stock">موجودی سایت</a>{% endif %}

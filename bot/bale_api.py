@@ -193,9 +193,11 @@ class BaleClient:
                 fh.close()
 
     def try_set_my_photo(self, file_path: Path | str) -> tuple[bool, str]:
-        """Attempt to set the bot profile photo. Bale may not support this.
+        """Probe profile-photo methods. Official Bale docs do not list any of them.
 
-        Returns (ok, detail). On unsupported API, returns (False, reason) without raising.
+        ``docs.bale.ai`` (2026-11-10) has ``setChatPhoto`` for groups/channels only
+        and no ``setMyProfilePhoto``. Returns (False, reason) without raising.
+        Startup does not call this; see ``services.bot_logo``.
         """
         path = Path(file_path)
         if not path.is_file():

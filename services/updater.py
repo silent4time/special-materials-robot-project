@@ -21,13 +21,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -35,6 +38,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 import config
+
+logger = logging.getLogger(__name__)
 
 CACHE_KEY = "update_cache"
 NOTIFIED_KEY = "update_notified_version"
@@ -87,6 +92,44 @@ def _get(url: str, accept: str = "application/vnd.github+json", timeout: float =
 
     r = httpx.get(url, headers=_headers(accept), timeout=timeout, follow_redirects=True)
     return r.status_code, r.content
+
+
+def _download(
+    url: str,
+    on_progress: Callable[[int, int], None] | None = None,
+    timeout: float = 300,
+) -> tuple[int, bytes]:
+    """GET a release asset. ``on_progress(done, total)`` — total is 0 when the length is unknown."""
+    if _http_get is not None:
+        status, blob = _http_get(url, _headers("application/octet-stream"))
+        if on_progress and status == 200 and blob:
+            on_progress(len(blob), len(blob))
+        return status, blob
+    import httpx
+
+    timeout_cfg = httpx.Timeout(timeout, connect=20.0)
+    with httpx.Client(timeout=timeout_cfg, follow_redirects=True) as client:
+        with client.stream("GET", url, headers=_headers("application/octet-stream")) as resp:
+            if resp.status_code != 200:
+                resp.read()
+                return resp.status_code, b""
+            total = int(resp.headers.get("content-length") or 0)
+            parts: list[bytes] = []
+            done = 0
+            last_emit = 0.0
+            for chunk in resp.iter_bytes(64 * 1024):
+                if not chunk:
+                    continue
+                parts.append(chunk)
+                done += len(chunk)
+                if on_progress:
+                    now = time.monotonic()
+                    if (total and done >= total) or now - last_emit >= 0.4:
+                        on_progress(done, total)
+                        last_emit = now
+            if on_progress and done and (not total or done < total):
+                on_progress(done, total)
+            return 200, b"".join(parts)
 
 
 def fetch_release(repo: str | None = None) -> dict:
@@ -271,6 +314,8 @@ def _set_status(db: Any, **kw) -> None:
     st = get_status(db)
     st.update(kw)
     st["at"] = datetime.now(TEHRAN).strftime("%Y-%m-%d %H:%M")
+    if st.get("state") == "running" and not st.get("started_epoch"):
+        st["started_epoch"] = time.time()
     db.set_setting(STATUS_KEY, json.dumps(st, ensure_ascii=False))
 
 
@@ -289,6 +334,325 @@ def status_fa(st: dict) -> str:
     if st.get("message"):
         s += f"\n{st['message']}"
     return redact_public(s)
+
+
+# --------------------------------------------------------------------------- progress + lock
+# In-process flag blocks a second click in this process before the lock file exists.
+# The lock file blocks another process (the other service, or a second user).
+# A reserve that the child never adopts expires quickly; a live apply expires after an hour.
+LOCK_STALE_SECONDS = 3600
+RESERVE_STALE_SECONDS = 90
+STATUS_STALE_SECONDS = 30 * 60
+BAR_WIDTH = 6
+BUSY_FA = "به‌روزرسانی در حال انجام است"
+SUCCESS_FA = "✅ به‌روزرسانی کامل شد — نسخهٔ فعال: {version}"
+STAGE_PERCENT = {"verify": 60, "backup": 75, "install": 88, "restart": 96}
+STAGE_FA = {
+    "download": "در حال دانلود",
+    "verify": "در حال بررسی چک‌سام",
+    "backup": "در حال تهیهٔ نسخهٔ پشتیبان از نصب فعلی",
+    "install": "در حال نصب و استخراج",
+    "restart": "در حال راه‌اندازی مجدد سرویس‌ها",
+}
+
+_proc_guard = threading.Lock()
+_proc_busy = False
+
+
+def updates_dir(root: Path | None = None) -> Path:
+    return Path(root or config.BASE_DIR) / "data" / "updates"
+
+
+def lock_path(root: Path | None = None) -> Path:
+    return updates_dir(root) / "update.lock"
+
+
+def progress_state_path(root: Path | None = None) -> Path:
+    return updates_dir(root) / "update_progress.json"
+
+
+def _read_lock(path: Path) -> dict:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except ValueError:
+        pass
+    try:
+        pid = int((raw or "").strip() or 0)
+    except ValueError:
+        pid = 0
+    try:
+        started = path.stat().st_mtime
+    except OSError:
+        started = 0
+    return {"pid": pid, "started": started, "token": "", "role": "apply"}
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _lock_info_blocks(info: dict, now: float) -> bool:
+    try:
+        started = float(info.get("started") or 0)
+    except (TypeError, ValueError):
+        started = 0.0
+    if started <= 0:
+        return False
+    age = now - started
+    if age >= LOCK_STALE_SECONDS:
+        return False
+    if str(info.get("role") or "") == "reserve" and age >= RESERVE_STALE_SECONDS:
+        return False
+    try:
+        pid = int(info.get("pid") or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    if pid and not _pid_alive(pid):
+        return False
+    return True
+
+
+def _lock_blocks(root: Path | None = None, now: float | None = None) -> bool:
+    path = lock_path(root)
+    if not path.exists():
+        return False
+    return _lock_info_blocks(_read_lock(path), time.time() if now is None else now)
+
+
+def clear_proc_flag() -> None:
+    """Drop the in-process flag without deleting the lock file (the child still holds it)."""
+    global _proc_busy
+    with _proc_guard:
+        _proc_busy = False
+
+
+def update_in_progress(root: Path | None = None) -> bool:
+    with _proc_guard:
+        if _proc_busy:
+            return True
+    return _lock_blocks(root)
+
+
+def try_acquire_update_lock(root: Path | None = None, *, adopt_token: str | None = None) -> str | None:
+    """Reserve the lock, or adopt a reservation with the same token. None → busy."""
+    global _proc_busy
+    path = lock_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    token = adopt_token or secrets.token_hex(8)
+    payload = {
+        "pid": os.getpid(),
+        "started": now,
+        "token": token,
+        "role": "apply" if adopt_token else "reserve",
+    }
+
+    def _create() -> None:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        try:
+            os.write(fd, json.dumps(payload).encode())
+        finally:
+            os.close(fd)
+
+    with _proc_guard:
+        if _proc_busy and not adopt_token:
+            return None
+        try:
+            _create()
+        except FileExistsError:
+            info = _read_lock(path)
+            if adopt_token and info.get("token") == adopt_token and _lock_info_blocks(info, now):
+                payload["started"] = float(info.get("started") or now)
+                payload["token"] = adopt_token
+                path.write_text(json.dumps(payload), encoding="utf-8")
+            elif not _lock_info_blocks(info, now):
+                path.unlink(missing_ok=True)
+                try:
+                    _create()
+                except FileExistsError:
+                    return None
+            else:
+                return None
+        _proc_busy = True
+        return token
+
+
+def release_update_lock(root: Path | None = None, *, token: str | None = None, force: bool = False) -> None:
+    global _proc_busy
+    path = lock_path(root)
+    with _proc_guard:
+        if path.exists() and token and not force:
+            held = str(_read_lock(path).get("token") or "")
+            if held and held != token:
+                _proc_busy = False
+                return
+        path.unlink(missing_ok=True)
+        _proc_busy = False
+
+
+def write_progress_state(
+    chat_id: Any,
+    message_id: Any,
+    version: str,
+    root: Path | None = None,
+    started: float | None = None,
+) -> None:
+    path = progress_state_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mid = int(message_id or 0)
+    except (TypeError, ValueError):
+        mid = 0
+    path.write_text(
+        json.dumps(
+            {
+                "chat_id": chat_id,
+                "message_id": mid,
+                "target_version": str(version or ""),
+                "started": float(time.time() if started is None else started),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def read_progress_state(root: Path | None = None) -> dict | None:
+    path = progress_state_path(root)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def clear_progress_state(root: Path | None = None) -> None:
+    progress_state_path(root).unlink(missing_ok=True)
+
+
+def progress_bar(percent: int, width: int = BAR_WIDTH) -> str:
+    pct = max(0, min(100, int(percent)))
+    filled = (pct * width + 50) // 100
+    if 0 < pct < 100:
+        filled = min(width - 1, max(1, filled))
+    elif pct >= 100:
+        filled = width
+    else:
+        filled = 0
+    return "▰" * filled + "▱" * (width - filled) + f" {pct}%"
+
+
+def _fmt_bytes(n: int) -> str:
+    n = max(0, int(n))
+    if n >= 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} مگابایت"
+    if n >= 1024:
+        return f"{n / 1024:.0f} کیلوبایت"
+    return f"{n} بایت"
+
+
+def download_progress(done: int, total: int) -> tuple[int, str]:
+    """Bar position for the download stage (5–40) and a Persian detail line.
+
+    The real percent is included only when the total size is known.
+    """
+    done = max(0, int(done))
+    total = max(0, int(total))
+    if total > 0:
+        done_c = min(done, total)
+        real = int(done_c * 100 / total)
+        overall = 5 + int(35 * done_c / total)
+        return overall, f"{_fmt_bytes(done_c)} از {_fmt_bytes(total)} ({real}٪)"
+    return 8, f"{_fmt_bytes(done)} دریافت شد"
+
+
+def progress_text(stage: str, percent: int, version: str = "", detail: str = "") -> str:
+    lines = [f"⬆️ به‌روزرسانی به نسخهٔ {version}" if version else "⬆️ به‌روزرسانی ربات"]
+    lines.append(STAGE_FA.get(stage, stage))
+    if detail:
+        lines.append(detail)
+    lines.append(progress_bar(percent))
+    return "\n".join(lines)
+
+
+def failure_text(reason: str) -> str:
+    reason = (reason or "خطای نامشخص").strip()
+    return f"❌ به‌روزرسانی ناموفق بود\n{reason}\nقفل آزاد شد. می‌توانید دوباره تلاش کنید."
+
+
+def final_failure_text(current: str, target: str) -> str:
+    cur = current or "نامشخص"
+    tgt = target or "نامشخص"
+    return f"❌ به‌روزرسانی کامل نشد — نسخهٔ فعال: {cur} (هدف: {tgt})"
+
+
+def _emit(progress: Callable[..., None] | None, stage: str, percent: int, version: str, detail: str = "") -> None:
+    if progress is None:
+        return
+    try:
+        progress(stage, int(percent), str(version or ""), str(detail or ""))
+    except Exception:  # noqa: BLE001 — progress must not abort the install
+        logger.warning("progress callback failed", exc_info=True)
+
+
+def bale_progress_editor(chat_id: Any, message_id: int) -> Callable[..., None]:
+    """Edit one Bale message. Download ticks are throttled; errors always go through."""
+    holder: dict[str, Any] = {"client": None, "last_pct": -1, "last_t": 0.0, "stage": ""}
+
+    def progress(stage: str, percent: int, version: str, detail: str = "") -> None:
+        now = time.monotonic()
+        if stage == "download" and holder["stage"] == "download":
+            if percent < 40 and now - holder["last_t"] < 1.0 and abs(percent - holder["last_pct"]) < 4:
+                return
+        holder["stage"] = stage
+        holder["last_pct"] = percent
+        holder["last_t"] = now
+        if stage == "error":
+            text = detail or failure_text("")
+        elif stage == "done":
+            text = SUCCESS_FA.format(version=version)
+        else:
+            text = progress_text(stage, percent, version, detail)
+        try:
+            if holder["client"] is None:
+                from bot.bale_api import BaleClient
+
+                holder["client"] = BaleClient()
+            holder["client"].edit_message_text(chat_id, int(message_id), text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not edit update progress: %s", exc)
+
+    return progress
+
+
+def bale_progress_editor_from_state(root: Path | None = None) -> Callable[..., None] | None:
+    state = read_progress_state(root)
+    if not state:
+        return None
+    chat_id = state.get("chat_id")
+    try:
+        message_id = int(state.get("message_id") or 0)
+    except (TypeError, ValueError):
+        message_id = 0
+    if not chat_id or not message_id:
+        return None
+    return bale_progress_editor(chat_id, message_id)
 
 
 # --------------------------------------------------------------------------- apply
@@ -375,6 +739,8 @@ def apply_update(
     smoke: Callable[[Path, Callable[[str], None]], bool] | None = None,
     restart: Callable[[Callable[[str], None]], str] | None = None,
     pip: bool = True,
+    adopt_token: str | None = None,
+    progress: Callable[..., None] | None = None,
 ) -> dict:
     root = Path(root or config.BASE_DIR)
     db_path = Path(db_path or config.DATABASE_PATH)
@@ -384,25 +750,20 @@ def apply_update(
     work.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     log = lines.append
-    lock = work / "update.lock"
-    try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
-    except FileExistsError:
-        if time.time() - lock.stat().st_mtime < 3600:
-            return {"state": "busy", "message": "یک به‌روزرسانی دیگر در حال اجراست."}
-        lock.unlink(missing_ok=True)
-        return apply_update(db, root=root, db_path=db_path, requested_by=requested_by,
-                            smoke=smoke, restart=restart, pip=pip)
-    cur = current_version(root)
-    info = get_remote(db, force=True)
-    ver = info.get("version") or ""
-    ts = datetime.now(TEHRAN).strftime("%Y%m%d_%H%M%S")
-    snapshot = work / f"rollback_{cur}_{ts}"
+    token = try_acquire_update_lock(root, adopt_token=adopt_token)
+    if not token:
+        return {"state": "busy", "message": BUSY_FA}
+    cur = ""
+    ver = ""
+    snapshot = work / "rollback_pending"
     added: list[Path] = []
     overlaid = False
     try:
+        cur = current_version(root)
+        info = get_remote(db, force=True)
+        ver = info.get("version") or ""
+        ts = datetime.now(TEHRAN).strftime("%Y%m%d_%H%M%S")
+        snapshot = work / f"rollback_{cur}_{ts}"
         if not is_newer(ver, cur):
             if info.get("error"):
                 log("remote: " + redact_public(str(info.get("error"))))
@@ -410,10 +771,17 @@ def apply_update(
             raise UpdateError("نسخهٔ جدیدتری وجود ندارد.")
         _set_status(db, state="running", version=ver, previous=cur, requested_by=requested_by, message="")
         # 1) download + verify
-        status, blob = _get(info["package"], accept="application/octet-stream", timeout=300)
+        _emit(progress, "download", 5, ver, "آماده‌سازی دانلود…")
+
+        def _on_dl(done: int, total: int) -> None:
+            pct, detail = download_progress(done, total)
+            _emit(progress, "download", pct, ver, detail)
+
+        status, blob = _download(info["package"], on_progress=_on_dl, timeout=300)
         if status != 200 or not blob:
             raise UpdateError(f"دانلود بسته ناموفق بود (HTTP {status}).")
         digest = hashlib.sha256(blob).hexdigest()
+        _emit(progress, "verify", STAGE_PERCENT["verify"], ver)
         if info.get("sha256_url"):
             s2, sha_body = _get(info["sha256_url"], accept="application/octet-stream")
             expected = (sha_body.decode("utf-8", "ignore").split() or [""])[0].lower() if s2 == 200 else ""
@@ -427,6 +795,7 @@ def apply_update(
         zpath = work / f"nasoz-bot-{ver}.zip"
         zpath.write_bytes(blob)
         # 2) backups
+        _emit(progress, "backup", STAGE_PERCENT["backup"], ver)
         bdb = _backup_db(db_path, root / "data" / "backups_manual" / f"bot_pre_v{ver}_{ts}.db")
         log(f"db backup: {bdb}")
         staging = Path(tempfile.mkdtemp(prefix="stage_", dir=work))
@@ -446,6 +815,7 @@ def apply_update(
         log(f"code snapshot: {snapshot} ({len(new_files) - len(added)} files)")
         old_req = (root / "requirements.txt").read_bytes() if (root / "requirements.txt").exists() else b""
         # 3) overlay (user files not in the release are left alone)
+        _emit(progress, "install", STAGE_PERCENT["install"], ver)
         overlaid = True
         for rel in new_files:
             dst = root / rel
@@ -477,10 +847,15 @@ def apply_update(
                                           capture_output=True, timeout=60).returncode == 0:
                     log(f"git index → {ref}")
                     break
+        _emit(progress, "restart", STAGE_PERCENT["restart"], ver)
         how = restart(log)
         log(f"restart: {how}")
         msg = f"از {cur} به {ver}." + ("" if how != "none" else " سرویس‌ها را دستی ری‌استارت کنید.")
         _set_status(db, state="applied", version=ver, previous=cur, message=msg, log=lines[-40:], reported=False)
+        if how == "none":
+            # Nothing is going to restart the process; close the progress message here.
+            _emit(progress, "done", 100, ver, "")
+            clear_progress_state(root)
         return {"state": "applied", "version": ver, "previous": cur, "message": msg, "log": lines}
     except Exception as e:  # noqa: BLE001
         reason = str(e) if isinstance(e, UpdateError) else f"خطای داخلی: {_safe_err(e)}"
@@ -498,17 +873,21 @@ def apply_update(
             log("rolled back to " + cur)
         if ver and is_newer(ver, cur):
             _set_status(db, state=state, version=ver, previous=cur, message=reason, log=lines[-40:], reported=False)
+        _emit(progress, "error", 0, ver, failure_text(reason))
+        clear_progress_state(root)
         return {"state": state, "version": ver, "previous": cur, "message": reason, "log": lines}
     finally:
-        lock.unlink(missing_ok=True)
+        release_update_lock(root, token=token)
 
 
-def launch_detached(requested_by: str = "") -> str:
+def launch_detached(requested_by: str = "", lock_token: str = "") -> str:
     """Start ``python -m services.updater apply`` outside the caller's service cgroup."""
     root = Path(config.BASE_DIR)
     py = root / ".venv" / "bin" / "python"
     py = str(py) if py.exists() else sys.executable
     args = [py, "-m", "services.updater", "apply", "--by", str(requested_by)]
+    if lock_token:
+        args += ["--lock-token", lock_token]
     logf = root / "data" / "updates" / "update.log"
     logf.parent.mkdir(parents=True, exist_ok=True)
     if shutil.which("systemd-run") and os.geteuid() == 0:
@@ -570,13 +949,153 @@ def notify_tick(client: Any, db: Any, keyboard: dict | None = None) -> str | Non
     return out
 
 
+def status_started_epoch(st: dict) -> float | None:
+    raw = st.get("started_epoch")
+    if raw not in (None, ""):
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    at = str(st.get("at") or "")
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(at, fmt).replace(tzinfo=TEHRAN).timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def reconcile_running_status(db: Any, *, root: Path | None = None, now: float | None = None) -> str | None:
+    """Close a stuck ``running`` row on startup.
+
+    * Running version equals the target → completed (✅, completion time is ``at``).
+      A still-live lock younger than 30 minutes is left alone (install in progress).
+    * Otherwise, version mismatch or a row older than 30 minutes → failed, and the lock is released.
+    """
+    st = get_status(db)
+    if st.get("state") != "running":
+        return None
+    now = time.time() if now is None else now
+    root = Path(root or config.BASE_DIR)
+    target = str(st.get("version") or "")
+    cur = current_version(root)
+    started = status_started_epoch(st)
+    age = (now - started) if started is not None else None
+    timed_out = age is not None and age >= STATUS_STALE_SECONDS
+    live = _lock_blocks(root, now)
+    version_match = bool(cur) and cur == target
+    if version_match:
+        if live and not timed_out:
+            return None
+        _set_status(
+            db,
+            state="applied",
+            version=target,
+            previous=st.get("previous") or "",
+            message=f"نسخهٔ فعال: {cur}",
+            reported=False,
+        )
+        release_update_lock(root, force=True)
+        return "completed"
+    if timed_out or not live:
+        if timed_out:
+            reason = "مهلت به‌روزرسانی (۳۰ دقیقه) تمام شد و کار ناتمام ماند."
+            kind = "stale"
+        else:
+            reason = f"نسخهٔ فعال ({cur or 'نامشخص'}) با نسخهٔ هدف ({target or 'نامشخص'}) یکی نیست."
+            kind = "failed"
+        _set_status(
+            db,
+            state="failed",
+            version=target,
+            previous=st.get("previous") or cur,
+            message=reason,
+            reported=False,
+        )
+        release_update_lock(root, force=True)
+        return kind
+    return None
+
+
+def _deliver_final(client: Any, chat_id: Any, message_id: Any, text: str) -> bool:
+    if client is None or chat_id in (None, ""):
+        return False
+    edited = False
+    try:
+        mid = int(message_id or 0)
+    except (TypeError, ValueError):
+        mid = 0
+    if mid:
+        try:
+            client.edit_message_text(chat_id, mid, text)
+            edited = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("final update edit failed: %s", exc)
+    if edited:
+        return True
+    try:
+        client.send_message(chat_id, text)
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("final update send failed", exc_info=True)
+        return False
+
+
+def finalize_after_restart(client: Any, db: Any, *, root: Path | None = None, now: float | None = None) -> str | None:
+    """After boot: fix a stuck status and edit/send the saved progress message."""
+    root = Path(root or config.BASE_DIR)
+    outcome = reconcile_running_status(db, root=root, now=now)
+    state = read_progress_state(root)
+    st = get_status(db)
+    if st.get("state") == "running" and _lock_blocks(root, now) and outcome is None:
+        return None
+    cur = current_version(root)
+    target = str((state or {}).get("target_version") or "") or str(st.get("version") or "")
+    if not state and outcome is None:
+        return None
+    success = bool(cur) and cur == target and outcome not in ("failed", "stale")
+    text = SUCCESS_FA.format(version=cur) if success else final_failure_text(cur, target)
+    delivered = False
+    if state:
+        delivered = _deliver_final(client, state.get("chat_id"), state.get("message_id"), text)
+        if delivered:
+            clear_progress_state(root)
+    elif outcome and client is not None:
+        owners = owner_recipients(db)
+        if not owners:
+            delivered = True
+        for u in owners:
+            try:
+                client.send_message(u["bale_user_id"], text)
+                delivered = True
+            except Exception:  # noqa: BLE001
+                logger.warning("update result notify failed", exc_info=True)
+    if delivered and get_status(db):
+        _set_status(db, reported=True)
+    return outcome or ("notified" if delivered else None)
+
+
+def _opt(argv: list[str], name: str) -> str:
+    if name in argv:
+        i = argv.index(name)
+        if i + 1 < len(argv):
+            return argv[i + 1]
+    return ""
+
+
 def _cli(argv: list[str]) -> int:
     from db.models import Database  # local import: keep module import light
 
     db = Database(config.DATABASE_PATH)
     if argv and argv[0] == "apply":
-        by = argv[argv.index("--by") + 1] if "--by" in argv else ""
-        res = apply_update(db, requested_by=by)
+        by = _opt(argv, "--by")
+        token = _opt(argv, "--lock-token")
+        res = apply_update(
+            db,
+            requested_by=by,
+            adopt_token=token or None,
+            progress=bale_progress_editor_from_state(),
+        )
         print(json.dumps({k: v for k, v in res.items() if k != "log"}, ensure_ascii=False))
         print("\n".join(res.get("log") or []))
         return 0 if res["state"] == "applied" else 1
