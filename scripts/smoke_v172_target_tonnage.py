@@ -450,6 +450,22 @@ def test_rate_reports_follow_usage_location() -> None:
     print("  N tundish + critical items: billet gets no slab-only casting floor OK")
 
 
+def test_empty_consumption_lists_tundish_rates() -> None:
+    """No stored consumption quantity must still list what one tundish uses."""
+    from services.main_goal_history import _sequence_placeholder
+    from services.target_tonnage_question import COL_ITEM, _rate_card_rows
+
+    assert _sequence_placeholder("تعویض شرود", "billet")
+    assert _sequence_placeholder("تعویض شرود", "bloom")
+    assert not _sequence_placeholder("تعویض شرود", "slab")
+    assert not _sequence_placeholder("تعویض نازل بیرونی", "billet")
+    rows = _rate_card_rows(_inventory(), "billet", 1)
+    names = " ".join(str(r[COL_ITEM]) for r in rows)
+    assert rows and "بتن بیلت" in names and "نازل" in names, names
+    assert "شرود" not in names, names
+    print("  empty consumption lists tundish rates; shroud is not a billet item OK")
+
+
 def main() -> None:
     import tempfile
 
@@ -460,6 +476,7 @@ def main() -> None:
     _seed(db)
     test_service(db)
     test_rate_reports_follow_usage_location()
+    test_empty_consumption_lists_tundish_rates()
     test_parse()
     body = test_bot(db)
     print("\n--- نمونهٔ پاسخ ربات ---\n" + body + "\n---")

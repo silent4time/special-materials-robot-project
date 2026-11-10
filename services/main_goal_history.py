@@ -596,6 +596,17 @@ def _sections_of_match(inv: pd.DataFrame, item_id: str | None, keyword: str | No
     return tuple(s for s in SECTIONS if s in secs)
 
 
+def _sequence_placeholder(name: str, sec: str) -> bool:
+    """A zero sequence-log label is not a material of the wrong section.
+
+    «تعویض شرود» is the casting-floor event for اسلب, not a billet or bloom item.
+    """
+    text = str(name or "").replace("ي", "ی").replace("ك", "ک").lower()
+    if "شرود" in text or "shroud" in text:
+        return sec != "slab"
+    return False
+
+
 def section_rule_lines(model: "HistoryModel", secs: list[str] | tuple[str, ...]) -> list[str]:
     """Report notes: which lines feed each section and which were set aside."""
     out = [
@@ -613,7 +624,7 @@ def section_rule_lines(model: "HistoryModel", secs: list[str] | tuple[str, ...])
                 where = "، ".join(mg.SECTION_LABEL_FA[s] for s in mm.other_sections) or "بخش دیگر"
                 parts.append(f"«{mm.name}» (متعلق به {where})")
             out.append(f"{mg.SECTION_LABEL_FA[sec]}: کنار گذاشته شد — " + "، ".join(parts) + ".")
-        zero = model.zero_materials(sec)
+        zero = [mm for mm in model.zero_materials(sec) if not _sequence_placeholder(mm.name, sec)]
         if zero:
             out.append(
                 f"{mg.SECTION_LABEL_FA[sec]}: بدون مصرف در سابقه (نمایش داده نشد): "
