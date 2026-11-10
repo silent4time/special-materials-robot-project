@@ -284,7 +284,7 @@ def _rate_card_rows(inventory: Any, sec: str, tundish_n: float | None) -> list[d
     except (TypeError, ValueError):
         n = 0
     if n < 1:
-        n = 1
+        return []
     res = build_rows(inventory, sec, n)
     if getattr(res, "error", None) or not res.rows:
         return []
@@ -301,12 +301,12 @@ def _rate_card_rows(inventory: Any, sec: str, tundish_n: float | None) -> list[d
         stock = row.get(COL_STOCK)
         short = row.get(COL_SHORT)
         out.append({
-            COL_SECTION: SECTION_FA[sec],
-            COL_ITEM: name,
-            COL_UNIT: _unit_fa(row.get(COL_UNIT)),
-            COL_NEED: float(need),
-            COL_STOCK: float(stock) if isinstance(stock, (int, float)) else None,
-            COL_SHORT: float(short) if isinstance(short, (int, float)) and float(short) > 0 else (
+            "بخش": SECTION_FA[sec],
+            "ماده": name,
+            "واحد": _unit_fa(row.get(COL_UNIT)),
+            "مقدار لازم": float(need),
+            "موجودی فعلی": float(stock) if isinstance(stock, (int, float)) else None,
+            "کسری": float(short) if isinstance(short, (int, float)) and float(short) > 0 else (
                 0.0 if isinstance(short, (int, float)) else None
             ),
             "_from_rates": True,
@@ -315,13 +315,15 @@ def _rate_card_rows(inventory: Any, sec: str, tundish_n: float | None) -> list[d
 
 
 def export_files(ans: "TonnageAnswer", *, report_dir: Any, letterhead_path: Any = None) -> tuple[Any, Any]:
-    """PDF + Excel: the answer table first, then the full «سناریو ۱ — تناژ هدف» report."""
+    """PDF + Excel: the N-tundish answer table, then the tonnage scenario without its old material table."""
     import copy
 
     from services.file_names import fa_stem
 
     res = copy.copy(ans.result)
-    res.sections = list((ans.table or {}).get("sections") or []) + list(ans.result.sections)
+    answer_sections = list((ans.table or {}).get("sections") or [])
+    tail = [s for s in (ans.result.sections or []) if s.get("title") != "مواد مورد نیاز برای تناژ هدف"]
+    res.sections = answer_sections + tail
     res.title = ans.table["title"] if ans.table else res.title
     res.subtitle = (ans.table or {}).get("subtitle") or res.subtitle
     stem = fa_stem("مواد لازم", *[f"{tons_fa(v)} تن {SECTION_FA[s]}" for s, v in ans.targets.items()],
@@ -346,19 +348,12 @@ def build_answer(db: Any, user: dict | None, targets: dict[str, float], inventor
         tun = _num((plan.get(SECTION_FA[sec]) or {}).get("تاندیش_لازم"))
         tundish_by_sec[sec] = tun
     rows: list[dict[str, Any]] = []
-    for v in mgh.material_need_values(model, result.params["resolved"], tundish_by_sec):
-        mm = v["material"]
-        short = v["shortage"]
-        rows.append({
-            COL_SECTION: SECTION_FA[v["section"]],
-            COL_ITEM: mm.name,
-            COL_UNIT: _unit_fa(mm.unit),
-            COL_NEED: v["need"],
-            COL_STOCK: v["stock"],
-            COL_SHORT: short if (short is not None and short > 0) else (0.0 if short is not None else None),
-        })
+    for sec in SECTION_ORDER:
+        if sec not in targets:
+            continue
+        rows.extend(_rate_card_rows(inventory, sec, tundish_by_sec.get(sec)))
     lines = [f"🎯 مواد لازم برای تولید {question_label(targets)}"]
-    lines.append(f"مبنا: نرخ مصرف هر قلم بر تن تولید همان بخش در سابقهٔ ذخیره‌شده ({_fa_hist(model)}).")
+    lines.append("مبنا: اول تناژ ÷ تن‌بر‌تاندیش سابقه = تعداد تاندیش؛ بعد همان فرمول «نیاز مواد برای N تاندیش» (با نوسازی).")
     for sec in SECTION_ORDER:
         if sec not in targets:
             continue
@@ -366,24 +361,15 @@ def build_answer(db: Any, user: dict | None, targets: dict[str, float], inventor
         tun = p.get("تاندیش_لازم")
         tun_txt = fa_num(float(tun), 0) if _num(tun) is not None else "—"
         sec_rows = [x for x in rows if x[COL_SECTION] == SECTION_FA[sec]]
-        from_rates = False
-        if not sec_rows:
-            sec_rows = _rate_card_rows(inventory, sec, tundish_by_sec.get(sec))
-            if sec_rows:
-                from_rates = True
-                rows.extend(sec_rows)
         n_short = sum(1 for x in sec_rows if (x[COL_SHORT] or 0) > 0)
         lines.append("")
         lines.append(f"🔹 بخش {SECTION_FA[sec]} — {tons_fa(targets[sec])} تن | تاندیش لازم ≈ {tun_txt}")
-        if not sec_rows:
-            lines.append("برای این بخش نه مصرف ثبت‌شده‌ای هست و نه نرخ مواد در منبع اصلی.")
+        if _num(tun) is None:
+            lines.append("تن بر تاندیش در سابقه نیست؛ تعداد تاندیش و مواد حساب نمی‌شود.")
             continue
-        if from_rates:
-            lines.append(
-                f"در سابقهٔ مصرف این بخش مقدار ماده‌ای ثبت نشده؛ "
-                f"فهرست زیر مصرف همان {tun_txt} تاندیش از نرخ منبع اصلی است "
-                f"(پچینگ و نوسازی؛ سطح ریخته‌گری فقط اگر محل استفاده همین بخش باشد)."
-            )
+        if not sec_rows:
+            lines.append("برای این تعداد تاندیش، در منبع اصلی قلمی با نرخ مثبت برای این بخش نیست.")
+            continue
         lines.append(f"{fa_num(len(sec_rows), 0)} قلم فقط از بخش {SECTION_FA[sec]}"
                      + (f"؛ {fa_num(n_short, 0)} قلم کسری دارد." if n_short else "؛ کسری ندارد."))
         from services import assistant_tables as at
@@ -404,37 +390,11 @@ def build_answer(db: Any, user: dict | None, targets: dict[str, float], inventor
             lines.append("مقدار اقلام شمارشی (عدد) به عدد صحیح، رو به بالا گرد شده است.")
         if any(x[COL_STOCK] is None for x in sec_rows):
             lines.append("«نامشخص» = قلم به منبع اصلی وصل نشده است.")
-        ex = model.excluded_materials(sec)
-        if ex:
-            lines.append("کنار گذاشته (متعلق به بخش دیگر طبق «محل استفاده»): "
-                         + "، ".join(f"{mm.name}" for mm in ex) + ".")
     for w in result.warnings:
         lines.append(f"⚠ {w}")
-    rate_rows = [x for x in rows if x.get("_from_rates")]
-    if rate_rows:
-        for block in result.sections:
-            if block.get("title") == "مواد مورد نیاز برای تناژ هدف" and not block.get("rows"):
-                block["rows"] = [
-                    {
-                        "بخش": x[COL_SECTION],
-                        "ماده": x[COL_ITEM],
-                        "واحد": x[COL_UNIT] or "—",
-                        "نیاز_بر_اساس_تن": "—",
-                        "نیاز_بر_اساس_تاندیش": "—",
-                        "نیاز_پیشنهادی": x[COL_NEED],
-                        "موجودی_منبع_اصلی": "—" if x[COL_STOCK] is None else x[COL_STOCK],
-                        "کسری": x[COL_SHORT] if (x[COL_SHORT] or 0) > 0 else ("0" if x[COL_SHORT] is not None else "—"),
-                    }
-                    for x in rate_rows
-                ]
-        notes = result.sections[-1] if result.sections else None
-        if notes and notes.get("title") == "قواعد و محدودیت‌ها":
-            notes.setdefault("rows", []).append({
-                "یادداشت": "چون در سابقهٔ مصرف این بخش مقدار مثبتی نبود، فهرست مواد از نرخ منبع اصلی و به تعداد تاندیش لازم ساخته شد. شرود سطح ریخته‌گری اسلب جز مواد بیلت نیست.",
-            })
     table = {
         "title": f"مواد لازم برای تولید {question_label(targets)}",
-        "subtitle": f"محاسبهٔ «سناریو ۱ — تناژ هدف» | {model.history_label()}",
+        "subtitle": "تناژ به تعداد تاندیش، سپس فرمول نیاز مواد برای N تاندیش",
         "sections": [{
             "title": f"بخش {SECTION_FA[sec]} — {tons_fa(targets[sec])} تن",
             "columns": TABLE_COLS,

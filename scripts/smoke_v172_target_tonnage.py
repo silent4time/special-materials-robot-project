@@ -227,10 +227,9 @@ def test_bot(db) -> str:
     texts, btns = send(MANAGER, QUESTION)
     body = "\n".join(texts)
     assert "مواد لازم برای تولید ۱۰ تن شمش بیلت" in body, body
-    assert "بتن بیلت" in body and "نازل" in body and "الیاف" in body, body
-    assert "شرود" not in body.split("کنار گذاشته")[0] and "روکش بلوم" not in body and "پودر قالب" not in body, body
-    assert "کنار گذاشته" in body and "تعویض شرود" in body  # told, not computed
-    assert "منو" not in body.split("کنار گذاشته")[0] or "دکمه" not in body, body
+    assert "بتن بیلت" in body and "نازل" in body, body
+    assert "شرود" not in body and "روکش بلوم" not in body and "پودر قالب" not in body and "الیاف" not in body, body
+    assert "نیاز مواد برای N تاندیش" in body and "تاندیش لازم" in body, body
     assert "│" in body, "answer must be a table"
     assert kb.BTN_OUT_PDF in btns and kb.BTN_OUT_XLSX in btns, btns
     nd = len(client.docs)
@@ -238,10 +237,10 @@ def test_bot(db) -> str:
     assert len(client.docs) == nd + 1 and client.docs[-1][1].endswith(".pdf"), client.docs[-1:]
     pdf = Path(client.docs[-1][1])
     assert pdf.stat().st_size > 2000 and "مواد_لازم" in pdf.name, pdf
-    # shortage: 10,000 t billet → بتن بیلت 1,000 kg vs stock 120 → کسری 880
+    # 10,000 t ÷ 100 t/tundish = 100 tundishes; بتن بیلت patching 2 → 200 kg, stock 120 → کسری 80
     texts, _ = send(MANAGER, "۱۰ هزار تن شمش بیلت")
     big = "\n".join(texts)
-    assert "۳ قلم کسری دارد" in big and "۸۸۰" in big and "۱٬۰۰۰" in big, big
+    assert "۲ قلم کسری دارد" in big and "۸۰" in big and "۲۰۰" in big, big
     send(MANAGER, kb.BTN_OUT_PDF)
     print("  bot: question → table + «خروجی PDF / اکسل» (assistant off) OK")
 
@@ -257,7 +256,7 @@ def test_bot(db) -> str:
     assert "کدام شمش" in texts[-1] and "۱۰ تن شمش اسلب" in btns, (texts, btns)
     texts, btns = send(MANAGER, "۱۰ تن شمش اسلب")
     body2 = "\n".join(texts)
-    assert "۱۰ تن شمش اسلب" in body2 and "تعویض شرود" in body2 and "بتن بیلت" not in body2, body2
+    assert "۱۰ تن شمش اسلب" in body2 and "شرود" in body2 and "بتن بیلت" not in body2, body2
     send(MANAGER, kb.BTN_HOME)
     # pending + another menu button → leaves the question
     send(MANAGER, "برای ده تن تولید شمش چقدر مواد لازم است")
