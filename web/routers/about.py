@@ -75,7 +75,7 @@ def _ctx(db: Database, user: dict, *, force: bool = False, message: str = "", er
         "show_install": show_new,
         "changelog": changelog_html(up.changelog_text(info)) if show_new else None,
         "current_changelog": changelog_html(up.redact_public(up.local_changelog(info["current"]))),
-        "status_text": up.status_fa(info["status"]) if owner else "",
+        "status_text": up.about_status_line(info) if owner else "",
         "message": message,
         "error": error,
     }

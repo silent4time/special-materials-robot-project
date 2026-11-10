@@ -222,7 +222,7 @@ def update_info(db: Any, *, force: bool = False, network: bool = True) -> dict:
         "latest": remote.get("version") or "",
         "available": is_newer(remote.get("version") or "", cur),
         "error": remote.get("error") or "",
-        "status": get_status(db),
+        "status": settle_status(db),
     }
 
 
@@ -297,9 +297,9 @@ def about_text(info: dict, *, owner: bool, checked: bool = False) -> str:
                 lines += ["", "تغییرات:", note[:1500]]
         elif checked:
             lines.append(NO_UPDATE_FA.format(current=info.get("current") or facts["version"]))
-        st = status_fa(info.get("status") or {})
-        if st:
-            lines += ["", "وضعیت به‌روزرسانی:", st]
+        line = about_status_line(info)
+        if line:
+            lines += ["", "وضعیت به‌روزرسانی:", line]
     return redact_public("\n".join(lines))
 
 
@@ -335,6 +335,50 @@ def status_fa(st: dict) -> str:
     if st.get("message"):
         s += f"\n{st['message']}"
     return redact_public(s)
+
+
+INSTALLED_FA = "✅ آخرین نسخه نصب است — نسخهٔ {version}"
+
+
+def settle_status(db: Any, *, root: Path | None = None) -> dict:
+    """Close a finished install that the database still calls «running».
+
+    A live lock is left alone (the install really is still going). When the
+    files are already the target version and nothing is installing, the row
+    becomes «applied» so About stops saying «در حال به‌روزرسانی».
+    """
+    st = get_status(db)
+    if st.get("state") != "running":
+        return st
+    root = Path(root or config.BASE_DIR)
+    cur = current_version(root)
+    target = str(st.get("version") or "")
+    if not cur or not target or update_in_progress(root):
+        return st
+    if cur == target or is_newer(cur, target):
+        _set_status(
+            db,
+            state="applied",
+            version=cur,
+            previous=st.get("previous") or "",
+            message="آخرین نسخه نصب است",
+            reported=True,
+        )
+        return get_status(db)
+    return st
+
+
+def about_status_line(info: dict) -> str:
+    """The «وضعیت به‌روزرسانی» line. Finished + nothing newer → latest is installed."""
+    st = info.get("status") or {}
+    if st.get("state") == "running":
+        return status_fa(st)
+    if st.get("state") in ("failed", "rolled_back"):
+        return status_fa(st)
+    if not info.get("available"):
+        cur = info.get("current") or st.get("version") or ""
+        return INSTALLED_FA.format(version=cur) if cur else ""
+    return status_fa(st)
 
 
 # --------------------------------------------------------------------------- progress + lock

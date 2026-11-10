@@ -493,6 +493,29 @@ def main() -> int:
     assert up.reconcile_running_status(dbx, root=rec) is None
     assert up.get_status(dbx)["state"] == "running"
     (rec / "data" / "updates" / "update.lock").unlink()
+    # finished install still labelled running, and no lock → About says the latest is installed
+    (rec / "VERSION").write_text("1.7.11\n", encoding="utf-8")
+    up._set_status(dbx, state="running", version="1.7.11", previous="1.7.10", message="")
+    settled = up.settle_status(dbx, root=rec)
+    assert settled["state"] == "applied" and settled["message"] == "آخرین نسخه نصب است", settled
+    done = up.about_text(
+        {"current": "1.7.11", "latest": "", "available": False, "error": "", "status": settled, "remote": {}},
+        owner=True, checked=True,
+    )
+    assert "آخرین نسخه نصب است" in done and "در حال به‌روزرسانی" not in done, done
+    up._set_status(dbx, state="running", version="1.7.11", previous="1.7.10", message="")
+    (rec / "data" / "updates" / "update.lock").write_text(
+        json.dumps({"pid": os.getpid(), "started": time.time(), "token": "live", "role": "apply"}),
+        encoding="utf-8",
+    )
+    assert up.settle_status(dbx, root=rec)["state"] == "running"
+    busy = up.about_text(
+        {"current": "1.7.11", "latest": "", "available": False, "error": "",
+         "status": up.get_status(dbx), "remote": {}},
+        owner=True,
+    )
+    assert "در حال به‌روزرسانی" in busy, busy
+    (rec / "data" / "updates" / "update.lock").unlink()
     print("  startup: version match completes, mismatch/stale fails, live update left running OK")
 
     from services import bot_logo
