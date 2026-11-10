@@ -23,7 +23,10 @@ MODES (نوسازی): the user picks one before generating.
     *_renovation column is ignored. Items whose need comes only from renovation
     (e.g. «بتن 86 نوسازی», patching rate 0) get need 0 and are NOT listed.
   The سطح ریخته گری (casting_floor) share is kept in BOTH modes — it is consumed
-  by casting on the floor, independent of tundish renovation.
+  by casting on the floor, independent of tundish renovation. From v1.7.2 it is
+  multiplied only by the tundishes of the sections named in «محل استفاده»
+  (analytics.section_rules.casting_floor_sections — the same rule as تناژ هدف).
+  A rate whose محل استفاده names no section still uses every section.
 Rates stay separate in منبع اصلی (billet/bloom/slab × renovation/patching).
 
 SPLIT (پیمانکار / شرکت): rows of منبع اصلی are split BEFORE category aggregation
@@ -59,9 +62,10 @@ SHARED NEED (merged rate crossing several codes, column ``rate_group``):
   "per_code": every member code gets the full rate as a normal item.
   Groups never cross segments (segment split happens first).
 
-ASSUMPTION (casting_floor): the سطح ریخته گری rate is treated as per-tundish
-material multiplied by (count_billet + count_bloom + count_slab). Refine when
-daily casting-floor logs exist.
+ASSUMPTION (casting_floor): the سطح ریخته گری rate is per-tundish material.
+v1.7.2: × the tundish counts of the sections in «محل استفاده» (e.g. شرود
+«سطح ریخته گری اسلب» × slab only; «بلوم / بیلت» × bloom + billet). A row with
+no section name still × (count_billet + count_bloom + count_slab).
 """
 from __future__ import annotations
 
@@ -76,7 +80,7 @@ from analytics.tundish import (
 )
 from bot.jalali import PERSIAN_MONTH_NAMES
 import config as _config
-from analytics.section_rules import apply_section_rate_attribution
+from analytics.section_rules import apply_section_rate_attribution, casting_floor_sections
 from excel.id_parse import is_contractor_material_id
 
 SEGMENT_COMPANY = "company"
@@ -519,6 +523,7 @@ def monthly_need_for_rates(
     counts: TundishMonthCounts,
     reno_mode: str = RENO_WITH,
     reno_counts: dict[str, float] | None = None,
+    casting_count: float | None = None,
 ) -> float:
     """Need from per-tundish rates × counts (+ casting_floor rule).
 
@@ -526,6 +531,11 @@ def monthly_need_for_rates(
     count (``reno_counts`` = {billet, bloom, slab}; see ``analytics.renovation_caps``).
     ``reno_counts=None`` → caps for a raw count: min(count, annual cap) per section.
     «بدون نوسازی»: patching only. casting_floor is applied in both modes.
+
+    ``casting_count`` is how many tundishes multiply the casting-floor rate.
+    None = every section (``counts.total``) — direct callers and items whose
+    «محل استفاده» names no section. Reports pass the count from
+    :func:`casting_tundish_count` so a slab-only rate is not charged to billet.
     """
     from analytics.renovation_caps import capped_renovations_for_n
 
@@ -541,14 +551,75 @@ def monthly_need_for_rates(
         + cnt["bloom"] * float(bloom_patching) + reno * rc["bloom"] * float(bloom_renovation)
         + cnt["slab"] * float(slab_patching) + reno * rc["slab"] * float(slab_renovation)
     )
-    # ASSUMPTION: casting_floor × total tundish count for the month.
+    # casting_floor × tundishes of the sections «محل استفاده» names.
+    # casting_count is None → every section (previous formula).
     cf = float(casting_floor)
-    if cf > 0 and counts.total > 0:
-        need += cf * float(counts.total)
-    elif cf > 0 and counts.total == 0:
-        # No tundishes entered — still surface the raw casting-floor rate as need.
-        need += cf
+    if cf > 0:
+        cf_n = float(counts.total) if casting_count is None else float(casting_count)
+        if cf_n > 0:
+            need += cf * cf_n
+        elif counts.total == 0:
+            # No tundishes entered — still surface the raw casting-floor rate as need.
+            need += cf
     return need
+
+
+def casting_tundish_count(sections: tuple[str, ...] | None, counts: TundishMonthCounts) -> float:
+    """Tundishes that multiply one casting-floor rate.
+
+    ``sections is None`` → every section (the rate's «محل استفاده» names none).
+    """
+    if sections is None:
+        return float(counts.total)
+    total = 0.0
+    for sec in sections:
+        total += float(getattr(counts, f"count_{sec}", 0.0) or 0.0)
+    return total
+
+
+def casting_count_from_parts(
+    parts: list[tuple[float, tuple[str, ...] | None]],
+    merged: bool,
+    counts: TundishMonthCounts,
+) -> float:
+    """Tundish-count to multiply a code's (or a shared group's) casting-floor rate by.
+
+    ``parts`` = (rate, sections) of the rows/codes that carry a positive rate.
+    One rate, or a merged cell counted once: the union of those sections
+    (any unknown section → every section). Separate rates that are summed:
+    each rate × its own sections, returned as the single count which, times
+    the summed rate, gives that total.
+    """
+    active = [(float(rate), sections) for rate, sections in parts if float(rate) > 0]
+    if not active:
+        return 0.0
+    if merged or len(active) == 1:
+        if any(sections is None for _rate, sections in active):
+            return float(counts.total)
+        named: list[str] = []
+        for _rate, sections in active:
+            for sec in sections or ():
+                if sec not in named:
+                    named.append(sec)
+        return casting_tundish_count(tuple(named), counts)
+    desired = sum(rate * casting_tundish_count(sections, counts) for rate, sections in active)
+    summed = sum(rate for rate, _sections in active)
+    return desired / summed if summed else 0.0
+
+
+def cf_parts_for(
+    per_code: dict[str, dict[str, Any]],
+    members: list[str],
+    merged_columns: list[str] | tuple[str, ...] | None = None,
+) -> tuple[list[tuple[float, tuple[str, ...] | None]], bool]:
+    """(parts, merged) for :func:`casting_count_from_parts` from prepared codes."""
+    merged = "casting_floor" in set(merged_columns or ())
+    parts: list[tuple[float, tuple[str, ...] | None]] = []
+    for key in members:
+        rate = float(per_code[key]["rates"].get("casting_floor") or 0)
+        if rate > 0:
+            parts.append((rate, per_code[key].get("casting_sections")))
+    return parts, merged
 
 
 def horizon_reno_monthly(counts: TundishMonthCounts, horizon_months: int) -> dict[str, float]:
@@ -622,6 +693,8 @@ def prepare_code_rates(
             "cp": _critical_point_value(group),
             "stock": _real_stock(group),
             "group": group,
+            # None = «محل استفاده» names no section → casting floor × every section
+            "casting_sections": casting_floor_sections(group),
         }
     groups = (
         shared_need_groups(group_source, set(per_code))
@@ -691,15 +764,24 @@ def build_critical_items_rows(
     days = max(1, int(days_in_month) if days_in_month is not None else DAYS_PER_MONTH)
 
     def _metrics(
-        rates: dict[str, float], stock: float, cp: float | None, origin: tuple[str, str, str]
+        rates: dict[str, float],
+        stock: float,
+        cp: float | None,
+        origin: tuple[str, str, str],
+        casting_count: float | None = None,
     ) -> dict[str, Any] | None:
         if sum(rates[c] for c in use_cols) <= 0 or sum(rates.values()) <= 0:
             return None
         okey, olabel, oflag = origin
         horizon = HORIZON_MONTHS[okey]
         # v1.7.0: renovation capped over the horizon (monthly-equivalent counts)
+        # v1.7.2: casting floor × only the sections «محل استفاده» names
         monthly = monthly_need_for_rates(
-            counts=counts, reno_mode=reno_mode, reno_counts=horizon_reno_monthly(counts, horizon), **rates
+            counts=counts,
+            reno_mode=reno_mode,
+            reno_counts=horizon_reno_monthly(counts, horizon),
+            casting_count=casting_count,
+            **rates,
         )
         if monthly <= 0:
             return None
@@ -769,7 +851,13 @@ def build_critical_items_rows(
     for code, info in per_code.items():
         if code in grouped_codes:
             continue
-        m = _metrics(info["rates"], info["stock"], info["cp"], code_origin(info["group"]))
+        m = _metrics(
+            info["rates"],
+            info["stock"],
+            info["cp"],
+            code_origin(info["group"]),
+            casting_tundish_count(info.get("casting_sections"), counts),
+        )
         if m is None:
             continue
         desc, unit = _pick_description(info["group"], use_cols)
@@ -789,8 +877,13 @@ def build_critical_items_rows(
             cp = float(sum(cps))
         stock = float(sum(per_code[k]["stock"] for k in members))
         # Group horizon from all member rows (members with different origins → «مختلط», H=6).
+        parts, merged = cf_parts_for(per_code, members, merged_cols)
         m = _metrics(
-            rates, stock, cp, code_origin(pd.concat([per_code[k]["group"] for k in members]))
+            rates,
+            stock,
+            cp,
+            code_origin(pd.concat([per_code[k]["group"] for k in members])),
+            casting_count_from_parts(parts, merged, counts),
         )
         if m is None:
             continue
@@ -1120,7 +1213,8 @@ def report_footer_notes(
         (
             f"«{COL_MONTHLY}» = نرخ پچینگ هر کد × میانگین ماهانه تعداد تاندیش ماه‌های مبنا "
             "+ نرخ نوسازی × (تعداد نوسازی مجاز در افق ÷ ماه‌های افق) "
-            "(+ سطح ریخته‌گری × مجموع تاندیش‌ها)."
+            "(+ سطح ریخته‌گری × تاندیش بخش‌هایی که «محل استفاده» نام می‌برد؛ "
+            "اگر نام بخشی نباشد × مجموع تاندیش‌ها)."
         ),
         (
             "افق: اقلام وارداتی ۶ ماه و اقلام داخلی ۳ ماه (زمان تأمین) — مبدأ از ستون "
@@ -1134,8 +1228,10 @@ def report_footer_notes(
         ),
         reno_mode_note(reno_mode),
         (
-            "فرض سطح ریخته‌گری: نرخ ستون × مجموع تعداد تاندیش‌های ماه "
-            "(در هر دو حالت با/بدون نوسازی منظور می‌شود)."
+            "فرض سطح ریخته‌گری: نرخ ستون × تعداد تاندیش بخش‌هایی که «محل استفاده» "
+            "نام می‌برد (مثلاً «سطح ریخته گری اسلب» فقط اسلب؛ «بلوم / بیلت» بلوم و بیلت). "
+            "اگر «محل استفاده» نام بخشی نداشته باشد، × مجموع تعداد تاندیش‌های ماه. "
+            "در هر دو حالت با/بدون نوسازی منظور می‌شود."
         ),
         (
             f"حد تحمل (روز) = موجودی واقعی ÷ (میانگین مصرف ماهانه ÷ {DAYS_PER_MONTH} روز) — "

@@ -192,3 +192,33 @@ def section_membership_mask(df: pd.DataFrame | None, section: str) -> pd.Series:
         return pd.Series(dtype=bool)
     secs = row_sections(df)
     return secs.map(lambda t: (not t) or (section in t)).astype(bool)
+
+
+def casting_floor_sections(df: pd.DataFrame | None) -> tuple[str, ...] | None:
+    """Sections whose tundish counts multiply a positive «سطح ریخته‌گری» rate.
+
+    Same membership as :func:`row_sections` (v1.7.2): «محل استفاده» names the
+    section(s); no section word → that row's renovation/patching columns; still
+    nothing → unknown.
+
+    None = unrestricted (a row that carries the rate has no known section) —
+    callers keep ``rate × every section's tundishes``, which is how an item
+    with a blank «محل استفاده» already behaved.
+    () = this frame has no positive casting-floor rate.
+    A non-empty tuple = only those sections (شرود «سطح ریخته گری اسلب» → slab;
+    «بلوم / بیلت» → bloom and billet).
+    """
+    if df is None or df.empty or "casting_floor" not in df.columns:
+        return ()
+    vals = pd.to_numeric(df["casting_floor"], errors="coerce").fillna(0.0)
+    rows = df.loc[vals > 0]
+    if rows.empty:
+        return ()
+    known: list[str] = []
+    for sections in row_sections(rows):
+        if not sections:
+            return None
+        for sec in sections:
+            if sec not in known:
+                known.append(sec)
+    return tuple(s for s in SECTIONS if s in known)

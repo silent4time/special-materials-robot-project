@@ -1951,7 +1951,7 @@ class BotApp:
                 message,
                 f"{nt.mix_label(mix)} تاندیش — حالت را انتخاب کنید:\n"
                 f"• {kb.BTN_NT_WITH}: {_reno.MODE_WITH_TEXT_FA}\n• {kb.BTN_NT_WITHOUT}: {_reno.MODE_WITHOUT_TEXT_FA}\n"
-                "(سطح ریخته‌گری × کل تاندیش‌ها در هر دو حالت)",
+                "(سطح ریخته‌گری × تاندیش بخش‌های «محل استفاده»؛ بدون نام بخش × کل)",
                 kb.n_tundish_mode_menu(),
             )
             return True
@@ -1998,7 +1998,7 @@ class BotApp:
                 message,
                 f"{p['n']} تاندیش {nt.SECTIONS[p['section']]} — حالت را انتخاب کنید:\n"
                 f"• {kb.BTN_NT_WITH}: {_reno.MODE_WITH_TEXT_FA}\n• {kb.BTN_NT_WITHOUT}: {_reno.MODE_WITHOUT_TEXT_FA}\n"
-                "(سطح ریخته‌گری × N در هر دو حالت)",
+                "(سطح ریخته‌گری × N اگر «محل استفاده» همین بخش باشد؛ بدون نام بخش مثل قبل)",
                 kb.n_tundish_mode_menu(),
             )
         return True

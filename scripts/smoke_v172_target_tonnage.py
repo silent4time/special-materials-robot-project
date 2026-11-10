@@ -329,6 +329,116 @@ def test_assistant_and_web(db, bot_body: str) -> None:
     print("  web scenario = bot (billet-only rows identical) OK")
 
 
+def test_rate_reports_follow_usage_location() -> None:
+    """N tundish + critical items: a section does not receive slab-only casting-floor items.
+
+    شرود «سطح ریخته گری اسلب» (and the ZWNJ form) is slab only. «سطح ریخته گری بیلت»
+    is billet only. «بلوم / بیلت» counts for both. A blank «محل استفاده» still applies
+    to every section (the previous casting-floor rule).
+    """
+    import pandas as pd
+
+    from analytics.critical_items import (
+        COL_MONTHLY,
+        TundishMonthCounts,
+        build_critical_items_rows,
+        casting_count_from_parts,
+    )
+    from analytics.section_rules import casting_floor_sections
+    from services import n_tundish_report as nt
+
+    zero = {
+        "work_order": "", "casting_floor": 0, "billet_renovation": 0, "billet_patching": 0,
+        "bloom_renovation": 0, "bloom_patching": 0, "slab_renovation": 0, "slab_patching": 0,
+        "rate_group": "", "shared": "خیر", "critical_point": "", "origin": "داخلی", "priority": 1,
+        "contractor_or_company": "شرکت", "unit": "NO", "quantity": 0,
+    }
+    rows = [
+        dict(zero, category_code="1581", id="378481807741J", product_name="LADLE SHROUD",
+             keyword="شرود", usage_location="سطح ریخته گری اسلب", casting_floor=1),
+        dict(zero, category_code="1582", id="378481807742K", product_name="LADLE SHROUD ZWNJ",
+             keyword="شرود نیم‌فاصله", usage_location="سطح ریخته‌گری اسلب", casting_floor=2),
+        dict(zero, category_code="1451", id="378166661451D", product_name="بتن ۸۰ گان",
+             keyword="بتن گان", usage_location="سطح ریخته گری بیلت", casting_floor=4),
+        dict(zero, category_code="1712", id="378112341712N", product_name="نازل مشترک",
+             keyword="نازل سطح", usage_location="بلوم / بیلت", casting_floor=1),
+        dict(zero, category_code="1699", id="378112341699Z", product_name="کف بدون بخش",
+             keyword="کف", usage_location="", casting_floor=3),
+        dict(zero, category_code="1203", id="378112341203A", product_name="بتن بیلت",
+             keyword="بتن بیلت", usage_location="بیلت", unit="Kg", billet_patching=2),
+        # two codes, casting floor summed (not a merged casting-floor cell): slab + billet
+        dict(zero, category_code="1710", id="378112341710A", product_name="نازل اسلب گروه",
+             keyword="نازل گروه اسلب", usage_location="سطح ریخته گری اسلب", casting_floor=1,
+             rate_group="G1:billet_patching"),
+        dict(zero, category_code="1714", id="378112341714B", product_name="نازل بیلت گروه",
+             keyword="نازل گروه بیلت", usage_location="سطح ریخته گری بیلت", casting_floor=1,
+             rate_group="G1:billet_patching"),
+    ]
+    inv = pd.DataFrame(rows)
+    secs = {row.keyword: casting_floor_sections(inv.loc[[i]]) for i, row in inv.iterrows()}
+    assert secs["شرود"] == ("slab",), secs
+    assert secs["شرود نیم‌فاصله"] == ("slab",), secs
+    assert secs["بتن گان"] == ("billet",), secs
+    assert secs["نازل سطح"] == ("billet", "bloom"), secs
+    assert secs["کف"] is None, secs  # blank محل استفاده → every section
+    assert secs["بتن بیلت"] == (), secs  # no casting-floor rate
+
+    def codes_of(res) -> dict[str, float]:
+        assert res.error is None, res.error
+        return {str(r[nt.COL_CODE]): float(r[nt.COL_NEED]) for r in res.rows if r.get(nt.COL_ROW) not in ("", None)}
+
+    billet = codes_of(nt.build_rows(inv, "billet", 10, "with", report_date="1405/08/19"))
+    assert "1581" not in billet and "1582" not in billet, billet
+    assert billet["1451"] == 40 and billet["1712"] == 10 and billet["1699"] == 30 and billet["1203"] == 20, billet
+    # shared group: each member's own casting floor (1×10 billet + nothing from the slab member)
+    assert billet["1710/1714"] == 10, billet
+    wo = codes_of(nt.build_rows(inv, "billet", 10, "without"))
+    assert "1581" not in wo and "1582" not in wo and wo["1451"] == 40, wo
+
+    slab = codes_of(nt.build_rows(inv, "slab", 10, "with"))
+    assert slab["1581"] == 10 and slab["1582"] == 20 and slab["1699"] == 30, slab
+    assert "1451" not in slab and "1712" not in slab and "1203" not in slab, slab
+    assert slab["1710/1714"] == 10, slab  # only the slab member
+
+    bloom = codes_of(nt.build_rows(inv, "bloom", 10, "with"))
+    assert bloom["1712"] == 10 and bloom["1699"] == 30, bloom
+    assert "1581" not in bloom and "1582" not in bloom and "1451" not in bloom and "1203" not in bloom, bloom
+
+    mix = nt.build_mix_rows(inv, {"billet": 10, "bloom": 4, "slab": 20}, "with")
+    assert mix.error is None, mix.error
+    by = {str(r[nt.COL_CODE]): r for r in mix.rows if r.get(nt.COL_ROW) not in ("", None)}
+    assert float(by["1581"][mix.need_col]) == 20, by["1581"]  # 1 × slab, not × 34
+    assert float(by["1582"][mix.need_col]) == 40, by["1582"]
+    assert float(by["1451"][mix.need_col]) == 40, by["1451"]  # 4 × billet
+    assert float(by["1712"][mix.need_col]) == 14, by["1712"]  # 1 × (10+4)
+    assert float(by["1699"][mix.need_col]) == 3 * 34, by["1699"]  # blank location × all
+    assert float(by["1203"][mix.need_col]) == 20, by["1203"]
+    assert float(by["1710/1714"][mix.need_col]) == 1 * 20 + 1 * 10, by["1710/1714"]
+    assert "شرود" in by["1581"][nt.COL_KEYWORD]
+
+    counts = TundishMonthCounts(1405, 8, count_billet=10, count_bloom=4, count_slab=20)
+    df = build_critical_items_rows(inv, counts, segment="company", include_covered=True)
+    got = {str(r["کد چهاررقمی"]): float(r[COL_MONTHLY]) for _, r in df.iterrows() if r["row_kind"] != "member"}
+    assert got["1581"] == 20 and got["1582"] == 40 and got["1451"] == 40, got
+    assert got["1712"] == 14 and got["1699"] == 102 and got["1203"] == 20, got
+    assert got["1710/1714"] == 30, got
+
+    only_billet = TundishMonthCounts(1405, 8, count_billet=10, count_bloom=0, count_slab=0)
+    df = build_critical_items_rows(inv, only_billet, segment="company", include_covered=True)
+    names = set(df["کد چهاررقمی"].astype(str))
+    assert "1581" not in names and "1582" not in names, names
+    monthly = {str(r["کد چهاررقمی"]): float(r[COL_MONTHLY]) for _, r in df.iterrows() if r["row_kind"] != "member"}
+    assert monthly["1451"] == 40 and monthly["1712"] == 10 and monthly["1699"] == 30 and monthly["1203"] == 20, monthly
+    assert monthly["1710/1714"] == 10, monthly
+
+    # the summed-rate adjustment: 1×20 + 1×10 with a combined rate of 2 → count 15
+    cnt = TundishMonthCounts(0, 1, 10, 0, 20)
+    assert casting_count_from_parts([(1.0, ("slab",)), (1.0, ("billet",))], False, cnt) == 15
+    assert casting_count_from_parts([(1.0, ("slab",))], False, cnt) == 20
+    assert casting_count_from_parts([(3.0, None)], False, cnt) == 30
+    print("  N tundish + critical items: billet gets no slab-only casting floor OK")
+
+
 def main() -> None:
     import tempfile
 
@@ -338,6 +448,7 @@ def main() -> None:
     db = Database(tmp / "v172.db")
     _seed(db)
     test_service(db)
+    test_rate_reports_follow_usage_location()
     test_parse()
     body = test_bot(db)
     print("\n--- نمونهٔ پاسخ ربات ---\n" + body + "\n---")
