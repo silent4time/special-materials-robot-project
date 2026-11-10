@@ -917,16 +917,23 @@ def apply_update(
         reason = str(e) if isinstance(e, UpdateError) else f"خطای داخلی: {_safe_err(e)}"
         state = "failed"
         if overlaid:
-            for rel in added:
-                (root / rel).unlink(missing_ok=True)
+            # Restore the pre-update bytes first. Deleting files the zip added
+            # before that restore leaves VERSION at the new release and the new
+            # files gone if the process stops between the two steps (what the
+            # 1.7.1 updater did).
+            restored = 0
             if snapshot.exists():
                 for p in snapshot.rglob("*"):
-                    if p.is_file():
-                        dst = root / p.relative_to(snapshot)
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(p, dst)
+                    if not p.is_file():
+                        continue
+                    dst = root / p.relative_to(snapshot)
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(p, dst)
+                    restored += 1
+            for rel in added:
+                (root / rel).unlink(missing_ok=True)
             state = "rolled_back"
-            log("rolled back to " + cur)
+            log(f"rolled back to {cur} ({restored} files restored, {len(added)} new removed)")
         if ver and is_newer(ver, cur):
             _set_status(db, state=state, version=ver, previous=cur, message=reason, log=lines[-40:], reported=False)
         _emit(progress, "error", 0, ver, failure_text(reason))

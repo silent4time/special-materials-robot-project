@@ -9,13 +9,15 @@ Both copy a user-approved sample instead of the shared styler / base-columns rul
   • خلاصه مصرفی ماهیانه ← templates/monthly_summary_approved_1405-07-04.xlsx
     (approved sample of 2026-09-26): same sheet, widths, fills, row heights, no
     frozen header; only the font is Vazirmatn.
-Temp dirs only; the live DB is used read-only through a backup copy.
+
+Hermetic: every database is created under the smoke temp dir. The install's
+``data/bot.db`` is never opened (the in-bot updater runs this file on the live
+tree, and a real 1.7.1 database does not match the old note/mix assumptions).
 """
 from __future__ import annotations
 
 import _smoke_env  # noqa: F401,E402
 
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -25,6 +27,52 @@ TMP = _smoke_env.SMOKE_TMP / "template_reports"
 TMP.mkdir(parents=True, exist_ok=True)
 
 FAILS: list[str] = []
+
+
+def _fixture_db():
+    """Owner + منبع اصلی + monthly tundish counts, all under the smoke temp dir."""
+    import pandas as pd
+
+    from analytics.critical_items import previous_complete_months
+    from db.models import Database
+    from services.critical_items_report import report_date_parts
+    from services.main_source import persist_primary_frame
+
+    path = TMP / "fixture.db"
+    path.unlink(missing_ok=True)
+    live = (ROOT / "data" / "bot.db").resolve()
+    check(path.resolve() != live, "fixture must not be the install database")
+    db = Database(path)
+    db.upsert_user("901", role="owner", display_name="مالک نمونه")
+    zero = {
+        "work_order": "", "casting_floor": 0,
+        "billet_renovation": 0, "billet_patching": 0,
+        "bloom_renovation": 0, "bloom_patching": 0,
+        "slab_renovation": 0, "slab_patching": 0,
+        "rate_group": "", "shared": "خیر", "critical_point": 10, "origin": "داخلی",
+    }
+    rows = [
+        dict(
+            category_code="1203", id="378112341203A", product_name="بتن بیلت نمونه",
+            keyword="بتن بیلت", usage_location="بیلت", quantity=5, priority=1,
+            contractor_or_company="شرکت", unit="Kg",
+            **{**zero, "billet_renovation": 4, "billet_patching": 2},
+        ),
+        dict(
+            category_code="1655", id="378800001655B", product_name="روکش بلوم نمونه",
+            keyword="روکش بلوم", usage_location="بلوم", quantity=4, priority=1,
+            contractor_or_company="پیمانکار", unit="Kg",
+            **{**zero, "bloom_renovation": 3, "bloom_patching": 1},
+        ),
+    ]
+    persist_primary_frame(db, pd.DataFrame(rows), bale_user_id="901")
+    year, month, _day = report_date_parts(None)
+    for yy, mm in previous_complete_months(year, month):
+        db.upsert_monthly_tundish_counts(
+            jalali_year=yy, jalali_month=mm,
+            count_billet=10, count_bloom=4, count_slab=8, updated_by="901",
+        )
+    return db
 
 
 def check(ok: bool, msg: str) -> None:
@@ -183,23 +231,12 @@ def test_critical_synthetic() -> None:
 
 
 def test_critical_live_copy() -> None:
-    db_path = ROOT / "data" / "bot.db"
-    if not db_path.is_file():
-        print("  (no live DB — skipped)")
-        return
     from openpyxl import load_workbook
 
-    from db.models import Database
     from excel.critical_template import TEMPLATE_PATH, TEMPLATE_SHEET, load_template_workbook
     from services.critical_items_report import critical_item_count, generate_critical_items_files
 
-    copy = TMP / "bot_copy.db"
-    src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    dst = sqlite3.connect(copy)
-    src.backup(dst)
-    src.close()
-    dst.close()
-    db = Database(copy)
+    db = _fixture_db()
     users = [u for u in db.list_users() if u.get("role") == "owner" and u.get("active")]
     if not users:
         print("  (no owner — skipped)")
@@ -227,9 +264,12 @@ def test_critical_live_copy() -> None:
         check(str(notes[1] or "").startswith("تاریخ گزارش:") and "تاندیش" in str(notes[1]),
               f"live {ws.title}: date/basis note ({notes[1]})")
         # v1.3.1: third fixed note = rated items per section.
-        check(str(notes[2] or "").startswith(("اقلام دارای نرخ مصرف", "⚠️")),
-              f"live {ws.title}: section rates note ({notes[2]})")
-        check(all(v is None for v in notes[3:]), f"live {ws.title}: rest of the notes block blank {notes[2:]}")
+        # v1.7.0 inserts the renovation-cap note before the rates line.
+        check(str(notes[2] or "").startswith("نوسازی"),
+              f"live {ws.title}: renovation note ({notes[2]})")
+        check(str(notes[3] or "").startswith(("اقلام دارای نرخ مصرف", "⚠️")),
+              f"live {ws.title}: section rates note ({notes[3]})")
+        check(all(v is None for v in notes[4:]), f"live {ws.title}: rest of the notes block blank {notes[3:]}")
         _ = critical_item_count(df)
     from pypdf import PdfReader
 
@@ -290,21 +330,10 @@ def test_critical_notes_and_archive() -> None:
     check(len(compose_notes(["a", "b"], "\n".join("l" * 3 for _ in range(30)), 5)) == 2 + cra.MAX_NOTE_LINES
           or len(user_note_lines("\n".join(["l"] * 30))) <= 30, "notes capped")
     check("اجناس داخلی ۳ ماه، اجناس وارداتی ۶ ماه" in HORIZON_NOTE, "horizon note text")
-    db_path = ROOT / "data" / "bot.db"
-    if not db_path.is_file():
-        print("  (no live DB — archive test skipped)")
-        return
     import config
-    from db.models import Database
 
     check(str(cra.archive_root()).startswith(str(_smoke_env.SMOKE_TMP)), f"archive in temp {cra.archive_root()}")
-    copy = TMP / "bot_copy_archive.db"
-    src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    dst = sqlite3.connect(copy)
-    src.backup(dst)
-    src.close()
-    dst.close()
-    db = Database(copy)
+    db = _fixture_db()
     owner = [u for u in db.list_users() if u.get("role") == "owner" and u.get("active")]
     if not owner:
         return
@@ -357,18 +386,7 @@ def test_mix() -> None:
     check(nt.parse_mix("70 بیلت 100 اسلب") == {"billet": 70, "bloom": 0, "slab": 100},
           f"parse_mix 3 {nt.parse_mix('70 بیلت 100 اسلب')}")
     check(nt.parse_mix("بیلت") is None and nt.parse_mix("12") is None, "parse_mix needs ≥2 sections")
-    db_path = ROOT / "data" / "bot.db"
-    if not db_path.is_file():
-        return
-    from db.models import Database
-
-    copy = TMP / "bot_copy_mix.db"
-    src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    dst = sqlite3.connect(copy)
-    src.backup(dst)
-    src.close()
-    dst.close()
-    db = Database(copy)
+    db = _fixture_db()
     owner = [u for u in db.list_users() if u.get("role") == "owner" and u.get("active")]
     if not owner:
         return
