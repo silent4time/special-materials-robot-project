@@ -548,6 +548,32 @@ def main() -> int:
     # the live updater lock is still the one we planted (this script did not release it)
     assert live_lock.read_text(encoding="utf-8") == live_body
     print("  default_smoke: failed name + smoke.log; live updater lock left intact OK")
+
+    # Parallel runner: finish order is not log order; progress stays in 88…95.
+    par = TMP / "smokepar"
+    (par / "scripts").mkdir(parents=True)
+    (par / "scripts" / "smoke_a.py").write_text("import time\ntime.sleep(0.6)\n", encoding="utf-8")
+    (par / "scripts" / "smoke_b.py").write_text("import time\ntime.sleep(0.05)\n", encoding="utf-8")
+    (par / "scripts" / "smoke_c.py").write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
+    (par / "scripts" / "smoke_d.py").write_text("import time\ntime.sleep(0.2)\n", encoding="utf-8")
+    par_log: list[str] = []
+    ticks: list[tuple[str, int, str]] = []
+
+    def _tick(stage, percent, ver, detail=""):
+        ticks.append((stage, int(percent), detail))
+
+    assert up.default_smoke(par, par_log.append, progress=_tick, version="1.7.7", workers=4) is False
+    assert par_log == [
+        "PASS smoke_a.py", "PASS smoke_b.py", "FAIL smoke_c.py", "PASS smoke_d.py",
+    ], par_log
+    assert up.default_smoke.last_failures == ["smoke_c.py"]
+    assert ticks and ticks[-1][0] == "smoke" and ticks[-1][1] == 95 and ticks[-1][2] == "آزمون 4 از 4"
+    assert all(88 <= pct <= 95 for _s, pct, _d in ticks)
+    assert [pct for _s, pct, _d in ticks] == sorted(pct for _s, pct, _d in ticks)
+    assert all(d.startswith("آزمون ") and " از 4" in d for _s, _p, d in ticks)
+    assert up.smoke_progress_percent(0, 42) == 88 and up.smoke_progress_percent(42, 42) == 95
+    assert up.smoke_worker_count() == max(1, min(4, os.cpu_count() or 1))
+    print("  default_smoke: parallel pool, sorted log, progress 88→95 OK")
     up._http_get = None
     print("smoke_updater: ALL OK")
     return 0
