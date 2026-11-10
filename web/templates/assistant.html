@@ -5,6 +5,14 @@
   <h1>🤖 از دستیار بپرس</h1>
   {% if not enabled %}
   <div class="alert err">دستیار هوشمند غیرفعال است. مالک می‌تواند آن را از «⚙️ تنظیمات ربات» فعال کند.</div>
+  {% if error and error != "دستیار هوشمند غیرفعال است (فعال‌سازی: مالک، ⚙️ تنظیمات ربات)." %}<div class="alert err">{{ error }}</div>{% endif %}
+  {% if tonnage_ok %}
+  <p class="muted">در این حالت فقط پرسش «مواد لازم برای تناژ تولید» پاسخ داده می‌شود (همان محاسبهٔ «🎯 سناریو ۱ — تناژ هدف»).</p>
+  <form method="post" action="/assistant/ask" class="form-grid">
+    <input type="text" name="q" value="{{ question }}" placeholder="مثلاً: برای ده تن تولید شمش بیلت چقدر مواد لازم است؟" style="min-width:60%">
+    <button class="btn" type="submit">بپرس</button>
+  </form>
+  {% endif %}
   {% else %}
   <p class="muted">همان دستیار ربات بله: پاسخ‌ها مستقیم از دادهٔ ربات است و هر پرسش همان دسترسی منوی متناظر را دارد.</p>
   {% if error %}<div class="alert err">{{ error }}</div>{% endif %}

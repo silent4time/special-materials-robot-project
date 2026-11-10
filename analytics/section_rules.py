@@ -153,3 +153,42 @@ def apply_section_rate_attribution(
                 )
             out.loc[drop, col] = 0
     return out, changes
+
+
+# ---------------------------------------------------------------- item → section membership
+# v1.7.2 (تناژ هدف): the same per-row section rule as the daily site-stock lists
+# (services.site_stock_lists): «محل استفاده» names the section(s) — any text that
+# contains «بیلت» / «بلوم» / «اسلب», so «بلوم / بیلت» → bloom + billet and
+# «سطح ریخته گری اسلب» (شرود) → slab only; a row whose محل استفاده has no section
+# word falls back to its section rate columns (> 0); still nothing → unknown (()).
+def row_sections(df: pd.DataFrame | None) -> pd.Series:
+    """Per row: tuple of sections (billet/bloom/slab) the row belongs to; () = unknown."""
+    if df is None or df.empty:
+        return pd.Series(dtype=object)
+    from services.site_stock_lists import location_groups
+
+    loc = df["usage_location"] if "usage_location" in df.columns else pd.Series("", index=df.index)
+    out: list[tuple[str, ...]] = []
+    for idx in df.index:
+        secs = [s for s in location_groups(loc.at[idx]) if s in SECTIONS]
+        if not secs:
+            for sec, cols in SECTION_RATE_COLS.items():
+                for col in cols:
+                    if col not in df.columns:
+                        continue
+                    try:
+                        v = float(df.at[idx, col])
+                    except (TypeError, ValueError):
+                        continue
+                    if v == v and v > 0 and sec not in secs:
+                        secs.append(sec)
+        out.append(tuple(s for s in SECTIONS if s in secs))
+    return pd.Series(out, index=df.index, dtype=object)
+
+
+def section_membership_mask(df: pd.DataFrame | None, section: str) -> pd.Series:
+    """Rows that belong to ``section`` by :func:`row_sections`, plus rows of unknown section."""
+    if df is None or df.empty:
+        return pd.Series(dtype=bool)
+    secs = row_sections(df)
+    return secs.map(lambda t: (not t) or (section in t)).astype(bool)

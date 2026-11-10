@@ -49,10 +49,15 @@ def _ctx(db: Database, user: dict, **kw):
     from services import assistant_brain as ab
     from services import voice_assistant as va
 
+    from services import permissions as perm
+    from services import target_tonnage_question as tq
+
     enabled = db.get_setting(va.SETTING_ENABLED) == "1"
     return {
         "user": user,
         "enabled": enabled,
+        # v1.7.2: «مواد لازم برای N تن شمش …» works even with the assistant off (as in the bot)
+        "tonnage_ok": perm.can(user, tq.FEATURE),
         "help_text": ab.help_text_fa(user),
         "whisper": va.availability()["whisper"] if enabled else False,
         "question": "",
@@ -81,12 +86,20 @@ async def assistant_ask(request: Request, user=Depends(current_user), db: Databa
     from services import assistant_brain as ab
     from services import voice_assistant as va
 
+    from services import target_tonnage_question as tq
+
     ctx = _ctx(db, user)
-    if not ctx["enabled"]:
-        ctx["error"] = "دستیار هوشمند غیرفعال است (فعال‌سازی: مالک، ⚙️ تنظیمات ربات)."
-        return render(request, "assistant.html", ctx, status_code=400)
     form = await request.form()
     q = str(form.get("q") or "").strip()[:500]
+    if not ctx["enabled"]:
+        # same as the bot: a target-tonnage question is answered with the assistant off
+        if q and tq.parse(q) is not None:
+            ans = await run_in_threadpool(lambda: ab.answer(db, user, q, channel="web", use_llm=False))
+            ctx.update(question=q, answer=ans, links=[], followups=list(ans.buttons))
+            ctx.update(_table_ctx(request, ans))
+            return render(request, "assistant.html", ctx)
+        ctx["error"] = "دستیار هوشمند غیرفعال است (فعال‌سازی: مالک، ⚙️ تنظیمات ربات)."
+        return render(request, "assistant.html", ctx, status_code=400)
     audio = form.get("audio")
     transcript = ""
     if not q and isinstance(audio, UploadFile) and audio.filename:

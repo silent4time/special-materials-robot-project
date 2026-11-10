@@ -947,6 +947,25 @@ def main_goal_section_menu() -> dict:
     )
 
 
+# v1.7.2 — free-text «برای ده تن تولید شمش بیلت چقدر مواد لازم است»: clarifying
+# buttons are complete questions («۱۰ تن شمش بیلت»), so pressing one is the same as
+# typing it (services.target_tonnage_question parses it; no button state needed).
+def target_tonnage_section_menu(tons_label: str) -> dict:
+    """Missing product: «<tons> تن شمش بیلت / بلوم / اسلب»."""
+    return _kb([[f"{tons_label} تن شمش {fa}" for fa in ("بیلت", "بلوم", "اسلب")]], "flow")
+
+
+def target_tonnage_tons_menu(section_fa: str) -> dict:
+    """Missing tonnage: quick picks (any typed number also works)."""
+    picks = [f"{t} تن شمش {section_fa}" for t in ("۱۰", "۱۰۰", "۱٬۰۰۰", "۱۰٬۰۰۰")]
+    return _kb([picks[:2], picks[2:]], "flow")
+
+
+def target_tonnage_examples_menu() -> dict:
+    """Nothing usable: one example per product."""
+    return _kb([[f"۱۰ تن شمش {fa}" for fa in ("بیلت", "بلوم", "اسلب")]], "flow")
+
+
 def main_goal_targets_confirm_menu() -> dict:
     return _kb([[BTN_MG_COMPUTE], [BTN_MG_ADD_SECTION], [BTN_CANCEL]], "flow")
 
