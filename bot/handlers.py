@@ -154,6 +154,8 @@ class BotApp:
         self._allow_rate_loss: set[str] = set()
         # «🧮 نیاز مواد برای N تاندیش» steps
         self._n_tundish_pending: dict[str, dict[str, Any]] = {}
+        # v1.7.2 «برای ده تن تولید شمش بیلت …» waiting for the missing tonnage / product
+        self._tt_pending: dict[str, dict[str, Any]] = {}
         # v1.5.0: built report files awaiting «خروجی PDF»/«خروجی اکسل»; stock-report steps
         self._format_pending: dict[str, dict[str, Any]] = {}
         self._stock_report_pending: dict[str, dict[str, Any]] = {}
@@ -415,6 +417,7 @@ class BotApp:
                 uid in self._full_replace_confirm,
                 uid in self._rates_import_pending,
                 uid in self._n_tundish_pending,
+                uid in self._tt_pending,
                 uid in self._format_pending,
                 uid in self._stock_report_pending,
                 uid in self.tundish_report.pending,
@@ -446,6 +449,7 @@ class BotApp:
         self._rates_import_pending.pop(uid, None)
         self._allow_rate_loss.discard(uid)
         self._n_tundish_pending.pop(uid, None)
+        self._tt_pending.pop(uid, None)
         self._format_pending.pop(uid, None)
         self._stock_report_pending.pop(uid, None)
         self._file_guide_kind.pop(uid, None)
@@ -1947,7 +1951,7 @@ class BotApp:
                 message,
                 f"{nt.mix_label(mix)} تاندیش — حالت را انتخاب کنید:\n"
                 f"• {kb.BTN_NT_WITH}: {_reno.MODE_WITH_TEXT_FA}\n• {kb.BTN_NT_WITHOUT}: {_reno.MODE_WITHOUT_TEXT_FA}\n"
-                "(سطح ریخته‌گری × کل تاندیش‌ها در هر دو حالت)",
+                "(سطح ریخته‌گری × تاندیش بخش‌های «محل استفاده»؛ بدون نام بخش × کل)",
                 kb.n_tundish_mode_menu(),
             )
             return True
@@ -1994,7 +1998,7 @@ class BotApp:
                 message,
                 f"{p['n']} تاندیش {nt.SECTIONS[p['section']]} — حالت را انتخاب کنید:\n"
                 f"• {kb.BTN_NT_WITH}: {_reno.MODE_WITH_TEXT_FA}\n• {kb.BTN_NT_WITHOUT}: {_reno.MODE_WITHOUT_TEXT_FA}\n"
-                "(سطح ریخته‌گری × N در هر دو حالت)",
+                "(سطح ریخته‌گری × N اگر «محل استفاده» همین بخش باشد؛ بدون نام بخش مثل قبل)",
                 kb.n_tundish_mode_menu(),
             )
         return True
@@ -7556,6 +7560,9 @@ class BotApp:
             return
         if self.on_output_format_text(message, text):
             return
+        # v1.7.2: answer to «چند تن؟» / «کدام شمش؟» of a free-text tonnage question
+        if self.on_target_tonnage_pending_text(message, text):
+            return
 
         # یادآورها — settings (owner/manager)
         if self.reminder_settings.handle_text(message, text):
@@ -7670,6 +7677,10 @@ class BotApp:
         user = ensure_registered(self.db, self._uid(message), self._display_name(message))
         if self._expired_flow_notice(message, user):
             return
+        # v1.7.2: «برای ده تن تولید شمش بیلت چقدر مواد لازم است» → same calculation as
+        # «🎯 سناریو ۱ — تناژ هدف» (works with the assistant on or off)
+        if user and self.on_target_tonnage_question(message, user, raw_text):
+            return
         # free text that matched no menu/flow → 🤖 دستیار (only when the owner enabled it)
         if user and self._assistant_on() and raw_text.strip():
             self._assistant_answer(message, user, raw_text.strip())
@@ -7679,6 +7690,109 @@ class BotApp:
             "لطفاً از دکمه‌های منو استفاده کنید یا /help را بزنید.",
             kb.main_menu(user) if user else None,
         )
+
+    # ---------- v1.7.2: free-text «مواد لازم برای N تن شمش بیلت/بلوم/اسلب» ----------
+    def on_target_tonnage_question(self, message: dict, user: dict, text: str) -> bool:
+        """Free text like «برای ده تن تولید شمش بیلت چقدر مواد لازم است». False = not one."""
+        from services import target_tonnage_question as tq
+
+        q = tq.parse(text)
+        if q is None:
+            return False
+        uid = str(user["bale_user_id"])
+        if not perm.can(user, tq.FEATURE):
+            log_activity(self.db, user, "report_target_tonnage_denied", question=str(text)[:200])
+            self._reply(message, tq.denied_text(), kb.main_menu(user))
+            return True
+        if not q.complete:
+            self._tt_ask(message, uid, q)
+            return True
+        self._tt_pending.pop(uid, None)
+        return self._tt_run(message, user, q.targets, question=text)
+
+    def _tt_ask(self, message: dict, uid: str, q) -> None:
+        from services import target_tonnage_question as tq
+
+        self._tt_pending[uid] = {"tons": q.tons, "section": q.section}
+        btns = tq.clarify_buttons(q)
+        self._reply(message, tq.clarify_text(q), kb._kb(kb._pairs(btns) if len(btns) > 3 else [btns], "flow"))
+
+    def on_target_tonnage_pending_text(self, message: dict, text: str) -> bool:
+        """The user's reply to «چند تن؟» (plain number) or «کدام شمش؟» («بیلت»)."""
+        from services import target_tonnage_question as tq
+
+        uid = str(self._uid(message))
+        p = self._tt_pending.get(uid)
+        if not p:
+            return False
+        if text in self._button_handlers() or kb.button_to_file_type(text):
+            self._tt_pending.pop(uid, None)  # another menu → leave this question
+            return False
+        user = self._user_or_deny(message)
+        if not user:
+            self._tt_pending.pop(uid, None)
+            return True
+        q = tq.parse(text)
+        if q is not None and q.complete:
+            self._tt_pending.pop(uid, None)
+            return self.on_target_tonnage_question(message, user, text)
+        tons = p.get("tons")
+        sec = p.get("section")
+        if not tons:
+            tons = (q.tons if q else None) or tq.parse_amount(text)
+        if not sec:
+            secs = tq.parse_sections(tq.normalize(text))
+            sec = (q.section if q else None) or (secs[0] if len(secs) == 1 else None)
+        if tons and sec:
+            self._tt_pending.pop(uid, None)
+            if not perm.can(user, tq.FEATURE):
+                self._reply(message, tq.denied_text(), kb.main_menu(user))
+                return True
+            return self._tt_run(message, user, {sec: float(tons)}, question=text)
+        self._tt_ask(message, uid, tq.TonnageQuery(tons=tons, section=sec))
+        return True
+
+    def _tt_run(self, message: dict, user: dict, targets: dict[str, float], *, question: str = "") -> bool:
+        from services import target_tonnage_question as tq
+
+        def work() -> bool:
+            from services.file_names import unique_dir
+
+            try:
+                inv = load_primary_inventory(self.db, user)
+            except Exception:  # noqa: BLE001
+                inv = None
+            ans = tq.build_answer(self.db, user, targets, inventory=inv)
+            log_activity(self.db, user, "report_target_tonnage_question", question=str(question)[:200],
+                         targets="، ".join(f"{k}={float(v):g}" for k, v in targets.items()),
+                         ok=bool(ans.ok))
+            if not ans.ok:
+                self._reply(message, ans.text, kb.main_menu(user))
+                return True
+            try:
+                from services import main_goal_history as mgh
+
+                mgh.persist_scenario(self.db, ans.result, ans.model, user=user, source="bot_text")
+            except Exception:  # noqa: BLE001
+                logger.exception("target tonnage scenario persist failed")
+            self._reply_chunked(message, ans.text)
+            ensure_dirs()
+            try:
+                pdf_path, xlsx_path = tq.export_files(
+                    ans, report_dir=unique_dir(REPORT_DIR, "main_goal"), letterhead_path=self._letterhead_path())
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("target tonnage export failed")
+                self._reply(message, user_errors.error_fa("خطا در تولید PDF/اکسل", exc), kb.main_menu(user))
+                return True
+            title = ans.table["title"] if ans.table else "مواد لازم"
+            self._deliver_files(
+                message, user,
+                [("pdf", pdf_path, f"📄 {title} (جدول کامل)"), ("xlsx", xlsx_path, f"📊 نسخه اکسل — {title}")],
+                done_text="✅ گزارش ارسال شد.", done_markup=kb.main_menu(user),
+            )
+            return True
+
+        return self._heavy(message, "گزارش مواد لازم برای تناژ", True, work)
 
     def _button_handlers(self) -> dict[str, Any]:
         """Static button → handler map (menu-walk smoke checks every keyboard label)."""

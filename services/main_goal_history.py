@@ -395,6 +395,15 @@ class MaterialModel:
     monthly_qty: list[float] = field(default_factory=list)
     matched_source: str | None = None
     stock: float | None = None
+    # v1.7.2: False = the منبع اصلی row this line joins to belongs to another section
+    # («محل استفاده», e.g. شرود = «سطح ریخته گری اسلب») → never in this section's report
+    in_section: bool = True
+    other_sections: tuple[str, ...] = ()
+
+    @property
+    def has_history(self) -> bool:
+        """Consumed at least once in this section's stored months (all-zero lines are hidden)."""
+        return self.total_qty > 0
 
     @property
     def per_ton(self) -> float | None:
@@ -452,6 +461,17 @@ class HistoryModel:
         if total <= 0:
             return {s: 1.0 / len(SECTIONS) for s in SECTIONS}
         return {s: self.sections[s].total_tons / total for s in SECTIONS}
+
+    def section_materials(self, sec: str) -> list[MaterialModel]:
+        """Materials that feed ``sec`` (rule: :func:`section_rule_lines`)."""
+        return [mm for mm in self.materials.get(sec, []) if mm.in_section and mm.has_history]
+
+    def excluded_materials(self, sec: str) -> list[MaterialModel]:
+        """Lines of ``sec``'s consumption files that belong to another section."""
+        return [mm for mm in self.materials.get(sec, []) if not mm.in_section and mm.has_history]
+
+    def zero_materials(self, sec: str) -> list[MaterialModel]:
+        return [mm for mm in self.materials.get(sec, []) if mm.in_section and not mm.has_history]
 
     def last_month_ym(self) -> tuple[int, int] | None:
         for m in reversed(self.months):
@@ -522,18 +542,84 @@ def build_history_model(months: list[MonthRecord], inventory: pd.DataFrame | Non
     out_mats: dict[str, list[MaterialModel]] = {}
     for sec in SECTIONS:
         lst = sorted(mats[sec].values(), key=lambda mm: -mm.total_qty)
+        own_inv, sec_inv = _section_inventories(inventory, sec)
         for mm in lst:
             try:
-                matched, iid, _kw, stock = mg.match_inventory_stock(
-                    mg.MaterialLine(name=mm.name, quantity=mm.total_qty, unit=mm.unit, item_id=mm.item_id),
-                    inventory,
-                    section=sec,
-                )
-                mm.matched_source, mm.item_id, mm.stock = matched, iid, stock
+                line = mg.MaterialLine(name=mm.name, quantity=mm.total_qty, unit=mm.unit, item_id=mm.item_id)
+                # stock/join only from منبع اصلی rows of THIS section (+ rows of unknown section)
+                matched, iid, _kw, stock = mg.match_inventory_stock(line, own_inv, section=None)
+                if matched:
+                    mm.matched_source, mm.item_id, mm.stock = matched, iid, stock
+                elif sec_inv is not None and not sec_inv.empty:
+                    other, oid, okw = mg._match_main_source(line, sec_inv)  # noqa: SLF001
+                    if other:
+                        # joins only to rows of other sections → not a material of this section
+                        mm.in_section = False
+                        mm.matched_source = other
+                        mm.other_sections = _sections_of_match(sec_inv, oid, okw)
+                    else:
+                        mm.item_id = iid
             except Exception:  # noqa: BLE001
                 pass
         out_mats[sec] = lst
     return HistoryModel(months=months, sections=sections, materials=out_mats)
+
+
+def _section_inventories(inventory: pd.DataFrame | None, sec: str) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    """(rows of ``sec`` + rows of unknown section, all rows eligible for ``sec``).
+
+    Eligibility = ``analytics.section_rules.section_inventory`` (شرکت/پیمانکار rule,
+    1800 dropped); membership = ``section_rules.row_sections`` («محل استفاده», else the
+    section rate columns) — the same rule as the daily site-stock lists.
+    """
+    if inventory is None or inventory.empty:
+        return inventory, inventory
+    from analytics.section_rules import section_inventory, section_membership_mask
+
+    sec_inv = section_inventory(inventory, sec)
+    if sec_inv is None or sec_inv.empty:
+        return sec_inv, sec_inv
+    return sec_inv.loc[section_membership_mask(sec_inv, sec)], sec_inv
+
+
+def _sections_of_match(inv: pd.DataFrame, item_id: str | None, keyword: str | None) -> tuple[str, ...]:
+    from analytics.section_rules import row_sections
+
+    rows = inv.iloc[0:0]
+    if item_id and "id" in inv.columns:
+        rows = inv.loc[inv["id"].map(mg.fold_key) == mg.fold_key(item_id)]
+    if rows.empty and keyword and "keyword" in inv.columns:
+        rows = inv.loc[inv["keyword"].map(mg.fold_key) == mg.fold_key(keyword)]
+    secs: list[str] = []
+    for t in row_sections(rows):
+        secs += [s for s in t if s not in secs]
+    return tuple(s for s in SECTIONS if s in secs)
+
+
+def section_rule_lines(model: "HistoryModel", secs: list[str] | tuple[str, ...]) -> list[str]:
+    """Report notes: which lines feed each section and which were set aside."""
+    out = [
+        "اقلام هر بخش: فقط ردیف‌های فایل مصرف تاندیش همان بخش؛ اگر قلم به منبع اصلی وصل شود، "
+        "«محل استفاده» آن باید همان بخش را داشته باشد (مثلاً «بلوم / بیلت» هم بلوم و هم بیلت؛ "
+        "شرود «سطح ریخته گری اسلب» فقط اسلب). «محل استفاده» بدون نام بخش → ستون‌های نرخ همان بخش؛ "
+        "قلمی که بخشش در منبع اصلی معلوم نیست یا به منبع اصلی وصل نیست، در بخشِ فایل مصرف خودش می‌ماند. "
+        "قلم بدون مصرف در سابقهٔ آن بخش نمایش داده نمی‌شود.",
+    ]
+    for sec in secs:
+        ex = model.excluded_materials(sec)
+        if ex:
+            parts = []
+            for mm in ex:
+                where = "، ".join(mg.SECTION_LABEL_FA[s] for s in mm.other_sections) or "بخش دیگر"
+                parts.append(f"«{mm.name}» (متعلق به {where})")
+            out.append(f"{mg.SECTION_LABEL_FA[sec]}: کنار گذاشته شد — " + "، ".join(parts) + ".")
+        zero = model.zero_materials(sec)
+        if zero:
+            out.append(
+                f"{mg.SECTION_LABEL_FA[sec]}: بدون مصرف در سابقه (نمایش داده نشد): "
+                + "، ".join(f"«{mm.name}»" for mm in zero) + "."
+            )
+    return out
 
 
 # ---------------------------------------------------------------- input parsing
@@ -650,23 +736,28 @@ def _r(n: float | None, digits: int = 2) -> float | str:
     return round(n, digits)
 
 
-def history_sections(model: HistoryModel) -> list[dict[str, Any]]:
+def history_sections(model: HistoryModel, only: list[str] | tuple[str, ...] | None = None) -> list[dict[str, Any]]:
+    """History tables; ``only`` = the chosen sections (v1.7.2: a billet-only scenario shows
+    no bloom/slab columns or materials). None = all three."""
+    secs = [s for s in SECTIONS if (not only or s in only)]
     rows = []
     for m in model.months:
         row: dict[str, Any] = {"ماه": m.label}
-        for sec in SECTIONS:
+        for sec in secs:
             cons = m.consumptions.get(sec)
             row[f"تناژ_{mg.SECTION_LABEL_FA[sec]}"] = _r(m.tons(sec), 1)
             row[f"تاندیش_{mg.SECTION_LABEL_FA[sec]}"] = _r(cons.tundish_count, 1) if cons and cons.tundish_count is not None else "—"
-        row["جمع_تناژ"] = _r(m.production.total_tons, 1)
+        if len(secs) == len(SECTIONS):
+            row["جمع_تناژ"] = _r(m.production.total_tons, 1)
         rows.append(row)
     cols = ["ماه"]
-    for sec in SECTIONS:
+    for sec in secs:
         cols += [f"تناژ_{mg.SECTION_LABEL_FA[sec]}", f"تاندیش_{mg.SECTION_LABEL_FA[sec]}"]
-    cols.append("جمع_تناژ")
+    if len(secs) == len(SECTIONS):
+        cols.append("جمع_تناژ")
 
     sec_rows = []
-    for sec in SECTIONS:
+    for sec in secs:
         sm = model.sections[sec]
         _i, slope, method = sm.trend()
         sec_rows.append(
@@ -682,8 +773,8 @@ def history_sections(model: HistoryModel) -> list[dict[str, Any]]:
             }
         )
     rate_rows = []
-    for sec in SECTIONS:
-        for mm in model.materials[sec]:
+    for sec in secs:
+        for mm in model.section_materials(sec):
             rate_rows.append(
                 {
                     "بخش": mg.SECTION_LABEL_FA[sec],
@@ -715,30 +806,43 @@ def _notes_section(lines: list[str]) -> dict[str, Any]:
     return {"title": "قواعد و محدودیت‌ها", "columns": ["یادداشت"], "rows": [{"یادداشت": l} for l in lines]}
 
 
-def _material_need_rows(model: HistoryModel, tons_by_sec: dict[str, float], tundish_by_sec: dict[str, float | None]) -> list[dict[str, Any]]:
-    rows = []
+def material_need_values(
+    model: HistoryModel, tons_by_sec: dict[str, float], tundish_by_sec: dict[str, float | None]
+) -> list[dict[str, Any]]:
+    """Unrounded need per material of each section (one calculation for the report
+    tables and the v1.7.2 free-text answer)."""
+    out = []
     for sec in SECTIONS:
         tons = tons_by_sec.get(sec) or 0.0
         if tons <= 0:
             continue
         tun = tundish_by_sec.get(sec)
-        for mm in model.materials[sec]:
+        for mm in model.section_materials(sec):
             by_ton = mm.per_ton * tons if mm.per_ton is not None else None
             by_tun = mm.per_tundish * tun if (mm.per_tundish is not None and tun) else None
             need = by_ton if by_ton is not None else by_tun
             shortage = (need - mm.stock) if (need is not None and mm.stock is not None) else None
-            rows.append(
-                {
-                    "بخش": mg.SECTION_LABEL_FA[sec],
-                    "ماده": mm.name,
-                    "واحد": mm.unit,
-                    "نیاز_بر_اساس_تن": _r(by_ton, 1),
-                    "نیاز_بر_اساس_تاندیش": _r(by_tun, 1),
-                    "نیاز_پیشنهادی": _r(need, 1),
-                    "موجودی_منبع_اصلی": _r(mm.stock, 1),
-                    "کسری": _r(shortage, 1) if shortage is not None and shortage > 0 else ("0" if shortage is not None else "—"),
-                }
-            )
+            out.append({"section": sec, "material": mm, "by_ton": by_ton, "by_tundish": by_tun,
+                        "need": need, "stock": mm.stock, "shortage": shortage})
+    return out
+
+
+def _material_need_rows(model: HistoryModel, tons_by_sec: dict[str, float], tundish_by_sec: dict[str, float | None]) -> list[dict[str, Any]]:
+    rows = []
+    for v in material_need_values(model, tons_by_sec, tundish_by_sec):
+        mm, shortage = v["material"], v["shortage"]
+        rows.append(
+            {
+                "بخش": mg.SECTION_LABEL_FA[v["section"]],
+                "ماده": mm.name,
+                "واحد": mm.unit,
+                "نیاز_بر_اساس_تن": _r(v["by_ton"], 2),
+                "نیاز_بر_اساس_تاندیش": _r(v["by_tundish"], 2),
+                "نیاز_پیشنهادی": _r(v["need"], 2),
+                "موجودی_منبع_اصلی": _r(mm.stock, 1),
+                "کسری": _r(shortage, 2) if shortage is not None and shortage > 0 else ("0" if shortage is not None else "—"),
+            }
+        )
     return rows
 
 
@@ -855,11 +959,12 @@ def scenario_target(
             "تاندیش_لازم": int(tun_total) if tun_total else "—",
             "ذوب_تقریبی": _r(sum(v for v in melts_by_sec.values() if v), 0) if any(melts_by_sec.values()) else "—",
             "هدف_ماهانه": _r(total / horizon, 1) if horizon else "—",
-            "میانگین_ماهانه_سابقه": _r(sum(model.sections[s].avg_monthly_tons for s in SECTIONS), 1),
+            "میانگین_ماهانه_سابقه": _r(sum(model.sections[s].avg_monthly_tons for s in SECTIONS if s in tons_by_sec), 1),
             "نسبت_به_سابقه": "—",
         }
     )
     period_label = period_text.strip() or "بازهٔ نامشخص"
+    chosen = [s for s in SECTIONS if s in tons_by_sec]
     sections = [
         {
             "title": f"سناریو ۱ — تناژ هدف ({period_label})",
@@ -871,10 +976,10 @@ def scenario_target(
             "columns": _NEED_COLS,
             "rows": _material_need_rows(model, tons_by_sec, tundish_by_sec),
         },
-        *history_sections(model),
+        *history_sections(model, only=chosen),
     ]
     warns = model.warnings()
-    note_lines = _base_notes(model) + notes
+    note_lines = _base_notes(model) + section_rule_lines(model, chosen) + notes
     if horizon:
         note_lines.append(f"طول بازه ≈ {_fmtn(horizon)} ماه؛ «نسبت به سابقه» = هدف ماهانه ÷ میانگین تناژ ماهانهٔ سابقه.")
     else:
@@ -891,7 +996,7 @@ def scenario_target(
                 f"تاندیش لازم ≈ {int(tun) if tun else '—'}"
             )
     lines.append(f"جمع: {total:,.0f} تن، تاندیش ≈ {int(tun_total) if tun_total else '—'}")
-    n_mats = sum(len(model.materials[s]) for s in tons_by_sec)
+    n_mats = sum(len(model.section_materials(s)) for s in tons_by_sec)
     lines.append(f"اقلام مواد برآوردشده: {n_mats}")
     lines += [f"⚠ {w}" for w in warns + notes]
     return ScenarioResult(
@@ -1038,7 +1143,7 @@ def scenario_forecast(model: HistoryModel, months_ahead: int) -> ScenarioResult:
         *history_sections(model),
     ]
     warns = model.warnings()
-    note_lines = _base_notes(model) + [
+    note_lines = _base_notes(model) + section_rule_lines(model, SECTIONS) + [
         "روند: رگرسیون خطی تناژ ماهانهٔ هر بخش روی ماه‌های سابقه (با ≥۳ ماه)؛ کمتر از ۳ ماه → میانگین ثابت.",
         "پیش‌بینی هر ماه در بازهٔ [۰، ۱٫۵ × بیشینهٔ تناژ ماهانهٔ سابقه] محدود می‌شود.",
         "تاندیش هر ماه = تناژ پیش‌بینی ÷ تن بر تاندیش تاریخی.",

@@ -40,6 +40,8 @@ I_TUNDISH_STATS = "tundish_stats"
 I_OPEN_REPORT = "open_report"
 I_HELP = "help"
 I_UNKNOWN = "unknown"
+# v1.7.2: «برای ده تن تولید شمش بیلت چقدر مواد لازم است» — rules only (never an LLM label)
+I_TARGET_TONNAGE = "target_tonnage"
 
 INTENTS = (
     I_STOCK, I_CRITICAL, I_N_TUNDISH, I_COVERAGE, I_CONSUMPTION, I_LAST_UPLOAD,
@@ -56,6 +58,7 @@ INTENT_LABEL_FA = {
     I_PENDING: "درخواست‌های در انتظار تأیید",
     I_TUNDISH_STATS: "آمار توالی تاندیش / ریخته‌گری",
     I_OPEN_REPORT: "باز کردن گزارش / منو",
+    I_TARGET_TONNAGE: "مواد لازم برای تناژ تولید",
     I_HELP: "راهنما",
     I_UNKNOWN: "نامشخص",
 }
@@ -71,6 +74,7 @@ INTENT_FEATURES: dict[str, tuple[str, ...] | None] = {
     I_LAST_UPLOAD: (perm.FILE_INPUTS, perm.MAIN_SOURCE_EDIT) + tuple(perm.REPORT_FEATURES),
     I_PENDING: None,  # services.main_source_approvals.is_approver (مالک/مدیر)
     I_TUNDISH_STATS: (perm.MAIN_GOAL, perm.REPORT_CRITICAL),
+    I_TARGET_TONNAGE: (perm.MAIN_GOAL,),  # same as «🎯 هدف اصلی → سناریو ۱ تناژ هدف»
     I_OPEN_REPORT: None,  # checked per button via keyboards.BUTTON_FEATURE
     I_HELP: None,
 }
@@ -350,7 +354,7 @@ _REPORTS: list[tuple[str, str]] = [  # (pattern, keyboards attr)
     (r"مازاد", "BTN_SURPLUS"),
     (r"ورودی|اقلام ورودی", "BTN_INBOUND"),
     (r"خلاصه مصرف|ماهیانه|ماهانه", "BTN_MONTHLY_SUMMARY"),
-    (r"هدف اصلی", "BTN_MAIN_GOAL"),
+    (r"هدف اصلی|پیش ?بینی مواد", "BTN_MAIN_GOAL"),
     (r"موجودی (روزانه )?سایت", "BTN_SITE_STOCK"),
     (r"گزارش تاندیش|فرم تاندیش", "BTN_TR_MENU"),
     (r"درخواست مواد", "BTN_MATERIAL_REQUEST"),
@@ -411,6 +415,13 @@ def rule_route(text: str, *, known_codes: set[str] | None = None) -> Intent | No
                  r"چه (سوال|سوالی|چیزی) (می ?)?(تونم|شه) (بپرسم|پرسید)|چی بپرسم|قابلیت|دستیار چیه|"
                  r"چه کمکی", t):
         return Intent(I_HELP)
+
+    # مواد لازم برای N تن تولید شمش بیلت/بلوم/اسلب (= سناریو ۱ تناژ هدف)
+    from services import target_tonnage_question as tq
+
+    tt = tq.parse(text)
+    if tt is not None:
+        return Intent(I_TARGET_TONNAGE, {"targets": dict(tt.targets), "tons": tt.tons, "product": tt.section})
 
     # درخواست‌های در انتظار تأیید
     if (re.search(r"تایید|تصویب", t) and re.search(r"درخواست|انتظار|منتظر|مونده|مانده|نشده|معطل", t)) \
@@ -1179,6 +1190,24 @@ def exec_n_tundish(ctx: _Ctx, it: Intent) -> Answer:
     return Answer("\n".join(lines), it, buttons=btns, facts=facts, table=table if sections else None)
 
 
+def exec_target_tonnage(ctx: _Ctx, it: Intent) -> Answer:
+    """Same calculation as «🎯 سناریو ۱ — تناژ هدف», only the asked section's items."""
+    from services import target_tonnage_question as tq
+
+    targets = dict(it.slots.get("targets") or {})
+    if not targets:
+        q = tq.TonnageQuery(tons=it.slots.get("tons"), section=it.slots.get("product"))
+        return Answer(tq.clarify_text(q), it, buttons=tq.clarify_buttons(q), ok=False,
+                      facts={"missing": q.missing})
+    res = tq.build_answer(ctx.db, ctx.user, targets, inventory=ctx.inventory)
+    if not res.ok:
+        return Answer(res.text, it, ok=False, facts={"targets": targets})
+    return Answer(res.text + "\n\nجدول کامل در فایل PDF پیوست است.", it, facts={
+        "targets": targets, "items": len(res.rows),
+        "short": sum(1 for r in res.rows if (r.get(tq.COL_SHORT) or 0) > 0),
+    }, table=res.table)
+
+
 def exec_consumption(ctx: _Ctx, it: Intent) -> Answer:
     from bot.jalali import format_date, jalali_today
     from services import period_consumption as pc
@@ -1405,6 +1434,7 @@ def help_text_fa(user: dict | None) -> str:
         (I_STOCK, "«از آجر ۱۶۰۳ چقدر داریم؟» یا «موجودی استوپر»"),
         (I_CRITICAL, "«چی کم داریم؟» / «اقلام بحرانی»"),
         (I_N_TUNDISH, "«برای ۱۰ تاندیش اسلب چی لازمه؟»"),
+        (I_TARGET_TONNAGE, "«برای ده تن تولید شمش بیلت چقدر مواد لازم است؟»"),
         (I_COVERAGE, "«شرود چند روز کافیه؟» / «حد تحمل ۱۶۷۲»"),
         (I_CONSUMPTION, "«مصرف ۳۰ روز اخیر» / «مصرف شهریور بیلت»"),
         (I_LAST_UPLOAD, "«آخرین بار موجودی کی آپلود شد؟»"),
@@ -1430,6 +1460,7 @@ EXECUTORS: dict[str, Callable[[_Ctx, Intent], Answer]] = {
     I_PENDING: exec_pending,
     I_TUNDISH_STATS: exec_tundish_stats,
     I_OPEN_REPORT: exec_open_report,
+    I_TARGET_TONNAGE: lambda ctx, it: exec_target_tonnage(ctx, it),
 }
 
 SETTING_REPHRASE = "assistant_rephrase"
@@ -1437,7 +1468,8 @@ SETTING_REPHRASE = "assistant_rephrase"
 _UNDERSTOOD_FA = {
     I_STOCK: "موجودی", I_COVERAGE: "حد تحمل", I_CONSUMPTION: "مصرف", I_CRITICAL: "اقلام بحرانی",
     I_N_TUNDISH: "نیاز مواد", I_LAST_UPLOAD: "آخرین بارگذاری موجودی", I_PENDING: "درخواست‌های در انتظار تأیید",
-    I_TUNDISH_STATS: "آمار تاندیش", I_OPEN_REPORT: "باز کردن گزارش", I_HELP: "راهنما", I_UNKNOWN: "نامشخص",
+    I_TUNDISH_STATS: "آمار تاندیش", I_OPEN_REPORT: "باز کردن گزارش",
+    I_TARGET_TONNAGE: "مواد لازم برای تناژ تولید", I_HELP: "راهنما", I_UNKNOWN: "نامشخص",
 }
 
 
@@ -1460,6 +1492,10 @@ def understood_fa(it: Intent, ans: Answer | None = None) -> str:
     sl = it.slots
     if it.name == I_N_TUNDISH and sl.get("n"):
         parts.append(f"برای {sl['n']} تاندیش")
+    if it.name == I_TARGET_TONNAGE and sl.get("targets"):
+        from services import target_tonnage_question as tq
+
+        parts.append(tq.question_label(sl["targets"]))
     facts = ans.facts if ans else {}
     label = str(facts.get("label") or sl.get("query") or "").strip()
     if label:

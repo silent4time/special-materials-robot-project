@@ -26,9 +26,10 @@
     {% if can(user, "report.surplus") %}<a class="btn" href="/reports/surplus.xlsx">📦 مواد مازاد (اکسل)</a>{% endif %}
     {% if can(user, "report.monthly_summary") %}<a class="btn" href="/reports/monthly-summary">📄 خلاصه مصرف ماهیانه (PDF)</a>{% endif %}
     {% if can(user, "report.monthly_summary") %}<a class="btn" href="/reports/monthly-summary.xlsx">📄 خلاصه مصرف ماهیانه (اکسل)</a>{% endif %}
+    {% if can(user, "main_goal") %}<a class="btn" href="/reports/main-goal">پیش بینی مواد بر حسب تناژ تولید</a>{% endif %}
   </div>
   <p class="muted">«⚠️ پوشش کوتاه‌مدت»: روزهای پوشش = موجودی فعلی ÷ میانگین مصرف روزانهٔ ۳۰ روز اخیر.
-    «🎯 هدف اصلی» از نوار بالا؛ «📋 فعالیت کاربران» در تنظیمات (مالک/مدیر).</p>
+    «پیش بینی مواد بر حسب تناژ تولید» همین‌جا در گزارش‌هاست؛ «📋 فعالیت کاربران» در تنظیمات (مالک/مدیر).</p>
 </div>
 
 {% if can(user, "report.daily") %}

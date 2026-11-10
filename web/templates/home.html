@@ -14,7 +14,6 @@
     {% if can(user, "material_request") %}<a href="/materials/request">🛒 درخواست مواد</a>{% endif %}
     {% if can(user, "warehouse_return") %}<a href="/materials/return">↩️ برگشت به انبار</a>{% endif %}
     {% if can(user, "reports") %}<a href="/reports">📊 گزارش‌ها</a>{% endif %}
-    {% if can(user, "main_goal") %}<a href="/reports/main-goal">🎯 هدف اصلی</a>{% endif %}
     {% if can(user, "file_inputs") %}<a href="/files">📤 ورود فایل‌ها</a>{% endif %}
     {% if can(user, "file_inputs") or can(user, "main_source_edit") %}<a href="/settings/main-source">📦 منبع اصلی</a>{% endif %}
     {% if can(user, "users") %}<a href="/settings/users">👥 کاربران</a>{% endif %}

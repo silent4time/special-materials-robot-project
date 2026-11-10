@@ -982,7 +982,7 @@ def scenario_range_report(
         },
         *mgh.history_sections(model),
     ]
-    note_lines = mgh._base_notes(model) + [
+    note_lines = mgh._base_notes(model) + mgh.section_rule_lines(model, SECTIONS) + [
         f"بازه گزارش: {spec.label_fa}",
         _actual_basis_fa(model, spec),
         "نرخ‌ها از تجمیع ماه‌های همین بازه در پایگاه داده محاسبه شده‌اند.",

@@ -4,7 +4,9 @@ Reuses the «اقلام بحرانی» rate pipeline exactly (``analytics.critic
 1800 excluded, section/supplier attribution, priority ≠ 0 per 4-digit code,
 merged-cell rates counted once per code, patching × N + renovation × min(N, annual
 cap) («با نوسازی», v1.7.0 analytics.renovation_caps) or patching only («بدون نوسازی»),
-+ casting-floor × N, nozzle shared-need groups
++ casting-floor × the tundishes of the sections named in «محل استفاده»
+(v1.7.2, same rule as تناژ هدف: شرود «سطح ریخته گری اسلب» is slab only;
+a blank محل استفاده still × every section), nozzle shared-need groups
 (need once + per-code stock + subtotal). Company (شرکت) and contractor
 (پیمانکار) rows are computed separately and listed together with a
 «تأمین‌کننده» column.
@@ -29,6 +31,8 @@ from analytics.critical_items import (
     TundishMonthCounts,
     _pick_description,
     active_rate_cols,
+    casting_count_from_parts,
+    cf_parts_for,
     group_rates,
     monthly_need_for_rates,
     normalize_reno_mode,
@@ -120,7 +124,8 @@ class NTundishResult:
         else:
             per = f"فقط پچینگ × {self.n} تاندیش"
         return (
-            f"مبنا: نرخ مصرف به ازای هر تاندیش از منبع اصلی ({mode}: {per}) + سطح ریخته‌گری × {self.n}؛ "
+            f"مبنا: نرخ مصرف به ازای هر تاندیش از منبع اصلی ({mode}: {per}) + سطح ریخته‌گری × {self.n} "
+            "فقط برای اقلامی که «محل استفاده»شان این بخش است (بدون نام بخش، مثل قبل × همین N)؛ "
             "همان قواعد اقلام بحرانی (اولویت ۰ و کد ۱۸۰۰ حذف، نرخ سلول ادغام‌شده یک‌بار برای هر کد، "
             "گروه نازل‌ها با نیاز مشترک). کسری = نیاز − موجودی فعلی."
         )
@@ -215,10 +220,15 @@ def build_rows(
     )
     use_cols = active_rate_cols(reno_mode)
 
-    def _need(rates: dict[str, float]) -> float:
+    def _need(rates: dict[str, float], parts: list, merged: bool) -> float:
         if sum(rates.values()) <= 0:
             return 0.0
-        return float(monthly_need_for_rates(counts=counts, reno_mode=reno_mode, **rates))
+        return float(monthly_need_for_rates(
+            counts=counts,
+            reno_mode=reno_mode,
+            casting_count=casting_count_from_parts(parts, merged, counts),
+            **rates,
+        ))
 
     blocks: list[tuple[str, list[dict[str, Any]], bool]] = []
     for seg in SEGMENTS:
@@ -230,7 +240,8 @@ def build_rows(
         for code, info in per_code.items():
             if code in grouped:
                 continue
-            need = _need(info["rates"])
+            parts, merged = cf_parts_for(per_code, [code])
+            need = _need(info["rates"], parts, merged)
             if need <= 1e-9:
                 continue
             desc, unit = _pick_description(info["group"], use_cols)
@@ -256,7 +267,8 @@ def build_rows(
             )
         for g in groups:
             members = list(g["codes"])
-            need = _need(group_rates(per_code, g))
+            parts, merged = cf_parts_for(per_code, members, g["columns"])
+            need = _need(group_rates(per_code, g), parts, merged)
             if need <= 1e-9:
                 continue
             stock = float(sum(per_code[k]["stock"] for k in members))
@@ -455,9 +467,10 @@ def rate_entries(inventory_df: pd.DataFrame | None, reno_mode: str = RENO_WITH, 
             if sum(per.values()) <= 1e-12:
                 continue
             desc, unit = _pick_description(info["group"], use_cols)
+            parts, merged = cf_parts_for(per_code, [code])
             out.append({"segment": seg, "code": code, "members": [code], "desc": desc, "unit": unit,
                         "rates": info["rates"], "per": per, "stock": float(info["stock"]),
-                        "is_group": False, "member_rows": []})
+                        "is_group": False, "member_rows": [], "cf_parts": parts, "cf_merged": merged})
         for g in groups:
             members = list(g["codes"])
             rates = group_rates(per_code, g)
@@ -469,12 +482,14 @@ def rate_entries(inventory_df: pd.DataFrame | None, reno_mode: str = RENO_WITH, 
                 d, u = _pick_description(per_code[k]["group"], use_cols)
                 descs.append(d)
                 unit = unit or u
+            parts, merged = cf_parts_for(per_code, members, g["columns"])
             out.append({
                 "segment": seg, "code": "/".join(members), "members": members,
                 "desc": "جمع گروه: " + "، ".join(dict.fromkeys(descs)), "unit": unit,
                 "rates": rates, "per": per,
                 "stock": float(sum(per_code[k]["stock"] for k in members)), "is_group": True,
                 "member_rows": [(k, d, float(per_code[k]["stock"])) for k, d in zip(members, descs)],
+                "cf_parts": parts, "cf_merged": merged,
             })
     out.sort(key=lambda e: (SEGMENTS.index(e["segment"]), e["members"][0]))
     return out
@@ -517,7 +532,8 @@ class MixResult:
             per = "فقط پچینگ × تعداد هر نوع"
         return (
             f"مبنا: مصرف هر تاندیش هر نوع از منبع اصلی ({RENO_LABEL_FA[self.reno_mode]}: {per}) "
-            f"+ سطح ریخته‌گری × کل تاندیش‌ها ({self.total})؛ {caps_text_fa()}؛ همان قواعد اقلام بحرانی. "
+            f"+ سطح ریخته‌گری × تاندیش بخش‌هایی که «محل استفاده» نام می‌برد "
+            f"(بدون نام بخش × کل تاندیش‌ها، {self.total})؛ {caps_text_fa()}؛ همان قواعد اقلام بحرانی. "
             "ستون‌های «مصرف هر تاندیش» میانگین واقعی هر تاندیش با همین سقف است. کسری = نیاز − موجودی."
         )
 
@@ -596,7 +612,11 @@ def build_mix_rows(
     need_col = res.need_col
     i = 0
     for e in rate_entries(inventory_df, reno_mode, shared_mode=shared_mode):
-        need = float(monthly_need_for_rates(counts=counts, reno_mode=reno_mode, **e["rates"]))
+        need = float(monthly_need_for_rates(
+            counts=counts, reno_mode=reno_mode,
+            casting_count=casting_count_from_parts(e.get("cf_parts") or [], bool(e.get("cf_merged")), counts),
+            **e["rates"],
+        ))
         if need <= 1e-9:
             continue
         sup = SEGMENT_LABEL_FA[e["segment"]]
@@ -607,7 +627,10 @@ def build_mix_rows(
                                  COL_PER_SLAB: "—", COL_PER_CF: "—", need_col: SHARED_NEED_LABEL,
                                  COL_STOCK: _num(st), COL_SHORT: "—"})
         i += 1
-        # v1.7.0: average per tundish of each type with the renovation cap (Σ per × count + cf = need)
+        # v1.7.0: average per tundish of each type with the renovation cap.
+        # v1.7.2: casting floor is × the sections in «محل استفاده», not × every tundish,
+        # so Σ (per-section × count) + casting-floor column × total is the need only
+        # when «محل استفاده» names no section.
         e["per"] = effective_per_tundish(e["rates"], mix, reno_mode)
         row = {COL_ROW: i, COL_CODE: e["code"], COL_KEYWORD: e["desc"], COL_UNIT: e["unit"],
                COL_SUPPLIER: sup,

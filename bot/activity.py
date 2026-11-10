@@ -54,6 +54,8 @@ ACTION_PHRASES: dict[str, str] = {
     "main_goal_store_month": "فایل‌های ماهانهٔ گزارش هدف اصلی را ثبت کرد",
     "main_goal_delete_month": "یک ماه از سابقهٔ گزارش هدف اصلی را حذف کرد",
     "report_main_goal_target": "سناریو تناژ هدف (گزارش هدف اصلی) را گرفت",
+    "report_target_tonnage_question": "با سؤال متنی، مواد لازم برای تناژ تولید (سناریو تناژ هدف) را گرفت",
+    "report_target_tonnage_denied": "سؤال متنی تناژ تولید پرسید (بدون دسترسی)",
     "report_main_goal_forecast": "سناریو پیش‌بینی (گزارش هدف اصلی) را گرفت",
     "web_main_goal_store_month": "فایل‌های ماهانهٔ گزارش هدف اصلی را در وب ثبت کرد",
     "production_stats_store": "آمار تولید ماهانه را (ورود متنی) ثبت کرد",
