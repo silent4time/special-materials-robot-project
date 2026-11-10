@@ -83,9 +83,34 @@ class FakeGH:
 
 
 def main() -> int:
+    # The 1.7.1 updater holds data/updates/update.lock (its own pid) while it
+    # runs this file. Never touch that directory: a second "start update" in
+    # this smoke would see the live lock and the test would delete it.
+    scratch = TMP / "updates-scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    os.environ["NASOZ_UPDATES_DIR"] = str(scratch)
+
     import config
     from db.models import Database
     from services import updater as up
+
+    live_lock = config.BASE_DIR / "data" / "updates" / "update.lock"
+    live_lock.parent.mkdir(parents=True, exist_ok=True)
+    prev_lock = live_lock.read_bytes() if live_lock.exists() else None
+    live_body = str(os.getpid())
+    live_lock.write_text(live_body, encoding="utf-8")
+
+    def _restore_live_lock() -> None:
+        if prev_lock is None:
+            if live_lock.exists() and live_lock.read_text(encoding="utf-8") == live_body:
+                live_lock.unlink()
+        else:
+            live_lock.write_bytes(prev_lock)
+
+    import atexit
+    atexit.register(_restore_live_lock)
+    assert up._lock_blocks(config.BASE_DIR), "live pid lock must look held to the real install"
+    assert not up.update_in_progress(), "smoke must ignore the updater's own lock"
 
     # semver (Updater.php: strip v, version_compare)
     assert up.is_newer("1.6.0", "1.5.0") and up.is_newer("v1.10.0", "1.9.9") and up.is_newer("2.0.0", "1.99.99")
@@ -152,14 +177,19 @@ def main() -> int:
     assert res["state"] == "failed" and "sha256" in res["message"], res
     print("  checksum mismatch / missing → refused, unchanged OK")
 
-    # smoke fails → automatic rollback
+    # smoke fails → automatic rollback of THIS update's snapshot, not an older one
     gh.release("1.6.0")
     root = _project("rollback")
+    old_snap = root / "data" / "updates" / "rollback_0.0.1_20000101_000000"
+    old_snap.mkdir(parents=True)
+    (old_snap / "VERSION").write_text("0.0.1\n", encoding="utf-8")
     res = up.apply_update(db, root=root, db_path=root / "data" / "bot.db", smoke=lambda r, log: False, restart=rs, pip=False)
     assert res["state"] == "rolled_back", res
     assert (root / "VERSION").read_text().strip() == "1.5.0" and (root / "main.py").read_text() == "print('old')\n"
+    assert (old_snap / "VERSION").read_text().strip() == "0.0.1", "older rollback dir must stay untouched"
     assert not (root / "services" / "new_mod.py").exists() and (root / "scripts" / "keep.py").read_text() == "k = 1\n"
     assert len(restarts) == 1 and up.get_status(db)["state"] == "rolled_back"
+    assert "smoke.log" in res["message"]
     print("  failing smoke → rollback (changed restored, added removed, no restart) OK")
 
     # zipball fallback (owner-repo-sha/ top folder stripped); version mismatch refused
@@ -253,7 +283,7 @@ def main() -> int:
     say("61", kb.BTN_UPDATE)
     prog = client.sent[-1][1]
     assert launched == ["61"] and "در حال دانلود" in prog and "▰" in prog and "99.0.0" in prog, client.sent[-1]
-    saved = json.loads((config.BASE_DIR / "data" / "updates" / "update_progress.json").read_text(encoding="utf-8"))
+    saved = json.loads((scratch / "update_progress.json").read_text(encoding="utf-8"))
     assert saved["target_version"] == "99.0.0" and str(saved["chat_id"]) == "61" and saved["message_id"]
     say("61", kb.BTN_UPDATE)
     assert launched == ["61"] and up.BUSY_FA in client.sent[-1][1], client.sent[-1]
@@ -498,6 +528,26 @@ def main() -> int:
     finally:
         bot_logo.PROFILE_PHOTO_API_SUPPORTED = False
     print("  logo: API unsupported (no call); hash gate is idempotent when enabled OK")
+
+    # default_smoke names the failing script and writes its output; children
+    # get NASOZ_UPDATES_DIR so they cannot delete the caller's lock.
+    sm = TMP / "smokelog"
+    (sm / "scripts").mkdir(parents=True)
+    (sm / "scripts" / "smoke_ok.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    (sm / "scripts" / "smoke_bad.py").write_text(
+        "import sys\nprint('boom-detail')\nsys.exit(3)\n", encoding="utf-8",
+    )
+    sm_log: list[str] = []
+    assert up.default_smoke(sm, sm_log.append) is False
+    assert "FAIL smoke_bad.py" in sm_log and any(x.startswith("PASS ") for x in sm_log)
+    assert up.default_smoke.last_failures == ["smoke_bad.py"]
+    body = Path(up.default_smoke.last_log).read_text(encoding="utf-8")
+    assert "boom-detail" in body and "smoke_bad.py" in body
+    reason = up.smoke_failure_text(up.default_smoke, sm)
+    assert "smoke_bad.py" in reason and "smoke.log" in reason
+    # the live updater lock is still the one we planted (this script did not release it)
+    assert live_lock.read_text(encoding="utf-8") == live_body
+    print("  default_smoke: failed name + smoke.log; live updater lock left intact OK")
     up._http_get = None
     print("smoke_updater: ALL OK")
     return 0
