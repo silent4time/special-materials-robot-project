@@ -65,6 +65,7 @@ from bot.jalali import (
 from bot.bale_api import BaleAPIError, BaleClient, public_markup
 from services import permissions as perm
 from services import user_errors
+from services import guide_docs
 from services.units import fmt_qty, round_qty, unit_fa
 from bot.background import BackgroundRunner, heavy
 from services import comprehensive_report as comprehensive_svc
@@ -170,6 +171,8 @@ class BotApp:
         self._site_stock_pending: dict[str, dict[str, Any]] = {}
         # user-management interactive flows
         self._users_pending: dict[str, dict[str, Any]] = {}
+        # v1.7.1 «📄 راهنمای نقش» / «📘 معرفی ربات»: {"target": intro|<role>, "mode": menu|await_pdf}
+        self._guide_doc_pending: dict[str, dict[str, Any]] = {}
         # bot settings interactive flows
         self._bot_settings_pending: dict[str, dict[str, Any]] = {}
         # material request interactive flow
@@ -377,6 +380,9 @@ class BotApp:
             "main_source": self.on_main_source_file_menu,
             "settings": self.on_bot_settings_menu,
             "users": self.on_users_menu,
+            "guide_roles": self.on_role_guides_menu,
+            "role_guide": self.on_role_guides_menu,
+            "intro_doc": lambda m: self.on_guide_doc_menu(m, guide_docs.INTRO),
             "tr_settings": self.tundish_report.open_settings,
             "reminders": self.reminder_settings.open_menu,
             "appearance": self.on_appearance_menu,
@@ -401,6 +407,7 @@ class BotApp:
                 uid in self._main_source_pending,
                 uid in self._site_stock_pending,
                 uid in self._users_pending,
+                uid in self._guide_doc_pending,
                 uid in self._bot_settings_pending,
                 uid in self._material_req_pending,
                 uid in self._warehouse_ret_pending,
@@ -424,6 +431,7 @@ class BotApp:
         self._clear_analysis_pending(uid)
         self._clear_site_stock_pending(uid)
         self._clear_users_pending(uid)
+        self._guide_doc_pending.pop(uid, None)
         self._clear_material_req_pending(uid)
         self._clear_warehouse_ret_pending(uid)
         self._clear_critical_pending(uid)
@@ -623,6 +631,7 @@ class BotApp:
         self._upload_return_menu.pop(uid, None)
         self._site_stock_pending.pop(uid, None)
         self._users_pending.pop(uid, None)
+        self._guide_doc_pending.pop(uid, None)
         self._bot_settings_pending.pop(uid, None)
         self._material_req_pending.pop(uid, None)
         self._warehouse_ret_pending.pop(uid, None)
@@ -953,6 +962,30 @@ class BotApp:
             return
         self.db.get_or_create_session(user["bale_user_id"])
         self._send_welcome(message, user, prefix="✅ دعوت پذیرفته شد.\n\n")
+        # v1.7.1: first entry via an invite → role guide PDF + bot introduction PDF
+        self._send_invite_documents(message, user)
+
+    def _send_invite_documents(self, message: dict, user: dict) -> int:
+        """After a successful invite redeem (or first-owner claim): send the guide PDF of the
+        user's role, then the bot introduction PDF. Never on an ordinary /start.
+        A missing / failing file is logged and skipped; returns how many were sent."""
+        role = str((user or {}).get("role") or "")
+        sent = 0
+        for target, path in guide_docs.invite_documents(self.db, role):
+            if path is None:
+                logger.warning("invite docs: no file for %s (user %s)", target, user.get("bale_user_id"))
+                continue
+            try:
+                self.client.send_document(
+                    self._chat_id(message),
+                    path,
+                    caption=guide_docs.caption_fa(target),
+                    filename=guide_docs.download_name(target),
+                )
+                sent += 1
+            except Exception:  # noqa: BLE001 - welcome already done; never break the redeem
+                logger.exception("invite docs: send %s failed (%s)", target, path)
+        return sent
 
     # ---------- commands ----------
     def cmd_start(self, message: dict, args: list[str] | None = None) -> None:
@@ -978,6 +1011,7 @@ class BotApp:
                 claimed,
                 prefix="شما به‌عنوان اولین کاربر، مالک سیستم شدید.\n\n",
             )
+            self._send_invite_documents(message, claimed)
             return
         self._reply(
             message,
@@ -1174,6 +1208,192 @@ class BotApp:
             kb.users_menu(),
         )
 
+    # ---------- v1.7.1: 📄 راهنمای نقش / 📘 معرفی ربات (PDFs for invitees) ----------
+    def on_role_guides_menu(self, message: dict) -> None:
+        user = self._require_manager_user(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_all_pending(uid)
+        lines = [
+            "📄 راهنمای نقش — فایلی که بعد از پذیرش دعوت برای هر نقش ارسال می‌شود.",
+            "نقش را انتخاب کنید تا فایل فعلی را ببینید، PDF جدید آپلود کنید یا به فایل پیش‌فرض برگردید.",
+            "",
+        ]
+        for role in ROLES:
+            st = guide_docs.status(self.db, role)
+            lines.append(f"• {ROLES[role]}: {st['source_fa']}")
+        self._reply(message, "\n".join(lines), kb.guide_roles_menu())
+
+    def on_guide_doc_menu(self, message: dict, target: str) -> None:
+        user = self._require_manager_user(message)
+        if not user:
+            return
+        uid = str(user["bale_user_id"])
+        self._clear_all_pending(uid)
+        self._guide_doc_pending[uid] = {"target": target, "mode": "menu"}
+        intro = (
+            "این فایل همراه راهنمای نقش، بعد از پذیرش هر دعوت برای کاربر جدید ارسال می‌شود."
+            if target == guide_docs.INTRO
+            else f"این فایل بعد از پذیرش دعوت با نقش «{ROLES.get(target, target)}» ارسال می‌شود."
+        )
+        self._reply(
+            message,
+            f"{guide_docs.status_text_fa(self.db, target)}\n\n{intro}\n"
+            f"«{kb.BTN_GDOC_SEND}»، «{kb.BTN_GDOC_UPLOAD}» یا «{kb.BTN_GDOC_RESTORE}» را بزنید.",
+            kb.guide_doc_menu(target),
+        )
+
+    def _guide_doc_target(self, message: dict) -> tuple[dict | None, str | None]:
+        user = self._require_manager_user(message)
+        if not user:
+            return None, None
+        uid = str(user["bale_user_id"])
+        target = (self._guide_doc_pending.get(uid) or {}).get("target")
+        if not guide_docs.is_target(target):
+            self._reply(
+                message,
+                f"ابتدا «{kb.BTN_USERS_ROLE_GUIDES}» یا «{kb.BTN_USERS_INTRO_DOC}» را انتخاب کنید.",
+                kb.users_menu(),
+            )
+            return user, None
+        return user, target
+
+    def on_guide_doc_send(self, message: dict) -> None:
+        user, target = self._guide_doc_target(message)
+        if not target:
+            return
+        uid = str(user["bale_user_id"])
+        self._guide_doc_pending[uid] = {"target": target, "mode": "menu"}
+        markup = kb.guide_doc_menu(target)
+        path = guide_docs.resolve(self.db, target)
+        if path is None:
+            self._reply(message, "فایلی برای این بخش موجود نیست؛ یک PDF آپلود کنید.", markup)
+            return
+        try:
+            self.client.send_document(
+                self._chat_id(message),
+                path,
+                caption=guide_docs.caption_fa(target),
+                filename=guide_docs.download_name(target),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("guide doc preview failed")
+            self._reply(message, user_errors.error_fa("ارسال فایل ناموفق بود", exc), markup)
+            return
+        self._reply(message, guide_docs.status_text_fa(self.db, target), markup)
+
+    def on_guide_doc_upload_start(self, message: dict) -> None:
+        user, target = self._guide_doc_target(message)
+        if not target:
+            return
+        uid = str(user["bale_user_id"])
+        self._guide_doc_pending[uid] = {"target": target, "mode": "await_pdf"}
+        self._reply(
+            message,
+            f"فایل «{guide_docs.title_fa(target)}» را به‌صورت Document با پسوند .pdf بفرستید "
+            f"(حداکثر {guide_docs.MAX_PDF_BYTES // (1024 * 1024)} مگابایت).\n"
+            "از این پس همین فایل برای دعوت‌شدگان ارسال می‌شود.",
+            kb.guide_doc_menu(target),
+        )
+
+    def on_guide_doc_restore(self, message: dict) -> None:
+        user, target = self._guide_doc_target(message)
+        if not target:
+            return
+        uid = str(user["bale_user_id"])
+        removed = guide_docs.restore_default(self.db, target, updated_by=uid)
+        self._guide_doc_pending[uid] = {"target": target, "mode": "menu"}
+        if removed:
+            log_activity(self.db, user, "settings_guide_doc_restore", doc_fa=guide_docs.title_fa(target))
+            head = "✅ فایل پیش‌فرض دوباره فعال شد."
+        else:
+            head = "فایل فعلی همان فایل پیش‌فرض است."
+        self._reply(
+            message, f"{head}\n{guide_docs.status_text_fa(self.db, target)}", kb.guide_doc_menu(target)
+        )
+
+    def on_guide_doc_document(self, message: dict) -> bool:
+        """Inbound PDF while awaiting a guide / intro upload. Returns True if consumed."""
+        uid = str(self._uid(message))
+        pending = self._guide_doc_pending.get(uid)
+        if not pending or pending.get("mode") != "await_pdf":
+            return False
+        user = self._require_manager_user(message)
+        if not user:
+            self._guide_doc_pending.pop(uid, None)
+            return True
+        target = pending.get("target")
+        markup = kb.guide_doc_menu(target)
+        doc = message.get("document") or {}
+        file_name = (doc.get("file_name") or "").strip()
+        file_id = doc.get("file_id")
+        mime = str(doc.get("mime_type") or "").lower()
+        if not file_id:
+            self._reply(message, "فایل نامعتبر است. یک Document با پسوند .pdf بفرستید.", markup)
+            return True
+        if not file_name.lower().endswith(".pdf") or (mime and "pdf" not in mime):
+            self._reply(
+                message,
+                f"فقط فایل PDF پذیرفته می‌شود. (دریافت شد: {file_name or mime or 'بدون‌نام'})",
+                markup,
+            )
+            return True
+        try:
+            size = int(doc.get("file_size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        if size > guide_docs.MAX_PDF_BYTES:
+            self._reply(
+                message,
+                f"حجم فایل بیش از حد مجاز است (حداکثر {guide_docs.MAX_PDF_BYTES // (1024 * 1024)} مگابایت).",
+                markup,
+            )
+            return True
+        tmp = guide_docs.temp_upload_path(target, uid)
+        try:
+            saved = self.client.download_file(file_id, tmp)
+            dest = guide_docs.save_upload(self.db, target, Path(saved), file_name, updated_by=uid)
+        except ValueError as exc:
+            self._reply(message, f"⛔ {exc}", markup)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("save guide doc failed")
+            tmp.unlink(missing_ok=True)
+            self._reply(message, user_errors.error_fa("ذخیره فایل ناموفق بود", exc), markup)
+            return True
+        self._guide_doc_pending[uid] = {"target": target, "mode": "menu"}
+        log_activity(
+            self.db, user, "settings_guide_doc", doc_fa=guide_docs.title_fa(target), file=Path(dest).name
+        )
+        self._reply(
+            message,
+            f"✅ فایل ذخیره شد: {file_name}\n"
+            f"از این پس «{guide_docs.title_fa(target)}» برای دعوت‌شدگان همین فایل است.\n\n"
+            f"{guide_docs.status_text_fa(self.db, target)}",
+            markup,
+        )
+        return True
+
+    def on_guide_doc_flow_text(self, message: dict, text: str) -> bool:
+        """Typed text while waiting for the PDF → remind; role pick buttons. True if consumed."""
+        role = kb.role_guide_button_to_role(text)
+        if role:
+            self.on_guide_doc_menu(message, role)
+            return True
+        uid = str(self._uid(message))
+        pending = self._guide_doc_pending.get(uid)
+        if not pending or pending.get("mode") != "await_pdf":
+            return False
+        if text in self._button_handlers():
+            return False  # a real menu button: let it run
+        self._reply(
+            message,
+            "منتظر فایل PDF هستم؛ فایل را به‌صورت Document بفرستید یا «⬅️ بازگشت» بزنید.",
+            kb.guide_doc_menu(pending.get("target")),
+        )
+        return True
+
     def on_users_flow_text(self, message: dict, text: str) -> bool:
         """Handle pending user-management text/role picks. Returns True if consumed."""
         uid = str(self._uid(message))
@@ -1195,6 +1415,8 @@ class BotApp:
             kb.BTN_USERS_EDIT,
             kb.BTN_USERS_DELETE,
             kb.BTN_USERS_LIST,
+            kb.BTN_USERS_ROLE_GUIDES,
+            kb.BTN_USERS_INTRO_DOC,
         }
         if raw in nav_buttons:
             self._clear_users_pending(uid)
@@ -7243,6 +7465,8 @@ class BotApp:
                 return
             if self.on_rates_import_document(message):
                 return
+            if self.on_guide_doc_document(message):
+                return
             if self.on_bot_settings_letterhead_document(message):
                 return
         if message.get("photo") or message.get("document"):
@@ -7390,6 +7614,9 @@ class BotApp:
         if self.on_site_stock_quantity_text(message, text):
             return
 
+        # v1.7.1 role-guide picks / waiting for a guide PDF
+        if self.on_guide_doc_flow_text(message, text):
+            return
         # user-management interactive flow (role/id text)
         if self.on_users_flow_text(message, text):
             return
@@ -7461,6 +7688,12 @@ class BotApp:
             kb.BTN_USERS_EDIT: self.on_users_edit_start,
             kb.BTN_USERS_DELETE: self.on_users_delete_start,
             kb.BTN_USERS_LIST: self.cmd_users,
+            kb.BTN_USERS_ROLE_GUIDES: self.on_role_guides_menu,
+            kb.BTN_USERS_INTRO_DOC: lambda m: self.on_guide_doc_menu(m, guide_docs.INTRO),
+            kb.BTN_GDOC_SEND: self.on_guide_doc_send,
+            kb.BTN_GDOC_UPLOAD: self.on_guide_doc_upload_start,
+            kb.BTN_GDOC_RESTORE: self.on_guide_doc_restore,
+            **{kb.role_guide_button(r): (lambda m, _r=r: self.on_guide_doc_menu(m, _r)) for r in ROLES},
             # ⚙️ تنظیمات
             kb.BTN_BOT_SETTINGS: self.on_bot_settings_menu,
             kb.BTN_APPEARANCE: self.on_appearance_menu,

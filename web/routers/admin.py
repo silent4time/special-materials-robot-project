@@ -14,6 +14,7 @@ from bot.activity import log_activity
 from bot.settings_text import PLACEHOLDER_HINT_INVITE, PLACEHOLDER_HINT_WELCOME, format_invite_text
 from config import BOT_ASSETS_DIR, BOT_USERNAME, ROLES
 from db.models import Database
+from services import guide_docs
 from services import permissions as perm
 from services import site_stock_notify
 from services import user_admin
@@ -25,8 +26,11 @@ router = APIRouter(prefix="/settings", tags=["admin"])
 
 # ------------------------------------------------------------------ 👥 کاربران
 def _users_ctx(db, user, **kw):
+    docs = guide_docs.all_status(db)
     return {"user": user, "users": db.list_users(active_only=False), "role_label": role_label,
-            "roles": [r for r in ROLES if r != "owner" or require_owner(user)], **kw}
+            "roles": [r for r in ROLES if r != "owner" or require_owner(user)],
+            "intro_doc": docs[0], "role_docs": docs[1:], "max_pdf_mb": guide_docs.MAX_PDF_BYTES // (1024 * 1024),
+            **kw}
 
 
 @router.get("/users")
@@ -49,6 +53,72 @@ async def users_invite(request: Request, user=Depends(require_feature(perm.USERS
         db, user, message=f"لینک دعوت ساخته شد — نقش: {role_label(role)} — اعتبار ۷ روز.",
         invite_url=user_admin.invite_url(inv["token"], BOT_USERNAME),
         invite_text=format_invite_text(db.get_setting("invite_text"), role)))
+
+
+# v1.7.1 — 📘 معرفی ربات + 📄 راهنمای نقش (PDFs sent after an invite is redeemed; same
+# services.guide_docs storage as the bot «👥 کاربران» menu)
+def _guide_target(target: str) -> str:
+    if not guide_docs.is_target(target):
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404)
+    return target
+
+
+@router.get("/users/guides/{target}/file")
+async def guide_doc_file(target: str, user=Depends(require_feature(perm.USERS)), db: Database = Depends(get_db)):
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    path = guide_docs.resolve(db, _guide_target(target))
+    if path is None:
+        raise HTTPException(status_code=404)
+    return FileResponse(path, media_type="application/pdf", filename=guide_docs.download_name(target))
+
+
+@router.post("/users/guides/{target}/upload")
+async def guide_doc_upload(request: Request, target: str, file: UploadFile | None = File(None),
+                           user=Depends(require_feature(perm.USERS)), db: Database = Depends(get_db)):
+    _guide_target(target)
+    uid = str(user["bale_user_id"])
+    if file is None or not file.filename:
+        return render(request, "settings_users.html", _users_ctx(db, user, error="یک فایل PDF انتخاب کنید."), status_code=400)
+    if not file.filename.lower().endswith(".pdf"):
+        return render(request, "settings_users.html", _users_ctx(
+            db, user, error=f"فقط فایل PDF پذیرفته می‌شود. (دریافت شد: {file.filename})"), status_code=400)
+    tmp = guide_docs.temp_upload_path(target, f"web_{uid}")
+    written = 0
+    too_big = False
+    with tmp.open("wb") as fh:
+        while chunk := await file.read(1024 * 1024):
+            written += len(chunk)
+            if written > guide_docs.MAX_PDF_BYTES:
+                too_big = True
+                break
+            fh.write(chunk)
+    if too_big:
+        tmp.unlink(missing_ok=True)
+        return render(request, "settings_users.html", _users_ctx(
+            db, user, error=f"حجم فایل بیش از حد مجاز است (حداکثر {guide_docs.MAX_PDF_BYTES // (1024 * 1024)} مگابایت)."),
+            status_code=400)
+    try:
+        guide_docs.save_upload(db, target, tmp, file.filename, updated_by=uid)
+    except ValueError as exc:
+        return render(request, "settings_users.html", _users_ctx(db, user, error=f"⛔ {exc}"), status_code=400)
+    log_activity(db, user, "web_settings_guide_doc", doc_fa=guide_docs.title_fa(target), file=file.filename)
+    return render(request, "settings_users.html", _users_ctx(
+        db, user, message=f"✅ «{guide_docs.title_fa(target)}» ذخیره شد: {file.filename}"))
+
+
+@router.post("/users/guides/{target}/restore")
+async def guide_doc_restore(request: Request, target: str, user=Depends(require_feature(perm.USERS)),
+                            db: Database = Depends(get_db)):
+    _guide_target(target)
+    removed = guide_docs.restore_default(db, target, updated_by=str(user["bale_user_id"]))
+    if removed:
+        log_activity(db, user, "web_settings_guide_doc_restore", doc_fa=guide_docs.title_fa(target))
+    msg = "✅ فایل پیش‌فرض دوباره فعال شد." if removed else "فایل فعلی همان فایل پیش‌فرض است."
+    return render(request, "settings_users.html", _users_ctx(db, user, message=f"{msg} — {guide_docs.title_fa(target)}"))
 
 
 @router.post("/users/{target_id}/role")

@@ -58,6 +58,9 @@ MENU_PARENT: dict[str, str | None] = {
     "appearance_item": "appearance",
     "role_perms": "settings",
     "letterhead": "appearance",
+    "guide_roles": "users",
+    "intro_doc": "users",
+    "role_guide": "guide_roles",
     "material_request": "main",
     "warehouse_return": "main",
 }
@@ -311,6 +314,29 @@ BTN_BACK_USERS = BTN_BACK
 BTN_INVITE_CONFIRM = "✅ تأیید ساخت لینک"
 BTN_INVITE_CANCEL = BTN_CANCEL
 BTN_INVITE_ENTER = "ورود به ربات"
+# v1.7.1 — PDFs sent to invitees (👥 کاربران, owner/manager)
+BTN_USERS_ROLE_GUIDES = "📄 راهنمای نقش"
+BTN_USERS_INTRO_DOC = "📘 معرفی ربات"
+BTN_GDOC_SEND = "👁 دریافت فایل فعلی"
+BTN_GDOC_UPLOAD = "📤 آپلود فایل PDF"
+BTN_GDOC_RESTORE = "↺ بازگشت به فایل پیش‌فرض"
+BTN_ROLE_GUIDE_PREFIX = "📄 راهنمای "
+
+
+def role_guide_button(role: str) -> str:
+    """«📄 راهنمای تکنسین» … one reply button per role (all five roles)."""
+    from config import ROLES
+
+    return BTN_ROLE_GUIDE_PREFIX + ROLES.get(role, role)
+
+
+def role_guide_button_to_role(text: str) -> str | None:
+    from config import ROLES
+
+    for r in ROLES:
+        if text == role_guide_button(r):
+            return r
+    return None
 
 BTN_ROLE_OWNER = "مالک"
 BTN_ROLE_MANAGER = "مدیر"
@@ -1100,7 +1126,29 @@ def bot_settings_item_menu(*, include_text: bool = True) -> dict:
 
 
 def users_menu() -> dict:
-    return _kb([[BTN_USERS_ADD, BTN_USERS_EDIT], [BTN_USERS_DELETE, BTN_USERS_LIST]], "users")
+    return _kb(
+        [
+            [BTN_USERS_ADD, BTN_USERS_EDIT],
+            [BTN_USERS_DELETE, BTN_USERS_LIST],
+            [BTN_USERS_ROLE_GUIDES, BTN_USERS_INTRO_DOC],
+        ],
+        "users",
+    )
+
+
+def guide_roles_menu() -> dict:
+    """«📄 راهنمای نقش»: one button per role → that role's guide PDF."""
+    from config import ROLES
+
+    return _kb(_pairs([role_guide_button(r) for r in ROLES]), "guide_roles")
+
+
+def guide_doc_menu(target: str = "intro") -> dict:
+    """One document (intro or a role guide): view / upload PDF / restore packaged default."""
+    return _kb(
+        [[BTN_GDOC_SEND], [BTN_GDOC_UPLOAD, BTN_GDOC_RESTORE]],
+        "intro_doc" if target == "intro" else "role_guide",
+    )
 
 
 def invite_confirm_menu() -> dict:
@@ -1340,7 +1388,7 @@ ALL_KEYBOARD_BUILDERS = (
     "material_request_review_menu", "material_request_edit_menu", "warehouse_return_review_menu",
     "site_stock_menu", "site_stock_entry_menu", "bot_settings_menu", "appearance_menu",
     "bot_settings_letterhead_menu", "bot_settings_stock_group_menu", "bot_settings_item_menu",
-    "users_menu", "invite_confirm_menu", "role_menu", "reminder_settings_menu",
+    "users_menu", "guide_roles_menu", "guide_doc_menu", "invite_confirm_menu", "role_menu", "reminder_settings_menu",
     "reminder_roles_menu", "reminder_back_menu", "tundish_report_menu", "tundish_report_mode_menu",
     "tundish_report_step_menu", "tundish_report_confirm_menu", "tundish_report_settings_menu",
     "tundish_report_section_settings_menu", "tundish_report_item_edit_menu", "tundish_report_type_menu",
@@ -1395,6 +1443,12 @@ def role_perms_inline(role: str, rows: list[dict]) -> dict:
     return BaleClient.inline_keyboard(kb_rows)
 
 
+def _roles() -> tuple[str, ...]:
+    from config import ROLES
+
+    return tuple(ROLES)
+
+
 def _button_features() -> dict[str, tuple[str, ...]]:
     P = perm
     m: dict[str, tuple[str, ...]] = {
@@ -1436,6 +1490,12 @@ def _button_features() -> dict[str, tuple[str, ...]]:
         BTN_USERS_EDIT: (P.USERS,),
         BTN_USERS_DELETE: (P.USERS,),
         BTN_USERS_LIST: (P.USERS,),
+        BTN_USERS_ROLE_GUIDES: (P.USERS,),
+        BTN_USERS_INTRO_DOC: (P.USERS,),
+        BTN_GDOC_SEND: (P.USERS,),
+        BTN_GDOC_UPLOAD: (P.USERS,),
+        BTN_GDOC_RESTORE: (P.USERS,),
+        **{role_guide_button(r): (P.USERS,) for r in _roles()},
         BTN_USER_ACTIVITY: (P.USER_ACTIVITY,),
         BTN_ROLE_PERMS: (P.ROLE_PERMISSIONS,),
         BTN_TR_SETTINGS: (P.TUNDISH_REPORT_SETTINGS,),
