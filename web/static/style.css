@@ -41,7 +41,10 @@ a:hover { text-decoration: underline; }
   align-items: center;
   justify-content: space-between;
 }
-.brand { font-weight: 700; color: var(--ink); font-size: 1.05rem; }
+.brand { font-weight: 700; color: var(--ink); font-size: 1.05rem; display: inline-flex; align-items: center; gap: .5rem; }
+.brand-logo { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+.login-logo { text-align: center; margin: 0 0 .5rem; }
+.login-logo img { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; }
 .nav { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; }
 .nav a, .nav button.linkish {
   color: var(--muted);

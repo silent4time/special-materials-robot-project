@@ -10,7 +10,9 @@ import _smoke_env  # noqa: F401,E402
 import hashlib
 import io
 import json
+import os
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -214,7 +216,7 @@ def main() -> int:
     assert up.notify_tick(client, db2, kb.update_menu()) is None and len(client.sent) == 1, "notify once per version"
 
     launched: list[str] = []
-    up.launch_detached = lambda by="": launched.append(by) or "test"
+    up.launch_detached = lambda by="", lock_token="": launched.append(by) or "test"
     app = BotApp(client, db2)  # type: ignore[arg-type]
 
     def say(uid, t):
@@ -249,9 +251,28 @@ def main() -> int:
     assert "github.com" not in client.sent[-1][1]
     assert kb.BTN_UPDATE in kb.keyboard_texts(client.sent[-1][2])
     say("61", kb.BTN_UPDATE)
-    assert launched == ["61"] and "شروع شد" in client.sent[-1][1], client.sent[-1]
-    forged("61", "upd|nope")
+    prog = client.sent[-1][1]
+    assert launched == ["61"] and "در حال دانلود" in prog and "▰" in prog and "99.0.0" in prog, client.sent[-1]
+    saved = json.loads((config.BASE_DIR / "data" / "updates" / "update_progress.json").read_text(encoding="utf-8"))
+    assert saved["target_version"] == "99.0.0" and str(saved["chat_id"]) == "61" and saved["message_id"]
+    say("61", kb.BTN_UPDATE)
+    assert launched == ["61"] and up.BUSY_FA in client.sent[-1][1], client.sent[-1]
+    cleared: list = []
+    answers: list = []
+    client.edit_message_reply_markup = lambda chat, mid, reply_markup=None: cleared.append(reply_markup) or {}
+    client.answer_callback_query = lambda cid, text=None, show_alert=False: answers.append((text, bool(show_alert))) or True
+    forged("61", kb.CB_UPDATE_APPLY)
+    assert cleared[-1] == {"inline_keyboard": []} and answers[-1] == (up.BUSY_FA, True)
     assert launched == ["61"]
+    up.release_update_lock(force=True)
+    up.clear_progress_state()
+    forged("61", kb.CB_UPDATE_CONFIRM)
+    assert launched == ["61", "61"], launched
+    assert cleared[-1] == {"inline_keyboard": []} and answers[-1][0] in (None, "")
+    up.release_update_lock(force=True)
+    up.clear_progress_state()
+    forged("61", "upd|nope")
+    assert launched == ["61", "61"]
     # finished update reported once, and only to the owner
     up._set_status(db2, state="applied", version="99.0.0", previous="1.6.0", message="ok https://github.com/x", reported=False)
     n = len(client.sent)
@@ -285,9 +306,16 @@ def main() -> int:
     assert "بررسی به‌روزرسانی" in h and "به‌روزرسانی روی سرور" in h
     assert "واحد نسوز تاندیش فولاد خوزستان" in h and "ثبت نشده است" not in h and "تاندیش اسلب" in h
     assert "github.com" not in h and "special-materials-robot-project" not in h
+    assert 'class="brand-logo"' in h and "/assets/logo.png" in h
+    logo = c.get("/assets/logo.png")
+    assert logo.status_code == 200 and logo.content.startswith(b"\x89PNG"), logo.status_code
     r = c.post("/about/update")
-    assert r.status_code == 200 and launched == ["61", "61"] and "شروع شد" in r.text
+    assert r.status_code == 200 and launched == ["61", "61", "61"] and "شروع شد" in r.text
     assert "github.com" not in r.text
+    busy = c.post("/about/update")
+    assert busy.status_code == 200 and up.BUSY_FA in busy.text and launched == ["61", "61", "61"]
+    up.release_update_lock(force=True)
+    up.clear_progress_state()
     who["u"] = db2.get_user("62")
     h = c.get("/home").text
     assert "update-banner" not in h and 'href="/about"' in h
@@ -297,15 +325,179 @@ def main() -> int:
     assert "github.com" not in h
     assert c.post("/about/check", follow_redirects=False).status_code == 403
     assert c.post("/about/update", follow_redirects=False).status_code == 403
-    assert launched == ["61", "61"]
+    assert launched == ["61", "61", "61"]
     who["u"] = db2.get_user("63")
     h = c.get("/home").text
     assert "update-banner" not in h and 'href="/about"' not in h
     assert c.get("/about", follow_redirects=False).status_code in (303, 403)
     assert c.post("/about/update", follow_redirects=False).status_code in (303, 403)
     assert c.post("/about/check", follow_redirects=False).status_code in (303, 403)
-    assert launched == ["61", "61"]
+    assert launched == ["61", "61", "61"]
     print("  web: banner + /about owner-only install, manager POST denied, no repo URL OK")
+
+    # progress bar, lock, stuck "running" status, final message after restart
+    assert up.progress_bar(50) == "▰▰▰▱▱▱ 50%", up.progress_bar(50)
+    assert up.progress_bar(0).startswith("▱") and up.progress_bar(100).count("▰") == 6
+    half, detail = up.download_progress(50, 100)
+    assert "50٪" in detail and 5 <= half <= 40, (half, detail)
+    unk_pct, unk = up.download_progress(2048, 0)
+    assert "٪" not in unk and "کیلوبایت" in unk and unk_pct == 8, (unk_pct, unk)
+    stages: list[str] = []
+    gh.release("1.6.0")
+    root = _project("progress")
+    res = up.apply_update(
+        db, root=root, db_path=root / "data" / "bot.db",
+        smoke=lambda r, log: True, restart=rs, pip=False,
+        progress=lambda stage, pct, ver, det="": stages.append(stage),
+    )
+    assert res["state"] == "applied", res
+    assert stages[:6] == ["download", "download", "verify", "backup", "install", "restart"], stages
+    assert not (root / "data" / "updates" / "update.lock").exists()
+    held = up.try_acquire_update_lock(root)
+    assert held and up.try_acquire_update_lock(root) is None
+    busy = up.apply_update(db, root=root, smoke=lambda r, log: True, restart=rs, pip=False)
+    assert busy["state"] == "busy" and busy["message"] == up.BUSY_FA, busy
+    up.release_update_lock(root, token=held)
+    # stale lock (and a dead pid) must not block the next run
+    root = _project("stale")
+    stale = root / "data" / "updates" / "update.lock"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text(json.dumps({"pid": 2**22, "started": 1, "token": "old", "role": "apply"}), encoding="utf-8")
+    res = up.apply_update(db, root=root, db_path=root / "data" / "bot.db", smoke=lambda r, log: True, restart=rs, pip=False)
+    assert res["state"] == "applied" and not stale.exists(), res
+    gh.release("1.6.0", bad_sha=True)
+    bad_stages: list[str] = []
+    root = _project("badprog")
+    up.write_progress_state(7, 3, "1.6.0", root=root)
+    res = up.apply_update(
+        db, root=root, smoke=lambda r, log: True, restart=rs, pip=False,
+        progress=lambda stage, pct, ver, det="": bad_stages.append(stage),
+    )
+    assert res["state"] == "failed" and "error" in bad_stages, res
+    assert not (root / "data" / "updates" / "update.lock").exists()
+    assert up.read_progress_state(root) is None
+    print("  progress bar, download %, lock + stale lock, failure releases lock OK")
+
+    class _Chat:
+        def __init__(self):
+            self.edits: list[tuple] = []
+            self.sent: list[tuple] = []
+
+        def edit_message_text(self, chat, mid, text, reply_markup=None):
+            self.edits.append((str(chat), int(mid), text))
+            return {}
+
+        def send_message(self, chat, text, reply_markup=None):
+            self.sent.append((str(chat), text))
+            return {"message_id": len(self.sent)}
+
+    # production bug: status stayed "running" after VERSION already equals the target
+    rec = TMP / "reconcile"
+    (rec).mkdir(parents=True, exist_ok=True)
+    (rec / "VERSION").write_text("1.7.3\n", encoding="utf-8")
+    dbx = Database(TMP / "reconcile.db")
+    dbx.upsert_user("61", role="owner", display_name="owner")
+    old_at = "2020-01-01 00:00"
+    up._set_status(dbx, state="running", version="1.7.3", previous="1.7.2", message="", started_epoch=time.time() - 8 * 60)
+    # _set_status stamps `at` as now; rewrite the stored row to the stuck production timestamp
+    raw = json.loads(dbx.get_setting(up.STATUS_KEY))
+    raw["at"] = old_at
+    dbx.set_setting(up.STATUS_KEY, json.dumps(raw, ensure_ascii=False))
+    up.write_progress_state("61", 44, "1.7.3", root=rec, started=time.time() - 8 * 60)
+    chat = _Chat()
+    outcome = up.finalize_after_restart(chat, dbx, root=rec)
+    assert outcome == "completed", outcome
+    st = up.get_status(dbx)
+    assert st["state"] == "applied" and st.get("at") != old_at, st
+    assert "در حال به‌روزرسانی" not in up.status_fa(st), up.status_fa(st)
+    assert chat.edits and chat.edits[-1][2] == up.SUCCESS_FA.format(version="1.7.3"), chat.edits
+    assert up.read_progress_state(rec) is None
+    # edit failure falls back to a new message, then the state file is removed
+    up._set_status(dbx, state="running", version="1.7.3", previous="1.7.2", message="")
+    (rec / "VERSION").write_text("1.7.3\n", encoding="utf-8")
+    up.write_progress_state("61", 44, "1.7.3", root=rec)
+
+    class _NoEdit(_Chat):
+        def edit_message_text(self, *a, **k):
+            raise RuntimeError("message gone")
+
+    chat = _NoEdit()
+    up.finalize_after_restart(chat, dbx, root=rec)
+    assert chat.sent and up.SUCCESS_FA.format(version="1.7.3") in chat.sent[-1][1]
+    assert up.read_progress_state(rec) is None
+    # running version != target → failed, Persian message, lock released
+    (rec / "VERSION").write_text("1.7.2\n", encoding="utf-8")
+    up._set_status(dbx, state="running", version="1.7.3", previous="1.7.2", message="", started_epoch=time.time())
+    up.write_progress_state("61", 9, "1.7.3", root=rec)
+    (rec / "data" / "updates").mkdir(parents=True, exist_ok=True)
+    (rec / "data" / "updates" / "update.lock").write_text(
+        json.dumps({"pid": 2**22, "started": time.time(), "token": "dead", "role": "apply"}),
+        encoding="utf-8",
+    )
+    chat = _Chat()
+    assert up.finalize_after_restart(chat, dbx, root=rec) == "failed"
+    assert up.get_status(dbx)["state"] == "failed"
+    assert "کامل نشد" in chat.edits[-1][2] and "1.7.2" in chat.edits[-1][2]
+    assert not (rec / "data" / "updates" / "update.lock").exists()
+    assert up.read_progress_state(rec) is None
+    # older than 30 minutes and version still behind → stale/failed even if the pid looks alive
+    (rec / "VERSION").write_text("1.7.2\n", encoding="utf-8")
+    up._set_status(dbx, state="running", version="9.9.9", previous="1.7.2", message="", started_epoch=time.time() - 31 * 60)
+    (rec / "data" / "updates" / "update.lock").write_text(
+        json.dumps({"pid": os.getpid(), "started": time.time() - 31 * 60, "token": "live", "role": "apply"}),
+        encoding="utf-8",
+    )
+    assert up.reconcile_running_status(dbx, root=rec) == "stale"
+    assert up.get_status(dbx)["state"] == "failed" and "۳۰ دقیقه" in up.get_status(dbx)["message"]
+    assert not (rec / "data" / "updates" / "update.lock").exists()
+    # a young live lock with a different version is still in progress
+    up._set_status(dbx, state="running", version="9.9.9", previous="1.7.2", message="", started_epoch=time.time())
+    (rec / "data" / "updates" / "update.lock").write_text(
+        json.dumps({"pid": os.getpid(), "started": time.time(), "token": "live", "role": "apply"}),
+        encoding="utf-8",
+    )
+    assert up.reconcile_running_status(dbx, root=rec) is None
+    assert up.get_status(dbx)["state"] == "running"
+    (rec / "data" / "updates" / "update.lock").unlink()
+    print("  startup: version match completes, mismatch/stale fails, live update left running OK")
+
+    from services import bot_logo
+
+    calls: list = []
+
+    class _Photo:
+        def try_set_my_photo(self, path):
+            calls.append(Path(path).name)
+            return True, "setMyProfilePhoto"
+
+    assert bot_logo.PROFILE_PHOTO_API_SUPPORTED is False
+    skipped = bot_logo.sync_official_logo(_Photo())
+    assert skipped["supported"] is False and skipped["applied"] is False and calls == []
+    assert "setuserpic" in bot_logo.MANUAL_STEPS_FA and "@botfather" in bot_logo.MANUAL_STEPS_FA
+    logo_root = TMP / "logo"
+    (logo_root / "assets").mkdir(parents=True)
+    mark = logo_root / "assets" / "logo.png"
+    mark.write_bytes(b"\x89PNG\r\n\x1a\nlogo-a")
+    bot_logo.PROFILE_PHOTO_API_SUPPORTED = True
+    try:
+        first = bot_logo.sync_official_logo(_Photo(), root=logo_root)
+        assert first["applied"] is True and calls == ["logo.png"], first
+        again = bot_logo.sync_official_logo(_Photo(), root=logo_root)
+        assert again["reason"] == "unchanged" and calls == ["logo.png"], again
+        mark.write_bytes(b"\x89PNG\r\n\x1a\nlogo-b")
+        third = bot_logo.sync_official_logo(_Photo(), root=logo_root)
+        assert third["applied"] is True and len(calls) == 2, third
+
+        class _Boom:
+            def try_set_my_photo(self, path):
+                raise RuntimeError("api down")
+
+        mark.write_bytes(b"\x89PNG\r\n\x1a\nlogo-c")
+        failed = bot_logo.sync_official_logo(_Boom(), root=logo_root)
+        assert failed["applied"] is False and failed["reason"] == "error"
+    finally:
+        bot_logo.PROFILE_PHOTO_API_SUPPORTED = False
+    print("  logo: API unsupported (no call); hash gate is idempotent when enabled OK")
     up._http_get = None
     print("smoke_updater: ALL OK")
     return 0

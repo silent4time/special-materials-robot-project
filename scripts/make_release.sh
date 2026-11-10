@@ -2,6 +2,8 @@
 # v1.6.0 — build the release package for the built-in updater.
 #   dist/nasoz-bot.zip         git archive --prefix=special-materials-robot-project/ <ref>
 #   dist/nasoz-bot.zip.sha256  "<sha256>  nasoz-bot.zip"
+#   Tracked files are packed, including assets/logo.png. Gitignored paths
+#   (data/, .env, .venv) are not.
 # Upload both as assets of the GitHub release vX.Y.Z (non-draft, non-prerelease).
 set -euo pipefail
 cd "$(dirname "$0")/.."

@@ -74,6 +74,9 @@ def create_app() -> FastAPI:
     # Vazirmatn for the whole panel (same font files as the PDF/XLSX outputs)
     app.mount("/fonts", StaticFiles(directory=str(WEB_DIR.parent / "fonts")), name="fonts")
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
+    _assets = WEB_DIR.parent / "assets"
+    if _assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets)), name="assets")
     app.state.templates = TEMPLATES
 
     @app.middleware("http")

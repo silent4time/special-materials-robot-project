@@ -1075,6 +1075,7 @@ BTN_UPDATE_CONFIRM = "✅ تأیید و نصب به‌روزرسانی"
 CB_UPDATE_PREFIX = "upd|"
 CB_UPDATE_CHECK = "upd|check"
 CB_UPDATE_APPLY = "upd|apply"
+CB_UPDATE_CONFIRM = "upd|confirm"
 
 
 LEGACY_ALIASES.update({

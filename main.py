@@ -105,13 +105,27 @@ def main() -> int:
         except BaleAPIError as exc:
             logger.warning("deleteWebhook: %s", exc)
 
+        from services import updater as updater_svc
+
+        try:
+            from services.bot_logo import sync_official_logo
+
+            sync_official_logo(client)
+        except Exception:  # noqa: BLE001 — avatar sync must not stop the bot
+            logger.exception("official logo sync failed")
+        try:
+            updater_note = updater_svc.finalize_after_restart(client, db)
+            if updater_note:
+                logger.info("update finalize: %s", updater_note)
+        except Exception:  # noqa: BLE001
+            logger.exception("update finalize failed")
+
         logger.info("Polling started…")
         last_reminder_tick = 0.0
         last_housekeeping = time.monotonic()
         last_backup_tick = 0.0
         last_update_tick = 0.0
         from services import backup as backup_svc
-        from services import updater as updater_svc
         import threading
 
         def _update_tick() -> None:
