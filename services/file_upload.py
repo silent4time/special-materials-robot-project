@@ -35,6 +35,19 @@ logger = logging.getLogger(__name__)
 DAILY_STOCK_OK_FA = "✅ موجودی روزانه به‌روزرسانی شد."
 
 
+def _restore_previous_source(db: Any, user: dict, previous_clean: Path | None, latest_inv: dict | None) -> None:
+    """Put the live منبع اصلی pointer back if a full replace or stock merge was refused."""
+    if previous_clean is not None and latest_inv and latest_inv.get("clean_path"):
+        orig = Path(str(latest_inv["clean_path"]))
+        try:
+            if Path(previous_clean).resolve() != orig.resolve() and Path(previous_clean).exists():
+                shutil.copy2(previous_clean, orig)
+            db.update_extracted_clean_path(int(latest_inv["id"]), str(orig))
+        except Exception:  # noqa: BLE001
+            logger.exception("could not restore منبع اصلی after refused upload")
+    db.set_pending_file_type(user["bale_user_id"], None)
+
+
 @dataclass
 class UploadOutcome:
     ok: bool
@@ -182,7 +195,36 @@ def process_upload(
             uploaded_stock_df = pd.read_excel(result.clean_path, engine="openpyxl")
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not read uploaded stock frame for inbound: %s", exc)
-    if old_df is not None and not old_df.empty:
+    if full_source:
+        try:
+            new_df = pd.read_excel(result.clean_path, engine="openpyxl")
+            from excel.id_parse import apply_id_segment_rule
+
+            replaced, sibling_notes = main_source_svc.fill_new_ids_from_same_code(old_df, new_df)
+            replaced, _old_mism = apply_id_segment_rule(replaced)
+            if replaced is None or getattr(replaced, "empty", True):
+                source_guard_error = "فایل جدید ردیفی ندارد؛ منبع اصلی تغییر نکرد."
+                raise RuntimeError("empty full replace")
+            write_clean_excel(replaced, result.clean_path, pending)
+            result.kept_row_count = int(len(replaced))
+            merge_note = (
+                f"\nجایگزینی بدون ادغام: فایل قبلی ({prev_kept} ردیف) کنار گذاشته شد. "
+                f"نهایی {result.kept_row_count} ردیف."
+                + main_source_svc.new_id_sibling_note_fa(sibling_notes)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("full source replace failed: %s", exc)
+            _restore_previous_source(db, user, previous_clean, latest_inv)
+            return UploadOutcome(
+                ok=False,
+                kind="guard",
+                pending=pending,
+                text=(
+                    source_guard_error
+                    or user_errors.error_fa("جایگزینی منبع اصلی ناموفق بود؛ چیزی ذخیره نشد", exc)
+                ),
+            )
+    elif old_df is not None and not old_df.empty:
         try:
             new_df = pd.read_excel(result.clean_path, engine="openpyxl")
             if pending == "product_inventory":
@@ -230,16 +272,7 @@ def process_upload(
         except Exception as exc:  # noqa: BLE001
             logger.warning("merge clean frames failed: %s", exc)
             if pending == "product_inventory":
-                # never save an unmerged/damaging file over منبع اصلی
-                if previous_clean is not None and latest_inv and latest_inv.get("clean_path"):
-                    orig = Path(str(latest_inv["clean_path"]))
-                    try:
-                        if Path(previous_clean).resolve() != orig.resolve():
-                            shutil.copy2(previous_clean, orig)
-                        db.update_extracted_clean_path(int(latest_inv["id"]), str(orig))
-                    except Exception:  # noqa: BLE001
-                        logger.exception("could not restore منبع اصلی after refused upload")
-                db.set_pending_file_type(user["bale_user_id"], None)
+                _restore_previous_source(db, user, previous_clean, latest_inv)
                 return UploadOutcome(ok=False, kind=guard_kind if source_guard_error else "guard",
                                      pending=pending, text=(
                     source_guard_error

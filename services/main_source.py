@@ -1268,7 +1268,12 @@ def stock_update_note_fa(info: dict[str, Any], *, limit: int = 15) -> str:
 NO_PREFILL_COLS = frozenset({"id", "product_name", "quantity", "priority", "contractor_or_company", "category_code"})
 
 
-def sibling_defaults(df: pd.DataFrame | None, code: object) -> tuple[dict[str, Any], list[str]]:
+def sibling_defaults(
+    df: pd.DataFrame | None,
+    code: object,
+    *,
+    skip: frozenset[str] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
     """Values shared by ALL منبع اصلی rows of a 4-digit code → (prefill, differing cols).
 
     A column is prefilled only when every sibling row has the same non-blank value.
@@ -1281,10 +1286,11 @@ def sibling_defaults(df: pd.DataFrame | None, code: object) -> tuple[dict[str, A
     sib = df[df["category_code"].map(_norm_code4) == c4]
     if sib.empty:
         return {}, []
+    excluded = NO_PREFILL_COLS if skip is None else skip
     values: dict[str, Any] = {}
     differing: list[str] = []
     for col in INVENTORY_COLUMNS:
-        if col in NO_PREFILL_COLS or col not in sib.columns:
+        if col in excluded or col not in sib.columns:
             continue
         cells = ["" if _blank(v) else _cell_str(v) for v in sib[col]]
         uniq = set(cells)
@@ -1295,3 +1301,73 @@ def sibling_defaults(df: pd.DataFrame | None, code: object) -> tuple[dict[str, A
         else:
             differing.append(col)
     return values, differing
+
+
+# Columns a brand-new id keeps from the uploaded file. Everything else is
+# taken from the rows that already share its 4-digit code.
+NEW_ID_FROM_FILE = frozenset({"id", "category_code", "product_name", "quantity", "contractor_or_company"})
+
+
+def fill_new_ids_from_same_code(
+    old: pd.DataFrame | None,
+    new: pd.DataFrame | None,
+) -> tuple[pd.DataFrame | None, list[dict[str, Any]]]:
+    """New ids keep code, id, description and quantity from the file.
+
+    Every other column is replaced by the value shared by the previous
+    source's rows of that same 4-digit code. If that code did not exist yet,
+    the other rows of the new file are used. An id that was already in the
+    source is left exactly as the new file wrote it.
+    """
+    if new is None or getattr(new, "empty", True):
+        return new, []
+    out = new.copy().astype({c: object for c in new.columns})
+    old_ids: set[str] = set()
+    if old is not None and not getattr(old, "empty", True) and "id" in old.columns:
+        old_ids = {_norm_id(v) for v in old["id"]} - {""}
+    notes: list[dict[str, Any]] = []
+    for i, row in out.iterrows():
+        iid = _norm_id(row.get("id"))
+        if not iid or iid in old_ids:
+            continue
+        code = row.get("category_code")
+        pre, diff = sibling_defaults(old, code, skip=NEW_ID_FROM_FILE)
+        if not pre and not diff:
+            others = out.drop(index=i)
+            pre, diff = sibling_defaults(others, code, skip=NEW_ID_FROM_FILE)
+        applied: list[str] = []
+        for col, val in pre.items():
+            if col not in out.columns:
+                out[col] = None
+            out.at[i, col] = val
+            applied.append(col)
+        notes.append({
+            "id": _cell_str(row.get("id")),
+            "category_code": _norm_code4(code),
+            "product_name": _cell_str(row.get("product_name")),
+            "prefilled": applied,
+            "differing": [c for c in diff if c not in NEW_ID_FROM_FILE],
+        })
+    return out.reset_index(drop=True), notes
+
+
+def new_id_sibling_note_fa(notes: list[dict[str, Any]], *, limit: int = 15) -> str:
+    if not notes:
+        return ""
+    lines = [
+        f"\nردیف‌های جدید: کد چهاررقمی، شناسه، شرح و موجودی از فایل است. "
+        f"بقیهٔ ستون‌ها از همان کد چهاررقمی گذاشته شد ({len(notes)} ردیف)."
+    ]
+    for note in notes[:limit]:
+        lab = "، ".join(FIELD_LABELS_FA.get(c, c) for c in note.get("prefilled") or [])
+        line = f"• {note['id']} (کد {note['category_code'] or '—'}) {note.get('product_name') or ''}".rstrip()
+        if lab:
+            line += f"\n   از هم‌کد: {lab}"
+        differing = note.get("differing") or []
+        if differing:
+            dlab = "، ".join(FIELD_LABELS_FA.get(c, c) for c in differing)
+            line += f"\n   هم‌کدها یکی نبودند، از فایل ماند: {dlab}"
+        lines.append(line)
+    if len(notes) > limit:
+        lines.append(f"… و {len(notes) - limit} ردیف دیگر")
+    return "\n".join(lines)

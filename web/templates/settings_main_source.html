@@ -34,11 +34,10 @@
 {% if can(user, "main_source_edit") %}
 <div class="card">
   <h2>آپلود فایل اکسل</h2>
-  <p class="muted">شیت «ریز اطلاعات». شیت‌های دیگر نادیده گرفته می‌شوند. اگر ستون تازه‌ای نباشد، فیلدهای جدید خالی می‌مانند و محل استفادهٔ قبلی بر اساس شناسه حفظ می‌شود.</p>
+  <p class="muted">شیت «ریز اطلاعات». فایل جدید جای منبع اصلی را می‌گیرد. ردیف جدید کد چهاررقمی، شناسه، شرح و موجودی را از فایل می‌گیرد و بقیهٔ ستون‌ها از همان کد چهاررقمی پر می‌شود.</p>
   <form method="post" action="/settings/main-source/upload" enctype="multipart/form-data">
     <input type="file" name="file" accept=".xlsx,.xlsm" required>
-    <p><label><input type="checkbox" name="allow_rate_loss" value="1"> پاک شدن نرخ‌های مصرف موجود را تأیید می‌کنم (فقط اگر عمداً است)</label></p>
-    <p style="margin-top:1rem"><button type="submit">آپلود و همسان‌سازی</button></p>
+    <p style="margin-top:1rem"><button type="submit">جایگزینی کامل</button></p>
   </form>
 </div>
 
