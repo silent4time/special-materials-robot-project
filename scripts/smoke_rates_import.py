@@ -107,7 +107,8 @@ def _web_flow() -> None:
     assert c.post("/login", data={"username": "owner8801", "password": "secret88"},
                   follow_redirects=False).status_code == 303
     page = c.get("/settings/main-source").text
-    assert "ورود نرخ‌های مصرف" in page and "allow_rate_loss" in page
+    assert "ورود نرخ‌های مصرف" in page
+    assert "allow_rate_loss" not in page
     frame = ms.load_primary_frame(db, bale_user_id="8801")
     if frame is None or ri.rows_with_rates(frame).empty:
         return

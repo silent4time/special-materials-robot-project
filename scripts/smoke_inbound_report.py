@@ -162,6 +162,10 @@ def main() -> int:
         n_docs = len(sent_docs)
         upload("full", _xlsx(tmp / "full.xlsx", [
             (1203, A, "بتن 85 شرکت", "بتن 85bt", 500, 1, "شرکت", "Kg", "بیلت"),
+            (1203, B, "بتن ب", "بتن ب", 50, 1, "شرکت", "Kg", ""),
+            (1203, P0, "بتن اولویت صفر", "", 10, 0, "شرکت", "No", ""),
+            (1203, ADDED, "افزوده", "", 4, 1, "شرکت", "Kg", ""),
+            (1800, S, "مازاد قدیمی", "مازاد", 5, 0, "شرکت", "Kg", ""),
         ]), "main_source")
         assert "پایه «گزارش اقلام ورودی به انبار» تغییر نکرد" in [m for m in client.msgs if not m.startswith("✅ گزارش اقلام ورودی ارسال")][-1], [m for m in client.msgs if not m.startswith("✅ گزارش اقلام ورودی ارسال")][-1]
         assert db.count_stock_uploads() == 1 and db.latest_stock_upload()["id"] == base_id
