@@ -174,22 +174,39 @@ def test_parse() -> None:
         "۲ هزار تن بلوم": {"bloom": 2000},
         "1.5 هزار تن بلوم": {"bloom": 1500},
         "بیلت ۱۰۰۰ تن و اسلب ۲۰۰۰ تن": {"billet": 1000, "slab": 2000},
+        "برای ده هزار کیلو شمش بیلت چقدر مواد لازم است": {"billet": 10},
+        "۱۰۰۰۰ کیلوگرم بلوم": {"bloom": 10},
+        "10000kg اسلب": {"slab": 10},
+        "۱۰ هزار کیلو گرم شمش بیلت": {"billet": 10},
+        "ده هزار کیلوگرمی بیلت": {"billet": 10},
+        "10000 kgs slab": {"slab": 10},
+        "10000KG تولید شمش بیلت": {"billet": 10},
+        "پنج هزار کیلو بلوم": {"bloom": 5},
+        "۱۵۰۰ کیلوگرم بیلت": {"billet": 1.5},
+        "برای ده هزار کیلو شمش بیلت چند تاندیش لازم است": {"billet": 10},
     }
     for text, want in cases.items():
         q = tq.parse(text)
-        assert q is not None and q.targets == want, (text, q)
+        assert q is not None and q.targets == want, (text, None if q is None else (q.targets, q.tons, q.section))
         it = ab.rule_route(text)
         assert it is not None and it.name == ab.I_TARGET_TONNAGE, (text, it)
     q = tq.parse("برای تولید شمش بیلت چقدر مواد لازم است")
     assert q and q.missing == "tons" and q.section == "billet", q
     q = tq.parse("برای ده تن تولید شمش چقدر مواد لازم است")
     assert q and q.missing == "section" and q.tons == 10, q
-    for text in ("نیاز مواد برای ۱۰ تاندیش اسلب", "۱۰ تن آجر داریم؟", "مصرف شهریور بیلت", "موجودی شرود",
+    q = tq.parse("برای ده هزار کیلو تولید شمش چقدر مواد لازم است")
+    assert q and q.missing == "section" and q.tons == 10, q
+    for text in ("نیاز مواد برای ۱۰ تاندیش اسلب", "۱۰ تن آجر داریم؟", "۱۰ کیلو آجر داریم؟",
+                 "ده هزار کیلو آجر داریم؟", "مصرف شهریور بیلت", "موجودی شرود",
                  "شرود چند روز کافیه", "شهریور چند تا تاندیش اسلب زدیم"):
         assert tq.parse(text) is None, text
     assert ab.rule_route("نیاز مواد برای ۱۰ تاندیش اسلب").name == ab.I_N_TUNDISH
     assert tq.parse_amount("ده") == 10 and tq.parse_amount("۲۰ هزار") == 20000 and tq.parse_amount("سلام") is None
-    print("  free-text parsing (digits / words / units / not hijacking other intents) OK")
+    assert tq.parse_amount("ده هزار کیلو") == 10
+    assert tq.parse_amount("10000kg") == 10
+    assert tq.parse_amount("۱۵۰۰ کیلوگرم") == 1.5
+    assert tq.parse_amount("۱۰ هزار کیلو گرم") == 10
+    print("  free-text parsing (digits / words / تن و کیلوگرم / not hijacking other intents) OK")
 
 
 class FakeClient:
@@ -213,6 +230,7 @@ def _btns(markup) -> list[str]:
 def test_bot(db) -> str:
     from bot import keyboards as kb
     from bot.handlers import BotApp
+    from services import target_tonnage_question as tq
     from services import voice_assistant as va
 
     db.set_setting(va.SETTING_ENABLED, "0")  # assistant off: the question must still work
@@ -227,11 +245,18 @@ def test_bot(db) -> str:
     texts, btns = send(MANAGER, QUESTION)
     body = "\n".join(texts)
     assert "مواد لازم برای تولید ۱۰ تن شمش بیلت" in body, body
+    assert "۱۰٬۰۰۰ کیلوگرم" in body, body
     assert "بتن بیلت" in body and "نازل" in body, body
     assert "شرود" not in body and "روکش بلوم" not in body and "پودر قالب" not in body and "الیاف" not in body, body
     assert "نیاز مواد برای N تاندیش" in body and "تاندیش لازم" in body, body
     assert "│" in body, "answer must be a table"
     assert kb.BTN_OUT_PDF in btns and kb.BTN_OUT_XLSX in btns, btns
+    texts_kg, btns_kg = send(MANAGER, "برای ده هزار کیلو شمش بیلت چقدر مواد لازم است")
+    kg_body = "\n".join(texts_kg)
+    assert "مواد لازم برای تولید ۱۰ تن شمش بیلت (۱۰٬۰۰۰ کیلوگرم)" in kg_body, kg_body
+    assert "بتن بیلت" in kg_body and "نازل" in kg_body, kg_body
+    assert "شرود" not in kg_body, kg_body
+    assert kb.BTN_OUT_PDF in btns_kg and kb.BTN_OUT_XLSX in btns_kg, btns_kg
     nd = len(client.docs)
     texts, _ = send(MANAGER, kb.BTN_OUT_PDF)
     assert len(client.docs) == nd + 1 and client.docs[-1][1].endswith(".pdf"), client.docs[-1:]
@@ -254,6 +279,9 @@ def test_bot(db) -> str:
     # missing product → section buttons (complete questions)
     texts, btns = send(MANAGER, "برای ده تن تولید شمش چقدر مواد لازم است")
     assert "کدام شمش" in texts[-1] and "۱۰ تن شمش اسلب" in btns, (texts, btns)
+    texts, btns = send(MANAGER, "برای ده هزار کیلو تولید شمش چقدر مواد لازم است")
+    assert "کدام شمش" in texts[-1] and "۱۰٬۰۰۰ کیلوگرم" in texts[-1] and "۱۰ تن شمش بیلت" in btns, (texts, btns)
+    assert "کیلوگرم" in tq.clarify_text(tq.parse("برای تولید شمش بیلت چقدر مواد لازم است")), tq.clarify_text(tq.parse("برای تولید شمش بیلت چقدر مواد لازم است"))
     texts, btns = send(MANAGER, "۱۰ تن شمش اسلب")
     body2 = "\n".join(texts)
     assert "۱۰ تن شمش اسلب" in body2 and "شرود" in body2 and "بتن بیلت" not in body2, body2
@@ -479,6 +507,18 @@ def main() -> None:
     test_parse()
     body = test_bot(db)
     print("\n--- نمونهٔ پاسخ ربات ---\n" + body + "\n---")
+    # kg phrasing yields the same table; reprint a dedicated sample for the report
+    from bot.handlers import BotApp
+    from services import voice_assistant as va
+
+    db.set_setting(va.SETTING_ENABLED, "0")
+    client = FakeClient()
+    app = BotApp(client, db)  # type: ignore[arg-type]
+    app.handle_message({"from": {"id": int(MANAGER), "first_name": "x"},
+                        "chat": {"id": int(MANAGER)},
+                        "text": "برای ده هزار کیلو شمش بیلت چقدر مواد لازم است"})
+    kg_sample = "\n".join(t for _c, t, _m in client.sent)
+    print("\n--- نمونهٔ پاسخ ربات برای «برای ده هزار کیلو شمش بیلت چقدر مواد لازم است» ---\n" + kg_sample + "\n---")
     test_assistant_and_web(db, body)
     print("SMOKE OK")
 

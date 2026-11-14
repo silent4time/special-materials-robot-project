@@ -1,11 +1,13 @@
-"""v1.7.2 — free-text «تناژ هدف» question (bot + web assistant), e.g.
-«برای ده تن تولید شمش بیلت چقدر مواد لازم است».
+"""v1.7.2+ — free-text «تناژ هدف» question (bot + web assistant), e.g.
+«برای ده تن تولید شمش بیلت چقدر مواد لازم است» or
+«برای ده هزار کیلو شمش بیلت چقدر مواد لازم است».
 
-Recognises a tonnage (Persian/Arabic/Latin digits, thousands separators, Persian number
-words «ده»، «بیست و پنج هزار»، «صد»، «۱۰ هزار») with the unit تن/تُن/ton plus a product
-section (بیلت / بلوم / اسلب, also «شمش بیلت»). Runs exactly the same calculation as
-«🎯 سناریو ۱ — تناژ هدف» (``services.main_goal_history.scenario_target``) for that
-section only, and builds a readable Persian answer + the same PDF/Excel report.
+Recognises a mass (Persian/Arabic/Latin digits, thousands separators, Persian number
+words «ده»، «بیست و پنج هزار»، «صد»، «۱۰ هزار») with the unit تن/تُن/ton or
+کیلو/کیلوگرم/کیلو گرم/کیلوگرمی/kg/kgs (kilograms are converted to tons: 10000 kg = 10 t)
+plus a product section (بیلت / بلوم / اسلب, also «شمش بیلت»). Runs exactly the same
+calculation as «🎯 سناریو ۱ — تناژ هدف» (``services.main_goal_history.scenario_target``)
+for that section only, and builds a readable Persian answer + the same PDF/Excel report.
 
 «تختال» is NOT treated as اسلب: the codebase/data never use that word (v1.7.2 check);
 the user gets the section buttons instead.
@@ -35,7 +37,23 @@ _HUNDREDS = {"صد": 100, "یکصد": 100, "دویست": 200, "سیصد": 300, "
              "پونصد": 500, "ششصد": 600, "هفتصد": 700, "هشتصد": 800, "نهصد": 900}
 _SCALES = {"هزار": 1000, "میلیون": 1_000_000}
 _WORDS = {**_UNITS, **_TEENS, **_TENS, **_HUNDREDS}
-_UNIT_TOKENS = {"تن", "تنی", "ton", "tons", "tonne", "tonnes"}
+_TON_UNIT_TOKENS = {"تن", "تنی", "ton", "tons", "tonne", "tonnes"}
+_KG_UNIT_TOKENS = {
+    "کیلو", "کیلوگرم", "کیلوگرمی",
+    "kg", "kgs", "kilo", "kilos", "kilogram", "kilograms",
+}
+_KG_GRAM_TAIL = {"گرم", "گرمی"}
+_UNIT_TOKENS = _TON_UNIT_TOKENS | _KG_UNIT_TOKENS
+# After normalize(), «کیلو گرم» is two tokens; «تُن» is already «تن».
+_MASS_UNIT_RE = re.compile(
+    r"(?<!\w)("
+    r"کیلوگرم|کیلوگرمی|کیلو\s+گرم(?:ی)?|کیلو|"
+    r"tonnes|tonne|tons|ton|"
+    r"kilograms|kilogram|kilos|kilo|"
+    r"kgs|kg|"
+    r"تنی|تن"
+    r")(?!\w)"
+)
 _SECTION_TOKENS = {
     "بیلت": "billet", "billet": "billet",
     "بلوم": "bloom", "bloom": "bloom",
@@ -82,23 +100,47 @@ def _parse_tokens(tokens: list[str]) -> float | None:
     return (total + cur) if seen else None
 
 
+def _mass_unit_at(toks: list[str], i: int) -> tuple[str, int] | None:
+    """If toks[i:] starts a mass unit, return ("ton"|"kg", span)."""
+    if i >= len(toks):
+        return None
+    tok = toks[i]
+    if tok in _TON_UNIT_TOKENS:
+        return "ton", 1
+    if tok in _KG_UNIT_TOKENS:
+        span = 1
+        if tok == "کیلو" and i + 1 < len(toks) and toks[i + 1] in _KG_GRAM_TAIL:
+            span = 2
+        return "kg", span
+    return None
+
+
 def parse_tons(t: str) -> list[float]:
-    """All tonnages in normalized text (number words / digits immediately before تن)."""
+    """All masses in normalized text, as tons (کیلوگرم ÷ ۱۰۰۰)."""
     toks = t.split()
     out: list[float] = []
-    for i, tok in enumerate(toks):
-        if tok not in _UNIT_TOKENS or i == 0:
+    i = 0
+    while i < len(toks):
+        unit = _mass_unit_at(toks, i)
+        if not unit or i == 0:
+            i += 1
             continue
+        kind, span = unit
         j = i
         while j > 0 and (_num_token(toks[j - 1]) or (toks[j - 1] == "و" and j > 1 and _num_token(toks[j - 2]))):
             j -= 1
         while j < i and toks[j] == "و":
             j += 1
         if j == i:
+            i += span
             continue
         v = _parse_tokens(toks[j:i])
-        if v is not None and 0 < v <= MAX_TONS:
-            out.append(float(v))
+        if v is not None:
+            if kind == "kg":
+                v = float(v) / 1000.0
+            if 0 < v <= MAX_TONS:
+                out.append(float(v))
+        i += span
     return out
 
 
@@ -142,7 +184,7 @@ def parse(text: Any) -> TonnageQuery | None:
     t = normalize(text)
     if not t or len(t) > 300:
         return None
-    if re.search(r"(?<!\w)تاندیش(?!\w)", t) and not re.search(r"(?<!\w)(تن|ton|tons)(?!\w)", t):
+    if re.search(r"(?<!\w)تاندیش(?!\w)", t) and not _MASS_UNIT_RE.search(t):
         return None  # «نیاز مواد برای ۱۰ تاندیش» = N-tundish report
     tons = parse_tons(t)
     secs = parse_sections(t)
@@ -190,11 +232,28 @@ def _num(v: Any) -> float | None:
 
 
 def tons_fa(v: float) -> str:
-    return fa_num(v, 0 if float(v).is_integer() else 2)
+    # Up to 3 decimals so 1 kg (= ۰٫۰۰۱ تن) stays visible after conversion.
+    return fa_num(v, 0 if float(v).is_integer() else 3)
+
+
+def kg_fa(v_tons: float) -> str:
+    kg = float(v_tons) * 1000.0
+    if abs(kg - round(kg)) < 1e-6:
+        kg = float(round(kg))
+        return fa_num(kg, 0)
+    return fa_num(kg, 3)
+
+
+def tons_label(v: float) -> str:
+    """«۱۰ تن (۱۰٬۰۰۰ کیلوگرم)» when the product name is not in the middle."""
+    return f"{tons_fa(v)} تن ({kg_fa(v)} کیلوگرم)"
 
 
 def question_label(targets: dict[str, float]) -> str:
-    return " و ".join(f"{tons_fa(v)} تن شمش {SECTION_FA[s]}" for s, v in targets.items())
+    # «۱۰ تن شمش بیلت (۱۰٬۰۰۰ کیلوگرم)»
+    return " و ".join(
+        f"{tons_fa(v)} تن شمش {SECTION_FA[s]} ({kg_fa(v)} کیلوگرم)" for s, v in targets.items()
+    )
 
 
 # ---------------------------------------------------------------- answer
@@ -226,13 +285,15 @@ def denied_text() -> str:
 def clarify_text(q: TonnageQuery) -> str:
     miss = q.missing
     if miss == "section":
-        return (f"برای {tons_fa(q.tons or 0)} تن تولیدِ کدام شمش؟\n"
+        return (f"برای {tons_label(q.tons or 0)} تولیدِ کدام شمش؟\n"
                 "یکی از دکمه‌های بیلت / بلوم / اسلب را بزنید.")
     if miss == "tons":
         return (f"چند تن شمش {SECTION_FA[q.section or 'billet']}؟\n"
-                "تناژ را به تن بفرستید (مثلاً «۱۰ تن» یا «ده تن»).")
+                "تناژ را به تن یا کیلوگرم بفرستید (مثلاً «۱۰ تن»، «ده تن» یا «ده هزار کیلوگرم»).")
     return ("برای محاسبهٔ مواد لازم، تناژ و نوع شمش را بنویسید؛ مثلاً "
-            "«برای ده تن تولید شمش بیلت چقدر مواد لازم است».\nیا اول بخش را انتخاب کنید:")
+            "«برای ده تن تولید شمش بیلت چقدر مواد لازم است» "
+            "یا «برای ده هزار کیلو شمش بیلت چقدر مواد لازم است».\n"
+            "واحد تن و کیلوگرم هر دو پذیرفته است.\nیا اول بخش را انتخاب کنید:")
 
 
 def clarify_buttons(q: TonnageQuery) -> list[str]:
@@ -248,12 +309,21 @@ def clarify_buttons(q: TonnageQuery) -> list[str]:
 
 
 def parse_amount(text: Any) -> float | None:
-    """Reply to «چند تن؟»: «۱۰»، «ده»، «۱۰ تن»، «بیست هزار»."""
+    """Reply to «چند تن؟»: «۱۰»، «ده»، «۱۰ تن»، «ده هزار کیلو»، «بیست هزار»."""
     t = normalize(text)
     tons = parse_tons(t)
     if tons:
         return tons[0]
-    toks = [x for x in t.split() if x not in _UNIT_TOKENS]
+    raw = t.split()
+    toks = []
+    i = 0
+    while i < len(raw):
+        unit = _mass_unit_at(raw, i)
+        if unit:
+            i += unit[1]
+            continue
+        toks.append(raw[i])
+        i += 1
     if toks and all(_num_token(x) or x == "و" for x in toks):
         v = _parse_tokens(toks)
         if v is not None and 0 < v <= MAX_TONS:
@@ -363,7 +433,7 @@ def build_answer(db: Any, user: dict | None, targets: dict[str, float], inventor
         sec_rows = [x for x in rows if x[COL_SECTION] == SECTION_FA[sec]]
         n_short = sum(1 for x in sec_rows if (x[COL_SHORT] or 0) > 0)
         lines.append("")
-        lines.append(f"🔹 بخش {SECTION_FA[sec]} — {tons_fa(targets[sec])} تن | تاندیش لازم ≈ {tun_txt}")
+        lines.append(f"🔹 بخش {SECTION_FA[sec]} — {tons_label(targets[sec])} | تاندیش لازم ≈ {tun_txt}")
         if _num(tun) is None:
             lines.append("تن بر تاندیش در سابقه نیست؛ تعداد تاندیش و مواد حساب نمی‌شود.")
             continue
@@ -396,7 +466,7 @@ def build_answer(db: Any, user: dict | None, targets: dict[str, float], inventor
         "title": f"مواد لازم برای تولید {question_label(targets)}",
         "subtitle": "تناژ به تعداد تاندیش، سپس فرمول نیاز مواد برای N تاندیش",
         "sections": [{
-            "title": f"بخش {SECTION_FA[sec]} — {tons_fa(targets[sec])} تن",
+            "title": f"بخش {SECTION_FA[sec]} — {tons_label(targets[sec])}",
             "columns": TABLE_COLS,
             "rows": [_table_row(x) for x in rows if x[COL_SECTION] == SECTION_FA[sec]],
         } for sec in SECTION_ORDER if sec in targets],

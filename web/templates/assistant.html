@@ -9,7 +9,7 @@
   {% if tonnage_ok %}
   <p class="muted">در این حالت فقط پرسش «مواد لازم برای تناژ تولید» پاسخ داده می‌شود (همان محاسبهٔ «🎯 سناریو ۱ — تناژ هدف»).</p>
   <form method="post" action="/assistant/ask" class="form-grid">
-    <input type="text" name="q" value="{{ question }}" placeholder="مثلاً: برای ده تن تولید شمش بیلت چقدر مواد لازم است؟" style="min-width:60%">
+    <input type="text" name="q" value="{{ question }}" placeholder="مثلاً: برای ده تن تولید شمش بیلت چقدر مواد لازم است؟ یا برای ده هزار کیلو شمش بیلت" style="min-width:60%">
     <button class="btn" type="submit">بپرس</button>
   </form>
   {% endif %}
