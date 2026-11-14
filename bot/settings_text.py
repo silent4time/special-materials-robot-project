@@ -38,6 +38,13 @@ TECHNICIAN_WELCOME_TIP = (
     "در موجودی روزانه، گروه اسلب / بلوم / بیلت را انتخاب و مقادیر را یکی‌یکی بفرستید."
 )
 
+CONTRACTOR_WELCOME_FA = (
+    "نقش شما «نماینده پیمانکار» است.\n"
+    "به‌صورت پیش‌فرض فقط گزارش‌های زمان‌بندی‌شدهٔ موجودی اقلام پیمانکار را "
+    "دریافت می‌کنید و منوی عملیاتی ندارید.\n"
+    "برای توضیح کوتاه، «❓ راهنما» را بزنید."
+)
+
 PLACEHOLDER_HINT_INVITE = (
     "متن دعوت‌نامه (قالب).\n"
     "جای‌نگهدارها:\n"
@@ -83,6 +90,12 @@ def format_welcome_text(template: str | None, user: dict) -> str:
     body = (template or "").strip()
     if not body:
         # Legacy default path (matches previous _welcome_text)
+        if role == "contractor_rep":
+            return (
+                f"سلام{name_suffix}! به بازوی «گزارش مواد / تاندیش» خوش آمدید.\n\n"
+                f"نقش شما: {role_fa}\n"
+                + CONTRACTOR_WELCOME_FA
+            )
         if role in ("technician", "shift_supervisor"):
             return (
                 "سلام! به بازوی «گزارش مواد / تاندیش» خوش آمدید.\n\n"
@@ -110,4 +123,6 @@ def format_welcome_text(template: str | None, user: dict) -> str:
         return format_welcome_text(None, user)
     if role in ("technician", "shift_supervisor") and "موجودی روزانه سایت" not in text:
         text = text + "\n\n" + TECHNICIAN_WELCOME_TIP
+    if role == "contractor_rep" and "نماینده پیمانکار" not in text:
+        text = text + "\n\n" + CONTRACTOR_WELCOME_FA
     return text

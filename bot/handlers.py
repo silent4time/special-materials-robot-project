@@ -197,6 +197,11 @@ class BotApp:
         from bot.reminder_settings_flow import ReminderSettingsFlow
 
         self.reminder_settings = ReminderSettingsFlow(self)
+
+        # 👷 نماینده پیمانکار (تنظیمات / کاربران) — see bot/contractor_rep_flow.py
+        from bot.contractor_rep_flow import ContractorRepFlow
+
+        self.contractor_rep = ContractorRepFlow(self)
         ensure_dirs()
         self._sync_assistant_menu()
 
@@ -243,11 +248,25 @@ class BotApp:
             return name
         return f"کاربر بدون نام ({uid})" if uid else "کاربر بدون نام"
 
+    def _markup_for(self, message: dict, markup: dict | None) -> dict | None:
+        """Strip the assistant button for نماینده پیمانکار (receive-only)."""
+        markup = self._track_nav(message, markup)
+        try:
+            uid = self._uid(message)
+        except (KeyError, TypeError):
+            return markup
+        user = self.db.get_user(uid) if uid else None
+        if user and user.get("role") == "contractor_rep":
+            from bot import keyboards as _kb
+
+            markup = _kb.strip_assistant(markup)
+        return markup
+
     def _reply(self, message: dict, text: str, markup: dict | None = None) -> None:
         note = getattr(self, "_reply_note", {}).pop(str(self._chat_id(message)), None)
         if note:  # v1.3.0: «لغو شد…» + menu in ONE message (no repeated menu)
             text = f"{note}\n\n{text}"
-        markup = self._track_nav(message, markup)
+        markup = self._markup_for(message, markup)
         self.client.send_message(self._chat_id(message), text, reply_markup=markup)
 
     def _reply_chunked(self, message: dict, text: str, markup: dict | None = None, *, limit: int = 3800) -> None:
@@ -404,6 +423,7 @@ class BotApp:
             "intro_doc": lambda m: self.on_guide_doc_menu(m, guide_docs.INTRO),
             "tr_settings": self.tundish_report.open_settings,
             "reminders": self.reminder_settings.open_menu,
+            "contractor_rep": self.contractor_rep.open_menu,
             "appearance": self.on_appearance_menu,
             "assistant": self.on_assistant_settings,
             "appearance_item": self.on_appearance_menu,
@@ -447,6 +467,7 @@ class BotApp:
                 uid in self.tundish_report.settings_pending,
                 uid in self.main_goal_report.pending,
                 self.reminder_settings.has_pending(uid),
+                self.contractor_rep.has_pending(uid),
                 bool(session.get("pending_file_type")),
             )
         )
@@ -464,6 +485,7 @@ class BotApp:
         self.tundish_report.clear(uid)
         self.main_goal_report.clear(uid)
         self.reminder_settings.clear(uid)
+        self.contractor_rep.clear(uid)
         self._bot_settings_pending.pop(uid, None)
         self._await_category_code.discard(uid)
         self._main_source_pending.pop(uid, None)
@@ -973,7 +995,7 @@ class BotApp:
     def _send_welcome(self, message: dict, user: dict, prefix: str = "") -> None:
         """Send welcome: one photo (welcome_image else logo) + caption, or text only."""
         text = (prefix + self._welcome_text(user)).strip()
-        markup = kb.main_menu(user)
+        markup = self._markup_for(message, kb.main_menu(user))
         photo = self._branding_photo_path(prefer_welcome=True)
         if photo is not None:
             try:
@@ -5712,6 +5734,9 @@ class BotApp:
         user = self._user_or_deny(message)
         if not user:
             return
+        if user.get("role") == "contractor_rep":
+            self._reply(message, "دستیار هوشمند برای نقش «نماینده پیمانکار» در دسترس نیست.", kb.main_menu(user))
+            return
         if not self._assistant_on():
             self._reply(message, "دستیار هوشمند غیرفعال است (فعال‌سازی: مالک، ⚙️ تنظیمات).", kb.main_menu(user))
             return
@@ -7747,6 +7772,8 @@ class BotApp:
         # یادآورها — settings (owner/manager)
         if self.reminder_settings.handle_text(message, text):
             return
+        if self.contractor_rep.handle_text(message, text):
+            return
         # 🧾 گزارش تاندیش — menu buttons + entry/settings flows
         if self.tundish_report.handle_text(message, text):
             return
@@ -7862,7 +7889,7 @@ class BotApp:
         if user and self.on_target_tonnage_question(message, user, raw_text):
             return
         # free text that matched no menu/flow → 🤖 دستیار (only when the owner enabled it)
-        if user and self._assistant_on() and raw_text.strip():
+        if user and user.get("role") != "contractor_rep" and self._assistant_on() and raw_text.strip():
             self._assistant_answer(message, user, raw_text.strip())
             return
         self._reply(

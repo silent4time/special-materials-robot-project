@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}نماینده پیمانکار{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>👷 نماینده پیمانکار</h1>
+  <p class="muted">
+    ارسال خودکار موجودی اقلام پیمانکار (شناسه‌هایی که رقم ۵ تا ۸ آن‌ها «۰۰۰۰» است)
+    برای نمایندگانی که شناسهٔ بله‌شان را وارد می‌کنید.
+    فقط مالک/مدیر — همان تنظیمات منوی «⚙️ تنظیمات / 👥 کاربران → 👷 نماینده پیمانکار» در بله.
+    پنل وب خودش پیام بله نمی‌فرستد؛ «ارسال آزمایشی» را ربات حداکثر تا حدود یک دقیقه بعد انجام می‌دهد.
+  </p>
+  {% if message %}<div class="alert ok" style="white-space:pre-wrap">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert err" style="white-space:pre-wrap">{{ error }}</div>{% endif %}
+  <pre class="muted" style="white-space:pre-wrap">{{ summary }}</pre>
+</div>
+
+<div class="card">
+  <h2>تنظیمات ارسال</h2>
+  <form method="post" action="/settings/contractor-rep">
+    <label><input type="checkbox" name="enabled" value="1" {% if cfg.enabled %}checked{% endif %}> ارسال خودکار فعال باشد</label>
+
+    <h3>روزهای ارسال (هفتهٔ شمسی، شنبه تا جمعه)</h3>
+    {% for i, name in weekdays %}
+    <label style="display:inline-block;margin-left:1rem">
+      <input type="checkbox" name="weekdays" value="{{ i }}" {% if i in cfg.weekdays %}checked{% endif %}> {{ name }}
+    </label>
+    {% endfor %}
+
+    <h3>ساعت ارسال (تهران)</h3>
+    <div class="kv-grid">
+      <label for="cr_hour">ساعت</label>
+      <input id="cr_hour" type="number" name="hour" min="0" max="23" value="{{ cfg.hour }}" required>
+      <span class="hint">۰ تا ۲۳</span>
+      <label for="cr_minute">دقیقه</label>
+      <input id="cr_minute" type="number" name="minute" min="0" max="59" value="{{ cfg.minute }}" required>
+      <span class="hint">۰ تا ۵۹</span>
+    </div>
+
+    <h3>نوع گزارش‌ها</h3>
+    {% for key, label in report_items %}
+    <label style="display:block">
+      <input type="checkbox" name="reports" value="{{ key }}" {% if key in cfg.reports %}checked{% endif %}> {{ label }}
+    </label>
+    {% endfor %}
+
+    <h3>قالب خروجی</h3>
+    {% for key, label in format_items %}
+    <label style="display:inline-block;margin-left:1rem">
+      <input type="checkbox" name="formats" value="{{ key }}" {% if key in cfg.formats %}checked{% endif %}> {{ label }}
+    </label>
+    {% endfor %}
+
+    <p style="margin-top:1rem"><button type="submit">ذخیرهٔ تنظیمات</button></p>
+  </form>
+</div>
+
+<div class="card">
+  <h2>شناسه‌های نماینده</h2>
+  <p class="muted">{{ start_warn }}</p>
+  <ul class="muted">
+    {% for u in recips %}
+    <li>
+      {{ u.display_name or "بدون نام" }} — {{ u.bale_user_id }}
+      <form method="post" action="/settings/contractor-rep/remove" style="display:inline">
+        <input type="hidden" name="user_id" value="{{ u.bale_user_id }}">
+        <button type="submit">حذف از فهرست</button>
+      </form>
+    </li>
+    {% else %}
+    <li>فهرست خالی است.</li>
+    {% endfor %}
+  </ul>
+  {% if missing %}
+  <p class="muted">شناسه‌های بدون کاربر فعال:
+    {% for mid in missing %}
+      {{ mid }}
+      <form method="post" action="/settings/contractor-rep/remove" style="display:inline">
+        <input type="hidden" name="user_id" value="{{ mid }}">
+        <button type="submit">حذف</button>
+      </form>
+    {% endfor %}
+  </p>
+  {% endif %}
+  <form method="post" action="/settings/contractor-rep/add" class="form-grid">
+    <label>شناسهٔ عددی بله
+      <input type="text" name="user_id" inputmode="numeric" required placeholder="مثلاً ۱۲۳۴۵۶۷۸۹" dir="ltr">
+    </label>
+    <button type="submit">افزودن نماینده</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>ارسال آزمایشی</h2>
+  {% if force_pending %}<p class="muted">⏳ یک درخواست «ارسال آزمایشی همین حالا» در صف ربات است.</p>{% endif %}
+  <form method="post" action="/settings/contractor-rep/send-now" onsubmit="return confirm('گزارش‌ها همین حالا برای نمایندگان فهرست ارسال شود؟')">
+    <button type="submit">📨 ارسال آزمایشی همین حالا (از طریق ربات)</button>
+  </form>
+  <p class="muted"><a href="/settings/users">بازگشت به کاربران</a></p>
+</div>
+{% endblock %}

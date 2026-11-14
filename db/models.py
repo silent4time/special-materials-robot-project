@@ -63,7 +63,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     bale_user_id TEXT NOT NULL UNIQUE,
                     display_name TEXT,
-                    role TEXT NOT NULL CHECK(role IN ('owner','manager','responsible_officer','technician','shift_supervisor')),
+                    role TEXT NOT NULL CHECK(role IN ('owner','manager','responsible_officer','technician','shift_supervisor','contractor_rep')),
                     scope TEXT,
                     active INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
@@ -573,6 +573,7 @@ class Database:
             )
             self._migrate_users_role_check(conn)
             self._migrate_users_shift_role(conn)
+            self._migrate_users_contractor_rep_role(conn)
             self._migrate_add_columns(conn)
             self._migrate_site_group_check(conn)
             self._migrate_drop_work_order_assignments(conn)
@@ -634,7 +635,7 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 bale_user_id TEXT NOT NULL UNIQUE,
                 display_name TEXT,
-                role TEXT NOT NULL CHECK(role IN ('owner','manager','responsible_officer','technician','shift_supervisor')),
+                role TEXT NOT NULL CHECK(role IN ('owner','manager','responsible_officer','technician','shift_supervisor','contractor_rep')),
                 scope TEXT,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
@@ -666,6 +667,51 @@ class Database:
         new_sql = new_sql.replace("'technician')", "'technician','shift_supervisor')")
         if "'shift_supervisor'" not in new_sql:
             raise RuntimeError("users CHECK migration: unexpected schema")
+        idx = [
+            r[0]
+            for r in conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='users' AND sql IS NOT NULL"
+            ).fetchall()
+        ]
+        cols = ", ".join(f'"{r[1]}"' for r in conn.execute("PRAGMA table_info(users)").fetchall())
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            conn.execute("BEGIN")
+            conn.execute(new_sql)
+            conn.execute(f"INSERT INTO users__new ({cols}) SELECT {cols} FROM users")
+            conn.execute("DROP TABLE users")
+            conn.execute("ALTER TABLE users__new RENAME TO users")
+            for isql in idx:
+                conn.execute(isql)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
+
+    def _migrate_users_contractor_rep_role(self, conn: sqlite3.Connection) -> None:
+        """v1.7.19: allow role ``contractor_rep`` in users.role CHECK.
+
+        Rebuilds the table (FK checks off, same pattern as ``_migrate_users_shift_role``)
+        so web_credentials rows referencing users stay intact.
+        """
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+        ).fetchone()
+        if not row or not row[0] or "'contractor_rep'" in row[0]:
+            return
+        sql = row[0]
+        new_sql = re.sub(r"CREATE TABLE\s+\"?users\"?", "CREATE TABLE users__new", sql, count=1)
+        if "'shift_supervisor')" in new_sql:
+            new_sql = new_sql.replace("'shift_supervisor')", "'shift_supervisor','contractor_rep')")
+        elif "'technician')" in new_sql:
+            new_sql = new_sql.replace(
+                "'technician')", "'technician','shift_supervisor','contractor_rep')"
+            )
+        if "'contractor_rep'" not in new_sql:
+            raise RuntimeError("users CHECK migration: unexpected schema for contractor_rep")
         idx = [
             r[0]
             for r in conn.execute(
