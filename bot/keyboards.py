@@ -49,6 +49,7 @@ MENU_PARENT: dict[str, str | None] = {
     "tr_settings": "settings",
     "tr_section_settings": "tr_settings",
     "reminders": "settings",
+    "contractor_rep": "settings",
     "stock_group": "settings",
     "appearance": "settings",
     "assistant": "settings",
@@ -338,7 +339,7 @@ BTN_ROLE_GUIDE_PREFIX = "📄 راهنمای "
 
 
 def role_guide_button(role: str) -> str:
-    """«📄 راهنمای تکنسین» … one reply button per role (all five roles)."""
+    """«📄 راهنمای تکنسین» … one reply button per role (all roles in config.ROLES)."""
     from config import ROLES
 
     return BTN_ROLE_GUIDE_PREFIX + ROLES.get(role, role)
@@ -357,6 +358,7 @@ BTN_ROLE_MANAGER = "مدیر"
 BTN_ROLE_OFFICER = "کاردان مسئول"
 BTN_ROLE_TECH = "تکنسین"
 BTN_ROLE_SHIFT = "👷 مسئول شیفت"
+BTN_ROLE_CONTRACTOR = "نماینده پیمانکار"
 ROLE_BUTTON_TO_KEY = {
     BTN_ROLE_OWNER: "owner",
     BTN_ROLE_MANAGER: "manager",
@@ -364,7 +366,22 @@ ROLE_BUTTON_TO_KEY = {
     BTN_ROLE_TECH: "technician",
     BTN_ROLE_SHIFT: "shift_supervisor",
     "مسئول شیفت": "shift_supervisor",
+    BTN_ROLE_CONTRACTOR: "contractor_rep",
 }
+
+# 👷 نماینده پیمانکار (owner/manager; bot + web /settings/contractor-rep)
+BTN_CONTRACTOR_REP = "👷 نماینده پیمانکار"
+BTN_CR_ENABLE = "✅ فعال‌سازی ارسال"
+BTN_CR_DISABLE = "⏸ غیرفعال‌سازی ارسال"
+BTN_CR_IDS = "👤 شناسه‌های نماینده"
+BTN_CR_DAYS = "📅 روزهای ارسال"
+BTN_CR_TIME = "🕐 ساعت ارسال"
+BTN_CR_REPORTS = "📄 نوع گزارش‌ها"
+BTN_CR_FORMATS = "📁 قالب خروجی"
+BTN_CR_SEND_NOW = "📨 ارسال آزمایشی همین حالا"
+BTN_CR_BACK = "⬅️ بازگشت به نماینده پیمانکار"
+CR_CHECK_ON = "✅ "
+CR_CHECK_OFF = "⬜ "
 
 # یادآور گزارش‌های الزامی
 BTN_RM_STATUS = "👁 وضعیت یادآور"
@@ -1061,6 +1078,7 @@ def bot_settings_menu(user: dict | None = None) -> dict:
     """«⚙️ تنظیمات» (owner/manager). دستیار فقط برای مالک."""
     items = [
         (perm.USERS, BTN_USERS),
+        (perm.USERS, BTN_CONTRACTOR_REP),
         (perm.USER_ACTIVITY, BTN_USER_ACTIVITY),
         (perm.ROLE_PERMISSIONS, BTN_ROLE_PERMS),
         (perm.TUNDISH_REPORT_SETTINGS, BTN_TR_SETTINGS),
@@ -1172,6 +1190,7 @@ def users_menu() -> dict:
         [
             [BTN_USERS_ADD, BTN_USERS_EDIT],
             [BTN_USERS_DELETE, BTN_USERS_LIST],
+            [BTN_CONTRACTOR_REP],
             [BTN_USERS_ROLE_GUIDES, BTN_USERS_INTRO_DOC],
         ],
         "users",
@@ -1201,8 +1220,88 @@ def role_menu(include_owner: bool = False) -> dict:
     rows: list[list[str]] = []
     if include_owner:
         rows.append([BTN_ROLE_OWNER])
-    rows.extend([[BTN_ROLE_MANAGER, BTN_ROLE_OFFICER], [BTN_ROLE_TECH, BTN_ROLE_SHIFT]])
+    rows.extend([
+        [BTN_ROLE_MANAGER, BTN_ROLE_OFFICER],
+        [BTN_ROLE_TECH, BTN_ROLE_SHIFT],
+        [BTN_ROLE_CONTRACTOR],
+    ])
     return _kb(rows, "flow")
+
+
+def contractor_rep_menu(enabled: bool) -> dict:
+    return _kb(
+        [
+            [BTN_CR_DISABLE if enabled else BTN_CR_ENABLE],
+            [BTN_CR_IDS, BTN_CR_DAYS],
+            [BTN_CR_TIME, BTN_CR_REPORTS],
+            [BTN_CR_FORMATS, BTN_CR_SEND_NOW],
+        ],
+        "contractor_rep",
+    )
+
+
+def contractor_rep_back_menu() -> dict:
+    return _kb([[BTN_CR_BACK]], "contractor_rep")
+
+
+def contractor_rep_weekday_menu(selected: list[int] | set[int]) -> dict:
+    from services.contractor_rep import WEEKDAY_FA
+
+    sel = {int(x) for x in selected}
+    rows: list[list[str]] = []
+    pair: list[str] = []
+    for i, name in enumerate(WEEKDAY_FA):
+        mark = CR_CHECK_ON if i in sel else CR_CHECK_OFF
+        pair.append(mark + name)
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
+        rows.append(pair)
+    rows.append([BTN_CR_BACK])
+    return _kb(rows, "contractor_rep")
+
+
+def contractor_rep_report_menu(selected: list[str] | set[str]) -> dict:
+    from services.contractor_rep import REPORT_KEYS, REPORT_LABEL_FA
+
+    sel = set(selected)
+    rows = []
+    for key in REPORT_KEYS:
+        mark = CR_CHECK_ON if key in sel else CR_CHECK_OFF
+        rows.append([mark + REPORT_LABEL_FA[key]])
+    rows.append([BTN_CR_BACK])
+    return _kb(rows, "contractor_rep")
+
+
+def contractor_rep_format_menu(selected: list[str] | set[str]) -> dict:
+    from services.contractor_rep import FORMATS, FORMAT_LABEL_FA
+
+    sel = set(selected)
+    row = []
+    for key in FORMATS:
+        mark = CR_CHECK_ON if key in sel else CR_CHECK_OFF
+        row.append(mark + FORMAT_LABEL_FA[key])
+    return _kb([row, [BTN_CR_BACK]], "contractor_rep")
+
+
+def strip_assistant(markup: dict | None) -> dict | None:
+    """Drop «🤖 از دستیار بپرس» (used for نماینده پیمانکار)."""
+    if not isinstance(markup, dict):
+        return markup
+    rows = markup.get("keyboard") or markup.get("reply_markup", {}).get("keyboard")
+    # BaleClient.reply_keyboard shape: {"keyboard": [[{text: ...}, ...], ...], ...}
+    key = "keyboard" if "keyboard" in markup else None
+    if key is None:
+        return markup
+    cleaned = []
+    for row in markup[key] or []:
+        nr = [cell for cell in row if (cell.get("text") if isinstance(cell, dict) else cell) != BTN_ASK_ASSISTANT]
+        if nr:
+            cleaned.append(nr)
+    out = dict(markup)
+    out[key] = cleaned
+    return out
 
 
 def reminder_settings_menu(enabled: bool) -> dict:
@@ -1434,6 +1533,7 @@ ALL_KEYBOARD_BUILDERS = (
     "site_stock_menu", "site_stock_entry_menu", "bot_settings_menu", "appearance_menu",
     "bot_settings_letterhead_menu", "bot_settings_stock_group_menu", "bot_settings_item_menu",
     "users_menu", "guide_roles_menu", "guide_doc_menu", "invite_confirm_menu", "role_menu", "reminder_settings_menu",
+    "contractor_rep_menu", "contractor_rep_back_menu",
     "reminder_roles_menu", "reminder_back_menu", "tundish_report_menu", "tundish_report_mode_menu",
     "tundish_report_step_menu", "tundish_report_confirm_menu", "tundish_report_settings_menu",
     "tundish_report_section_settings_menu", "tundish_report_item_edit_menu", "tundish_report_type_menu",
@@ -1531,6 +1631,16 @@ def _button_features() -> dict[str, tuple[str, ...]]:
         BTN_INV_EDIT_RECORD: (P.MAIN_SOURCE_EDIT,),
         BTN_INV_ADD_CATEGORY: (P.MAIN_SOURCE_EDIT,),
         BTN_USERS: (P.USERS,),
+        BTN_CONTRACTOR_REP: (P.USERS,),
+        BTN_CR_ENABLE: (P.USERS,),
+        BTN_CR_DISABLE: (P.USERS,),
+        BTN_CR_IDS: (P.USERS,),
+        BTN_CR_DAYS: (P.USERS,),
+        BTN_CR_TIME: (P.USERS,),
+        BTN_CR_REPORTS: (P.USERS,),
+        BTN_CR_FORMATS: (P.USERS,),
+        BTN_CR_SEND_NOW: (P.USERS,),
+        BTN_CR_BACK: (P.USERS,),
         BTN_USERS_ADD: (P.USERS,),
         BTN_USERS_EDIT: (P.USERS,),
         BTN_USERS_DELETE: (P.USERS,),

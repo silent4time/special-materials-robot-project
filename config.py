@@ -92,6 +92,7 @@ ROLES = {
     "responsible_officer": "کاردان مسئول",
     "technician": "تکنسین",
     "shift_supervisor": "مسئول شیفت",
+    "contractor_rep": "نماینده پیمانکار",
 }
 
 # Roles that can manage users and see full admin menus

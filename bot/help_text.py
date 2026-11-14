@@ -73,7 +73,8 @@ _SECTIONS: list[tuple[str, str]] = [
         perm.USERS,
         f"{kb.BTN_USERS}\n"
         "• دعوت‌شده پس از ورود: خوشامد + PDF راهنمای نقش خودش + PDF معرفی ربات (فقط یک‌بار).\n"
-        f"• «{kb.BTN_USERS_ROLE_GUIDES}» (هر نقش جدا) و «{kb.BTN_USERS_INTRO_DOC}»: آپلود PDF / دریافت / بازگشت به پیش‌فرض.",
+        f"• «{kb.BTN_USERS_ROLE_GUIDES}» (هر نقش جدا) و «{kb.BTN_USERS_INTRO_DOC}»: آپلود PDF / دریافت / بازگشت به پیش‌فرض.\n"
+        f"• «{kb.BTN_CONTRACTOR_REP}»: ثبت شناسهٔ بله، انتخاب روزهای هفته و نوع گزارش؛ ارسال خودکار موجودی اقلام پیمانکار.",
     ),
     (
         perm.ROLE_PERMISSIONS,
@@ -94,11 +95,18 @@ _FOOTER = (
 def help_text_for(user: dict | None) -> str:
     lines = ["❓ راهنمای ربات مواد نسوز تاندیش"]
     shown = [body for feat, body in _SECTIONS if perm.can(user, feat)]
+    if (user or {}).get("role") == "contractor_rep" and not shown:
+        lines.append(
+            "نقش شما (نماینده پیمانکار): به‌صورت پیش‌فرض فقط گزارش‌های زمان‌بندی‌شدهٔ "
+            "موجودی اقلام پیمانکار را دریافت می‌کنید و منوی عملیاتی ندارید."
+        )
+        lines.append(_FOOTER)
+        return "\n\n".join(lines)
     if not shown:
         lines.append("شما در سیستم ثبت نشده‌اید؛ از مدیر لینک دعوت بگیرید.")
         return "\n\n".join(lines)
     lines.extend(shown)
-    if kb.assistant_menu_on():
+    if kb.assistant_menu_on() and (user or {}).get("role") != "contractor_rep":
         lines.append(
             f"{kb.BTN_ASK_ASSISTANT}\n"
             "• این دکمه در همهٔ منوها و زیرمنوها هست. «⬅️ بازگشت» شما را به همان منوی قبلی برمی‌گرداند.\n"
@@ -107,7 +115,12 @@ def help_text_for(user: dict | None) -> str:
             "«شرود چند روز کافیه؟»، «مصرف شهریور»، «آخرین بار موجودی کی آپلود شد؟».\n"
             "• اعداد مستقیم از همان گزارش‌هاست و هر پرسش همان دسترسی منوی متناظر را دارد."
         )
-    if perm.is_limited(user):
+    if (user or {}).get("role") == "contractor_rep":
+        lines.append(
+            "نقش شما (نماینده پیمانکار): به‌صورت پیش‌فرض فقط گزارش‌های زمان‌بندی‌شدهٔ "
+            "موجودی اقلام پیمانکار را دریافت می‌کنید و منوی عملیاتی ندارید."
+        )
+    elif perm.is_limited(user):
         from config import ROLES
 
         role_fa = ROLES.get((user or {}).get("role"), "")

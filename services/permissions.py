@@ -27,11 +27,15 @@ MANAGER = "manager"
 OFFICER = "responsible_officer"
 TECH = "technician"
 SHIFT = "shift_supervisor"
+CONTRACTOR_REP = "contractor_rep"
 
 ALL_ROLES = frozenset(ROLES)
 ADMINS = frozenset({OWNER, MANAGER})
 STAFF = frozenset({OWNER, MANAGER, OFFICER})
 FIELD = frozenset({TECH, SHIFT})  # post-casting tundish report + daily site stock
+# The five plant roles that originally received SITE_STOCK / TUNDISH_REPORT via ALL_ROLES.
+# contractor_rep is in ROLES (and EDITABLE_ROLES) but must stay out of these defaults.
+PLANT_ROLES = frozenset({OWNER, MANAGER, OFFICER, TECH, SHIFT})
 
 # ---------------------------------------------------------------- feature keys
 SITE_STOCK = "site_stock"
@@ -95,8 +99,8 @@ FEATURE_LABEL_FA: dict[str, str] = {
 }
 
 _DEFAULTS: dict[str, frozenset[str]] = {
-    SITE_STOCK: ALL_ROLES,
-    TUNDISH_REPORT: ALL_ROLES,
+    SITE_STOCK: PLANT_ROLES,
+    TUNDISH_REPORT: PLANT_ROLES,
     MATERIAL_REQUEST: STAFF,
     WAREHOUSE_RETURN: STAFF,
     REPORTS: STAFF,

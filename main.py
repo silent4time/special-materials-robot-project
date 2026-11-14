@@ -17,7 +17,7 @@ from bot.bale_api import BaleAPIError, BaleClient
 from bot.handlers import BotApp
 from config import ADMIN_BALE_USER_ID, BALE_BOT_TOKEN, ensure_dirs
 from db.models import Database
-from services import mandatory_reminders
+from services import contractor_rep, mandatory_reminders
 
 REMINDER_TICK_SECONDS = 60
 HOUSEKEEPING_SECONDS = 24 * 3600
@@ -144,6 +144,10 @@ def main() -> int:
                 if time.monotonic() - last_reminder_tick >= REMINDER_TICK_SECONDS:
                     last_reminder_tick = time.monotonic()
                     mandatory_reminders.tick(client, db)
+                    try:
+                        contractor_rep.tick(client, db)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("contractor_rep tick failed")
                 # 💾 بک‌آپ خودکار شبانه ۰۲:۰۰ تهران (catch-up after restart; never raises)
                 if time.monotonic() - last_backup_tick >= 60:
                     last_backup_tick = time.monotonic()

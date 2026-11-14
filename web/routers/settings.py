@@ -691,3 +691,176 @@ async def rates_import_apply(
            + (f"، {res['overwritten']} مغایرت جایگزین شد" if res["overwritten"] else "")
            + ". پشتیبان پایگاه‌داده پیش از ذخیره گرفته شد.")
     return render(request, "settings_main_source.html", _main_source_context(db, user, message=msg))
+
+
+# ---------------------------------------------------------------- 👷 نماینده پیمانکار
+def _contractor_rep_context(
+    db: Database,
+    user: dict,
+    *,
+    message: str | None = None,
+    error: str | None = None,
+) -> dict:
+    from services import contractor_rep as cr
+
+    cfg = cr.load_config(db)
+    recips = cr.resolve_recipients(db, cfg)
+    listed = {u["bale_user_id"] for u in recips}
+    missing = [i for i in cfg["user_ids"] if i not in listed]
+    return {
+        "user": user,
+        "cfg": cfg,
+        "weekdays": list(enumerate(cr.WEEKDAY_FA)),
+        "report_items": list(cr.REPORT_LABEL_FA.items()),
+        "format_items": list(cr.FORMAT_LABEL_FA.items()),
+        "recips": recips,
+        "missing": missing,
+        "summary": cr.status_text(db),
+        "start_warn": cr.START_WARN_FA,
+        "force_pending": bool(db.get_setting(cr.FORCE_KEY)),
+        "message": message,
+        "error": error,
+    }
+
+
+@router.get("/contractor-rep")
+async def contractor_rep_page(
+    request: Request,
+    user=Depends(require_feature(perm.USERS)),
+    db: Database = Depends(get_db),
+):
+    return render(request, "settings_contractor_rep.html", _contractor_rep_context(db, user))
+
+
+@router.post("/contractor-rep")
+async def contractor_rep_save(
+    request: Request,
+    user=Depends(require_feature(perm.USERS)),
+    db: Database = Depends(get_db),
+):
+    from services import contractor_rep as cr
+
+    form = await request.form()
+    cfg = cr.load_config(db)
+    cfg["enabled"] = form.get("enabled") in {"1", "on", "true"}
+    days: list[int] = []
+    for raw in form.getlist("weekdays"):
+        try:
+            d = int(str(raw).translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= d <= 6 and d not in days:
+            days.append(d)
+    if not days:
+        return render(
+            request,
+            "settings_contractor_rep.html",
+            _contractor_rep_context(db, user, error="دست‌کم یک روز هفته را انتخاب کنید."),
+            status_code=400,
+        )
+    cfg["weekdays"] = days
+    clock = cr.parse_clock(f"{form.get('hour', cfg['hour'])}:{form.get('minute', cfg['minute'])}")
+    if not clock:
+        return render(
+            request,
+            "settings_contractor_rep.html",
+            _contractor_rep_context(db, user, error="ساعت یا دقیقه نامعتبر است."),
+            status_code=400,
+        )
+    cfg["hour"], cfg["minute"] = clock
+    reports = [k for k in cr.REPORT_KEYS if k in set(form.getlist("reports"))]
+    if not reports:
+        return render(
+            request,
+            "settings_contractor_rep.html",
+            _contractor_rep_context(db, user, error="دست‌کم یک نوع گزارش را تیک بزنید."),
+            status_code=400,
+        )
+    cfg["reports"] = reports
+    formats = [k for k in cr.FORMATS if k in set(form.getlist("formats"))]
+    if not formats:
+        return render(
+            request,
+            "settings_contractor_rep.html",
+            _contractor_rep_context(db, user, error="دست‌کم یک قالب (PDF یا اکسل) را تیک بزنید."),
+            status_code=400,
+        )
+    cfg["formats"] = formats
+    cr.save_config(db, cfg, updated_by=user["bale_user_id"])
+    log_activity(db, user, "settings_contractor_rep")
+    return render(
+        request,
+        "settings_contractor_rep.html",
+        _contractor_rep_context(db, user, message="✅ تنظیمات نماینده پیمانکار ذخیره شد."),
+    )
+
+
+@router.post("/contractor-rep/add")
+async def contractor_rep_add(
+    request: Request,
+    user=Depends(require_feature(perm.USERS)),
+    db: Database = Depends(get_db),
+):
+    from services import contractor_rep as cr
+
+    form = await request.form()
+    ok, msg, _url = cr.add_representative(db, user, form.get("user_id"))
+    if ok:
+        log_activity(db, user, "contractor_rep_add")
+    return render(
+        request,
+        "settings_contractor_rep.html",
+        _contractor_rep_context(db, user, message=msg if ok else None, error=None if ok else msg),
+        status_code=200 if ok else 400,
+    )
+
+
+@router.post("/contractor-rep/remove")
+async def contractor_rep_remove(
+    request: Request,
+    user=Depends(require_feature(perm.USERS)),
+    db: Database = Depends(get_db),
+):
+    from services import contractor_rep as cr
+
+    form = await request.form()
+    ok, msg = cr.remove_representative(db, user, form.get("user_id"))
+    if ok:
+        log_activity(db, user, "contractor_rep_remove")
+    return render(
+        request,
+        "settings_contractor_rep.html",
+        _contractor_rep_context(db, user, message=msg if ok else None, error=None if ok else msg),
+        status_code=200 if ok else 400,
+    )
+
+
+@router.post("/contractor-rep/send-now")
+async def contractor_rep_send_now(
+    request: Request,
+    user=Depends(require_feature(perm.USERS)),
+    db: Database = Depends(get_db),
+):
+    from services import contractor_rep as cr
+
+    cfg = cr.load_config(db)
+    if not cfg["user_ids"]:
+        return render(
+            request,
+            "settings_contractor_rep.html",
+            _contractor_rep_context(db, user, error="هیچ شناسه‌ای در فهرست نیست؛ ابتدا نماینده را اضافه کنید."),
+            status_code=400,
+        )
+    cr.request_force_send(db, requested_by=user["bale_user_id"])
+    log_activity(db, user, "contractor_rep_send_now")
+    return render(
+        request,
+        "settings_contractor_rep.html",
+        _contractor_rep_context(
+            db,
+            user,
+            message="📨 درخواست ارسال ثبت شد؛ ربات بله حداکثر تا حدود یک دقیقه دیگر گزارش را می‌فرستد.\n"
+            + cr.START_WARN_FA,
+        ),
+    )
+
