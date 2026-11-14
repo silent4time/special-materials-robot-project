@@ -82,6 +82,96 @@ class FakeGH:
         self.routes[REPO_API] = (200, json.dumps(rel).encode())
 
 
+def _count_status_phrases(text: str) -> int:
+    stems = (
+        "⏳ در حال به‌روزرسانی",
+        "✅ به‌روزرسانی انجام شد",
+        "✅ آخرین نسخه نصب است",
+        "آمادهٔ نصب است",
+        "✅ نسخهٔ جدیدتری نیست",
+    )
+    return sum(1 for stem in stems if stem in text)
+
+
+
+def test_status_texts(db, client, who) -> None:
+    """One status line: in-progress, done, latest, available; never a stale «انجام شد»."""
+    from services import updater as up
+
+    cur = up.current_version()
+
+    def body(info, *, checked=True):
+        return up.about_text(info, owner=True, checked=checked)
+
+    latest = body({
+        "current": cur, "latest": cur, "available": False, "error": "",
+        "status": {}, "remote": {}, "in_progress": False,
+    })
+    assert up.INSTALLED_FA.format(version=cur) in latest, latest
+    assert "نسخهٔ جدیدتری نیست" not in latest
+    assert latest.count("وضعیت به‌روزرسانی:") == 1
+    assert _count_status_phrases(latest) == 1, latest
+
+    done = body({
+        "current": "1.7.17", "latest": "1.7.17", "available": False, "error": "",
+        "status": {"state": "applied", "version": "1.7.17", "at": "t", "message": "از 1.7.16 به 1.7.17."},
+        "remote": {}, "in_progress": False,
+    })
+    assert up.DONE_STATUS_FA.format(version="1.7.17") in done, done
+    assert "در حال به‌روزرسانی" not in done
+    assert "آخرین نسخه نصب است" not in done
+    assert done.count("وضعیت به‌روزرسانی:") == 1
+    assert _count_status_phrases(done) == 1, done
+
+    avail = body({
+        "current": "1.7.16", "latest": "1.7.17", "available": True, "error": "",
+        "status": {"state": "applied", "version": "1.7.16", "at": "t",
+                   "message": "از 1.7.14 به 1.7.16."},
+        "remote": {"changelog": "تغییرات تازه"},
+        "in_progress": False,
+    })
+    assert up.AVAILABLE_STATUS_FA.format(version="1.7.17") in avail, avail
+    assert "به‌روزرسانی انجام شد" not in avail
+    assert "از 1.7.14 به 1.7.16" not in avail
+    assert "تغییرات تازه" in avail
+    assert avail.count("وضعیت به‌روزرسانی:") == 1
+    assert _count_status_phrases(avail) == 1, avail
+
+    # Stale previous success must not win over a live lock / in-progress flag.
+    busy = body({
+        "current": "1.7.16", "latest": "1.7.17", "available": True, "error": "",
+        "status": {"state": "applied", "version": "1.7.16", "at": "t",
+                   "message": "از 1.7.14 به 1.7.16."},
+        "remote": {"changelog": "تغییرات 1.7.17"},
+        "in_progress": True, "progress_target": "1.7.17",
+    })
+    assert up.RUNNING_STATUS_FA.format(version="1.7.17") in busy, busy
+    assert "به‌روزرسانی انجام شد" not in busy
+    assert "آخرین نسخه نصب است" not in busy
+    assert "از 1.7.14 به 1.7.16" not in busy
+    assert busy.count("وضعیت به‌روزرسانی:") == 1
+    assert _count_status_phrases(busy) == 1, busy
+
+    assert up.SUCCESS_FA.format(version="1.7.17").startswith("✅ به‌روزرسانی انجام شد")
+
+    # Web /about: one status, no flash duplicate of «آخرین نسخه نصب است»
+    who["u"] = db.get_user("61")
+    up.release_update_lock(force=True)
+    up.clear_progress_state()
+    db.set_setting(up.STATUS_KEY, "{}")
+    db.set_setting(up.CACHE_KEY, json.dumps({
+        "checked_at": time.time(), "ttl": 3600,
+        "info": {"version": cur, "changelog": "", "html_url": ""},
+    }, ensure_ascii=False))
+    r = client.get("/about")
+    assert r.status_code == 200, r.status_code
+    page = r.text
+    assert up.INSTALLED_FA.format(version=cur) in page, page
+    assert up.NO_UPDATE_FA.format(current=cur) not in page
+    assert page.count("<th>وضعیت به‌روزرسانی</th>") == 1
+    print("  status texts: in-progress / done / latest / available, no duplicate OK")
+
+
 def main() -> int:
     # The 1.7.1 updater holds data/updates/update.lock (its own pid) while it
     # runs this file. Never touch that directory: a second "start update" in
@@ -226,7 +316,9 @@ def main() -> int:
         {"current": up.current_version(), "latest": "", "available": False, "error": "", "status": {}, "remote": {}},
         owner=True, checked=True,
     )
-    assert "نسخهٔ جدیدتری نیست" in quiet and "github.com" not in quiet
+    assert up.INSTALLED_FA.format(version=up.current_version()) in quiet and "github.com" not in quiet
+    assert "نسخهٔ جدیدتری نیست" not in quiet
+    assert quiet.count("وضعیت به‌روزرسانی") == 1
     assert up.creator_name() == "واحد نسوز تاندیش فولاد خوزستان"
     assert "واحد نسوز تاندیش فولاد خوزستان" in quiet and "ثبت نشده است" not in quiet
     assert "تاندیش اسلب" in quiet and up.current_version() in quiet
@@ -346,6 +438,10 @@ def main() -> int:
     r = c.post("/about/update")
     assert r.status_code == 200 and launched == ["61", "61", "61"] and "شروع شد" in r.text
     assert "github.com" not in r.text
+    assert up.RUNNING_STATUS_FA.format(version="99.0.0") in r.text
+    # The status row must be the running line (changelog may mention «انجام شد»).
+    assert "وضعیت به‌روزرسانی" in r.text and r.text.count("⏳ در حال به‌روزرسانی به نسخهٔ 99.0.0") == 1
+    assert r.text.count("<th>وضعیت به‌روزرسانی</th>") == 1
     busy = c.post("/about/update")
     assert busy.status_code == 200 and up.BUSY_FA in busy.text and launched == ["61", "61", "61"]
     up.release_update_lock(force=True)
@@ -445,9 +541,20 @@ def main() -> int:
     assert st["state"] == "applied" and st.get("at") != old_at, st
     assert "در حال به‌روزرسانی" not in up.status_fa(st), up.status_fa(st)
     assert chat.edits and chat.edits[-1][2] == up.SUCCESS_FA.format(version="1.7.3"), chat.edits
+    assert chat.sent == [], "completion must not also be sent as a second message"
+    assert up.get_status(dbx).get("reported") is True
+    assert up.read_progress_state(rec) is None
+    # a later finalize / notify_tick (bot restart, or updater + bot) must stay silent
+    up.write_progress_state("61", 44, "1.7.3", root=rec, started=time.time())
+    again = _Chat()
+    up.finalize_after_restart(again, dbx, root=rec)
+    assert again.edits == [] and again.sent == [], (again.edits, again.sent)
+    assert up.notify_tick(again, dbx) is None and again.sent == []
     assert up.read_progress_state(rec) is None
     # edit failure falls back to a new message, then the state file is removed
-    up._set_status(dbx, state="running", version="1.7.3", previous="1.7.2", message="")
+    up.clear_result_notices(root=rec)
+    up._set_status(dbx, state="running", version="1.7.3", previous="1.7.2", message="",
+                   started_epoch=time.time(), reported=False)
     (rec / "VERSION").write_text("1.7.3\n", encoding="utf-8")
     up.write_progress_state("61", 44, "1.7.3", root=rec)
 
@@ -458,6 +565,7 @@ def main() -> int:
     chat = _NoEdit()
     up.finalize_after_restart(chat, dbx, root=rec)
     assert chat.sent and up.SUCCESS_FA.format(version="1.7.3") in chat.sent[-1][1]
+    assert len(chat.sent) == 1, "fallback send must still be a single notice"
     assert up.read_progress_state(rec) is None
     # running version != target → failed, Persian message, lock released
     (rec / "VERSION").write_text("1.7.2\n", encoding="utf-8")
@@ -472,6 +580,7 @@ def main() -> int:
     assert up.finalize_after_restart(chat, dbx, root=rec) == "failed"
     assert up.get_status(dbx)["state"] == "failed"
     assert "کامل نشد" in chat.edits[-1][2] and "1.7.2" in chat.edits[-1][2]
+    assert chat.sent == [], chat.sent
     assert not (rec / "data" / "updates" / "update.lock").exists()
     assert up.read_progress_state(rec) is None
     # older than 30 minutes and version still behind → stale/failed even if the pid looks alive
@@ -576,7 +685,7 @@ def main() -> int:
     assert live_lock.read_text(encoding="utf-8") == live_body
     print("  default_smoke: failed name + smoke.log; live updater lock left intact OK")
 
-    # Parallel runner: finish order is not log order; progress stays in 88…95.
+    # Parallel runner: finish order is not log order; progress stays in smoke_start…smoke_end.
     par = TMP / "smokepar"
     (par / "scripts").mkdir(parents=True)
     (par / "scripts" / "smoke_a.py").write_text("import time\ntime.sleep(0.6)\n", encoding="utf-8")
@@ -594,13 +703,18 @@ def main() -> int:
         "PASS smoke_a.py", "PASS smoke_b.py", "FAIL smoke_c.py", "PASS smoke_d.py",
     ], par_log
     assert up.default_smoke.last_failures == ["smoke_c.py"]
-    assert ticks and ticks[-1][0] == "smoke" and ticks[-1][1] == 95 and ticks[-1][2] == "آزمون 4 از 4"
-    assert all(88 <= pct <= 95 for _s, pct, _d in ticks)
+    start, end = up.STAGE_PERCENT["smoke_start"], up.STAGE_PERCENT["smoke_end"]
+    assert ticks and ticks[-1][0] == "smoke" and ticks[-1][1] == end and ticks[-1][2] == "آزمون 4 از 4"
+    assert all(start <= pct <= end for _s, pct, _d in ticks)
     assert [pct for _s, pct, _d in ticks] == sorted(pct for _s, pct, _d in ticks)
     assert all(d.startswith("آزمون ") and " از 4" in d for _s, _p, d in ticks)
-    assert up.smoke_progress_percent(0, 42) == 88 and up.smoke_progress_percent(42, 42) == 95
+    assert up.smoke_progress_percent(0, 42) == start and up.smoke_progress_percent(42, 42) == end
+    # «آزمون ۱ از ۴۵» must not sit at 88٪ (that looked like the job was almost done)
+    assert up.smoke_progress_percent(1, 45) == start + (end - start) // 45
+    assert up.smoke_progress_percent(1, 45) < 50
     assert up.smoke_worker_count() == max(1, min(4, os.cpu_count() or 1))
-    print("  default_smoke: parallel pool, sorted log, progress 88→95 OK")
+    print("  default_smoke: parallel pool, sorted log, progress smoke_start→smoke_end OK")
+    test_status_texts(db2, c, who)
     up._http_get = None
     print("smoke_updater: ALL OK")
     return 0
