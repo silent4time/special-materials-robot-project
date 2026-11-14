@@ -55,9 +55,8 @@ def update_banner(user: dict | None) -> dict | None:
         info = up.update_info(get_db(), network=False)
     except Exception:  # noqa: BLE001
         return None
-    st = info.get("status") or {}
-    if st.get("state") == "running":
-        return {"kind": "running", "text": up.redact_public(up.status_fa(st))}
+    if info.get("in_progress"):
+        return {"kind": "running", "text": up.redact_public(up.about_status_line(info))}
     if info["available"]:
         return {"kind": "new", "current": info["current"], "latest": info["latest"]}
     return None
@@ -66,7 +65,7 @@ def update_banner(user: dict | None) -> dict | None:
 def _ctx(db: Database, user: dict, *, force: bool = False, message: str = "", error: str = "") -> dict:
     owner = require_owner(user)
     info = up.update_info(db, force=bool(force and owner), network=bool(force and owner))
-    show_new = bool(owner and info["available"])
+    show_new = bool(owner and info["available"] and not info.get("in_progress"))
     return {
         "user": user,
         "info": info,
@@ -89,10 +88,10 @@ async def about_page(request: Request, user=Depends(require_admin_web), db: Data
 @router.post("/about/check")
 async def about_check(request: Request, user=Depends(require_owner_web), db: Database = Depends(get_db)):
     ctx = _ctx(db, user, force=True)
-    if ctx["info"]["error"]:
+    if ctx["info"]["error"] and not ctx["info"].get("in_progress"):
         ctx["error"] = up.CHECK_FAIL_FA
-    elif not ctx["info"]["available"]:
-        ctx["message"] = up.NO_UPDATE_FA.format(current=ctx["info"]["current"])
+    # No extra flash for «latest / available / running»: the table already has
+    # the single «وضعیت به‌روزرسانی» line (same wording as the bot).
     return render(request, "about.html", ctx)
 
 

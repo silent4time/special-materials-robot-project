@@ -213,16 +213,22 @@ def _safe_err(e: Exception) -> str:
     return redact_public(str(e)[:300])
 
 
-def update_info(db: Any, *, force: bool = False, network: bool = True) -> dict:
+def update_info(db: Any, *, force: bool = False, network: bool = True,
+                root: Path | None = None) -> dict:
     remote = get_remote(db, force=force) if network else cached_remote(db)
-    cur = current_version()
+    cur = current_version(root)
+    st = settle_status(db, root=root)
+    in_progress = bool(update_in_progress(root) or st.get("state") == "running")
+    latest = remote.get("version") or ""
     return {
         "current": cur,
         "remote": remote,
-        "latest": remote.get("version") or "",
-        "available": is_newer(remote.get("version") or "", cur),
+        "latest": latest,
+        "available": is_newer(latest, cur),
         "error": remote.get("error") or "",
-        "status": settle_status(db),
+        "status": st,
+        "in_progress": in_progress,
+        "progress_target": progress_target_version(st, latest=latest, root=root),
     }
 
 
@@ -249,6 +255,10 @@ CREATOR_NAME = "واحد نسوز تاندیش فولاد خوزستان"
 CHECK_FAIL_FA = "⚠️ بررسی به‌روزرسانی ممکن نشد. بعداً دوباره امتحان کنید."
 NO_UPDATE_FA = "✅ نسخهٔ جدیدتری نیست. نسخهٔ فعلی: {current}"
 OWNER_ONLY_UPDATE_FA = "⛔ به‌روزرسانی فقط برای مالک مجاز است."
+RUNNING_STATUS_FA = "⏳ در حال به‌روزرسانی به نسخهٔ {version}"
+DONE_STATUS_FA = "✅ به‌روزرسانی انجام شد — نسخهٔ {version}"
+AVAILABLE_STATUS_FA = "🆕 نسخهٔ {version} آمادهٔ نصب است"
+# INSTALLED_FA is defined with the other status helpers below.
 
 
 def product_spec_lines() -> list[str]:
@@ -278,7 +288,12 @@ def about_facts() -> dict:
 
 
 def about_text(info: dict, *, owner: bool, checked: bool = False) -> str:
-    """Persian About body. Update lines only for the owner, and never a repo address."""
+    """Persian About body. Update lines only for the owner, and never a repo address.
+
+    The owner gets exactly one «وضعیت به‌روزرسانی» block — never a second
+    «نسخهٔ جدیدتری نیست» / «آخرین نسخه نصب است» pair, and never a stale
+    «انجام شد» while a lock or running state is present.
+    """
     facts = about_facts()
     lines = ["ℹ️ درباره ربات", f"نام: {facts['title']}", "مشخصات:"]
     lines += [f"• {item}" for item in facts["specs"]]
@@ -288,18 +303,15 @@ def about_text(info: dict, *, owner: bool, checked: bool = False) -> str:
         lines.append("سازنده: در فرادادهٔ برنامه ثبت نشده است.")
     lines.append(f"نسخهٔ فعلی: {info.get('current') or facts['version']}")
     if owner:
-        if checked and info.get("error"):
+        if checked and info.get("error") and not _info_in_progress(info):
             lines.append(CHECK_FAIL_FA)
-        elif info.get("available"):
-            lines.append(f"نسخهٔ آمادهٔ نصب: {info.get('latest') or ''}")
-            note = changelog_text(info)
-            if note and note != "—":
-                lines += ["", "تغییرات:", note[:1500]]
-        elif checked:
-            lines.append(NO_UPDATE_FA.format(current=info.get("current") or facts["version"]))
         line = about_status_line(info)
         if line:
             lines += ["", "وضعیت به‌روزرسانی:", line]
+        if info.get("available"):
+            note = changelog_text(info)
+            if note and note != "—":
+                lines += ["", "تغییرات:", note[:1500]]
     return redact_public("\n".join(lines))
 
 
@@ -340,6 +352,24 @@ def status_fa(st: dict) -> str:
 INSTALLED_FA = "✅ آخرین نسخه نصب است — نسخهٔ {version}"
 
 
+def progress_target_version(st: dict | None, *, latest: str = "",
+                            root: Path | None = None) -> str:
+    """Version a live update is heading for (progress file, then running status, then latest)."""
+    prog = read_progress_state(root)
+    if isinstance(prog, dict) and prog.get("target_version"):
+        return str(prog["target_version"])
+    if (st or {}).get("state") == "running" and (st or {}).get("version"):
+        return str(st["version"])
+    return str(latest or "")
+
+
+def _info_in_progress(info: dict, root: Path | None = None) -> bool:
+    if "in_progress" in info:
+        return bool(info.get("in_progress"))
+    st = info.get("status") or {}
+    return bool(update_in_progress(root) or st.get("state") == "running")
+
+
 def settle_status(db: Any, *, root: Path | None = None) -> dict:
     """Close a finished install that the database still calls «running».
 
@@ -368,17 +398,26 @@ def settle_status(db: Any, *, root: Path | None = None) -> dict:
     return st
 
 
-def about_status_line(info: dict) -> str:
-    """The «وضعیت به‌روزرسانی» line. Finished + nothing newer → latest is installed."""
+def about_status_line(info: dict, *, root: Path | None = None) -> str:
+    """A single «وضعیت به‌روزرسانی» line for bot About and the web /about page."""
     st = info.get("status") or {}
-    if st.get("state") == "running":
-        return status_fa(st)
+    cur = info.get("current") or st.get("version") or ""
+    latest = info.get("latest") or ""
+    if _info_in_progress(info, root):
+        ver = info.get("progress_target") or progress_target_version(st, latest=latest, root=root)
+        return RUNNING_STATUS_FA.format(version=ver or latest or cur)
     if st.get("state") in ("failed", "rolled_back"):
         return status_fa(st)
-    if not info.get("available"):
-        cur = info.get("current") or st.get("version") or ""
-        return INSTALLED_FA.format(version=cur) if cur else ""
-    return status_fa(st)
+    if info.get("available"):
+        return AVAILABLE_STATUS_FA.format(version=latest) if latest else ""
+    if (
+        st.get("state") == "applied"
+        and st.get("version") == cur
+        and (st.get("message") or "").strip()
+        and (st.get("message") or "").strip() != "آخرین نسخه نصب است"
+    ):
+        return DONE_STATUS_FA.format(version=cur)
+    return INSTALLED_FA.format(version=cur) if cur else ""
 
 
 # --------------------------------------------------------------------------- progress + lock
@@ -390,8 +429,9 @@ RESERVE_STALE_SECONDS = 90
 STATUS_STALE_SECONDS = 30 * 60
 BAR_WIDTH = 6
 BUSY_FA = "به‌روزرسانی در حال انجام است"
-SUCCESS_FA = "✅ به‌روزرسانی کامل شد — نسخهٔ فعال: {version}"
-STAGE_PERCENT = {"verify": 60, "backup": 75, "install": 88, "smoke_start": 88, "smoke_end": 95, "restart": 96}
+SUCCESS_FA = "✅ به‌روزرسانی انجام شد — نسخهٔ {version}"
+# Download is 5–20%. Smoke is the long step, so it owns most of the bar (not 88% at «آزمون ۱ از ۴۵»).
+STAGE_PERCENT = {"verify": 22, "backup": 28, "install": 35, "smoke_start": 35, "smoke_end": 90, "restart": 95}
 STAGE_FA = {
     "download": "در حال دانلود",
     "verify": "در حال بررسی چک‌سام",
@@ -635,7 +675,7 @@ def download_progress(done: int, total: int) -> tuple[int, str]:
     if total > 0:
         done_c = min(done, total)
         real = int(done_c * 100 / total)
-        overall = 5 + int(35 * done_c / total)
+        overall = 5 + int(15 * done_c / total)
         return overall, f"{_fmt_bytes(done_c)} از {_fmt_bytes(total)} ({real}٪)"
     return 8, f"{_fmt_bytes(done)} دریافت شد"
 
@@ -715,15 +755,19 @@ def bale_progress_editor(chat_id: Any, message_id: int) -> Callable[..., None]:
                 from bot.bale_api import BaleClient
 
                 holder["client"] = BaleClient()
-            holder["client"].edit_message_text(chat_id, int(message_id), text)
+            menu = None
+            db = None
             if stage in ("done", "error"):
                 from db.models import Database
 
                 import config
 
                 db = Database(config.DATABASE_PATH)
-                if _send_result_with_menu(holder["client"], db, chat_id, text):
-                    _set_status(db, reported=True)
+                menu = _menu_for_chat(db, chat_id)
+            holder["client"].edit_message_text(chat_id, int(message_id), text, reply_markup=menu)
+            if stage in ("done", "error") and db is not None:
+                try_claim_result_notice(db)
+                # Do not send a second copy of the same completion text.
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not edit update progress: %s", exc)
 
@@ -802,7 +846,7 @@ def smoke_worker_count() -> int:
 
 
 def smoke_progress_percent(done: int, total: int) -> int:
-    """Map completed tests onto 88% … 95% (install is 88, restart is 96)."""
+    """Map completed tests onto smoke_start … smoke_end (install ends where smoke starts)."""
     if total <= 0:
         return STAGE_PERCENT["smoke_end"]
     span = STAGE_PERCENT["smoke_end"] - STAGE_PERCENT["smoke_start"]
@@ -859,8 +903,8 @@ def default_smoke(
     one script does, so it can share the pool.
 
     PASS/FAIL lines and ``last_failures`` follow sorted script names, not finish
-    order. Progress (stage ``smoke``) moves from 88% toward 95% and is emitted
-    at most about every 3 seconds, plus the first and last result.
+    order. Progress (stage ``smoke``) moves from smoke_start toward smoke_end and is
+    emitted at most about every 3 seconds, plus the first and last result.
     """
     py = root / ".venv" / "bin" / "python"
     py = str(py) if py.exists() else sys.executable
@@ -977,6 +1021,7 @@ def apply_update(
                 log("remote: " + redact_public(str(info.get("error"))))
                 raise UpdateError("بررسی نسخهٔ جدید ممکن نشد.")
             raise UpdateError("نسخهٔ جدیدتری وجود ندارد.")
+        clear_result_notices(root)
         _set_status(db, state="running", version=ver, previous=cur, requested_by=requested_by, message="")
         # 1) download + verify
         _emit(progress, "download", 5, ver, "آماده‌سازی دانلود…")
@@ -1040,7 +1085,7 @@ def apply_update(
             if r.returncode != 0:
                 raise UpdateError("نصب وابستگی‌های پایتون ناموفق بود.")
             log("pip install OK")
-        # 5) smoke suite (parallel; progress 88% → 95%)
+        # 5) smoke suite (parallel; progress smoke_start → smoke_end)
         if smoke is default_smoke:
             smoke_ok = default_smoke(root, log, progress=progress, version=ver)
         else:
@@ -1148,14 +1193,14 @@ def notify_tick(client: Any, db: Any, keyboard: dict | None = None) -> str | Non
     out = None
     st = get_status(db)
     if st and st.get("state") in ("applied", "rolled_back", "failed") and not st.get("reported"):
-        text = redact_public("⬆️ به‌روزرسانی ربات\n" + status_fa(st))
-        for u in owner_recipients(db):
-            try:
-                client.send_message(u["bale_user_id"], text, _menu_for_chat(db, u["bale_user_id"]))
-            except Exception:  # noqa: BLE001
-                pass
-        _set_status(db, reported=True)
-        out = "reported"
+        if try_claim_result_notice(db):
+            text = redact_public("⬆️ به‌روزرسانی ربات\n" + status_fa(st))
+            for u in owner_recipients(db):
+                try:
+                    client.send_message(u["bale_user_id"], text, _menu_for_chat(db, u["bale_user_id"]))
+                except Exception:  # noqa: BLE001
+                    pass
+            out = "reported"
     info = update_info(db)
     if info["available"] and db.get_setting(NOTIFIED_KEY) != info["latest"]:
         for u in owner_recipients(db):
@@ -1236,24 +1281,58 @@ def reconcile_running_status(db: Any, *, root: Path | None = None, now: float | 
     return None
 
 
-def _deliver_final(client: Any, chat_id: Any, message_id: Any, text: str) -> bool:
+def _result_notice_path(st: dict, root: Path | None = None) -> Path:
+    raw = "|".join(str(st.get(k) or "") for k in ("state", "version", "previous", "started_epoch", "at"))
+    key = "".join(ch if ch.isalnum() or ch in ".-" else "_" for ch in raw) or "unknown"
+    return updates_dir(root) / f"result-notice-{key}.claimed"
+
+
+def clear_result_notices(root: Path | None = None) -> None:
+    folder = updates_dir(root)
+    if not folder.is_dir():
+        return
+    for path in folder.glob("result-notice-*.claimed"):
+        path.unlink(missing_ok=True)
+
+
+def try_claim_result_notice(db: Any, *, root: Path | None = None) -> bool:
+    """Exactly one completion notice per apply. O_EXCL plus the ``reported`` flag."""
+    st = get_status(db)
+    if not st or st.get("state") not in ("applied", "rolled_back", "failed"):
+        return False
+    if st.get("reported"):
+        return False
+    path = _result_notice_path(st, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        try:
+            os.write(fd, str(time.time()).encode())
+        finally:
+            os.close(fd)
+    except FileExistsError:
+        return False
+    _set_status(db, reported=True)
+    return True
+
+
+def _deliver_final(client: Any, db: Any, chat_id: Any, message_id: Any, text: str) -> bool:
+    """One notice: edit the progress message (with the menu) or send once if edit fails."""
     if client is None or chat_id in (None, ""):
         return False
-    edited = False
+    menu = _menu_for_chat(db, chat_id)
     try:
         mid = int(message_id or 0)
     except (TypeError, ValueError):
         mid = 0
     if mid:
         try:
-            client.edit_message_text(chat_id, mid, text)
-            edited = True
+            client.edit_message_text(chat_id, mid, text, reply_markup=menu)
+            return True
         except Exception as exc:  # noqa: BLE001
             logger.warning("final update edit failed: %s", exc)
-    if edited:
-        return True
     try:
-        client.send_message(chat_id, text)
+        client.send_message(chat_id, text, menu)
         return True
     except Exception:  # noqa: BLE001
         logger.warning("final update send failed", exc_info=True)
@@ -1274,12 +1353,15 @@ def finalize_after_restart(client: Any, db: Any, *, root: Path | None = None, no
         return None
     success = bool(cur) and cur == target and outcome not in ("failed", "stale")
     text = SUCCESS_FA.format(version=cur) if success else final_failure_text(cur, target)
+    # Claim before sending so a second process (or notify_tick) cannot send again.
+    if not try_claim_result_notice(db, root=root):
+        if state:
+            clear_progress_state(root)
+        return outcome or "already-notified"
     delivered = False
     if state:
-        delivered = _deliver_final(client, state.get("chat_id"), state.get("message_id"), text)
-        if delivered:
-            _send_result_with_menu(client, db, state.get("chat_id"), text)
-            clear_progress_state(root)
+        delivered = _deliver_final(client, db, state.get("chat_id"), state.get("message_id"), text)
+        clear_progress_state(root)
     elif outcome and client is not None:
         owners = owner_recipients(db)
         if not owners:
@@ -1290,8 +1372,11 @@ def finalize_after_restart(client: Any, db: Any, *, root: Path | None = None, no
                 delivered = True
             except Exception:  # noqa: BLE001
                 logger.warning("update result notify failed", exc_info=True)
-    if delivered and get_status(db):
-        _set_status(db, reported=True)
+    if not delivered:
+        # Allow a later notify_tick / restart to retry this same apply.
+        st = get_status(db)
+        _set_status(db, reported=False)
+        _result_notice_path(st, root).unlink(missing_ok=True)
     return outcome or ("notified" if delivered else None)
 
 

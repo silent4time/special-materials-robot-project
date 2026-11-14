@@ -45,7 +45,8 @@
 {% endif %}
 <main class="wrap">
   {% set _ub = update_banner(user) if user else None %}
-  {% if _ub %}
+  {# On /about the table already has the single status line; don't repeat it in the banner. #}
+  {% if _ub and not (request.url.path or "").startswith("/about") %}
   <div class="alert update-banner" role="status">
     {% if _ub.kind == "new" %}🆕 نسخهٔ جدید ربات آماده است: <strong>{{ _ub.latest }}</strong> (نسخهٔ فعلی {{ _ub.current }})
       <form method="post" action="/about/update" style="display:inline"><button class="btn" type="submit">⬆️ به‌روزرسانی روی سرور</button></form>
